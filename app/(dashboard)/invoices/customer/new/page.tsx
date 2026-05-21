@@ -8,6 +8,7 @@ import { z } from "zod";
 import { ArrowLeft, Loader2 } from "lucide-react";
 import Link from "next/link";
 import InvoiceItemsEditor from "@/components/InvoiceItemsEditor";
+import InvoiceExtractor from "@/components/InvoiceExtractor";
 import Decimal from "decimal.js";
 
 const schema = z.object({
@@ -37,8 +38,10 @@ export default function NewCustomerInvoicePage() {
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
+  const [newCustomerName, setNewCustomerName] = useState("");
+  const [creatingCustomer, setCreatingCustomer] = useState(false);
 
-  const { register, handleSubmit, control, watch, formState: { errors } } = useForm<FormData>({
+  const { register, handleSubmit, control, watch, setValue, formState: { errors } } = useForm<FormData>({
     resolver: zodResolver(schema),
     defaultValues: {
       paymentStatus: "UNPAID",
@@ -54,9 +57,71 @@ export default function NewCustomerInvoicePage() {
     } catch { return sum; }
   }, new Decimal(0)) ?? new Decimal(0);
 
-  useEffect(() => {
-    fetch("/api/customers").then((r) => r.json()).then(setCustomers);
-  }, []);
+  async function loadCustomers() {
+    const res = await fetch("/api/customers");
+    const list = await res.json();
+    setCustomers(list);
+    return list as Customer[];
+  }
+
+  useEffect(() => { loadCustomers(); }, []);
+
+  // Called when AI extraction completes — pre-fill the form
+  async function handleExtracted(data: {
+    invoiceNumber?: string | null;
+    invoiceDate?: string | null;
+    dueDate?: string | null;
+    customerName?: string | null;
+    items?: { description: string; quantity: string; unitPrice: string; taxRate: string }[];
+    notes?: string | null;
+  }) {
+    if (data.invoiceNumber) setValue("invoiceNumber", data.invoiceNumber);
+    if (data.invoiceDate) setValue("invoiceDate", data.invoiceDate);
+    if (data.dueDate) setValue("dueDate", data.dueDate);
+    if (data.notes) setValue("notes", data.notes);
+
+    if (data.items && data.items.length > 0) {
+      setValue("items", data.items.map((item) => ({
+        description: item.description ?? "",
+        quantity: item.quantity ?? "1",
+        unitPrice: item.unitPrice ?? "0",
+        taxRate: item.taxRate ?? "0",
+      })));
+    }
+
+    // Try to match extracted customer name to existing customers
+    if (data.customerName) {
+      const current = await loadCustomers();
+      const lower = data.customerName.toLowerCase();
+      const match = current.find((c) => c.name.toLowerCase().includes(lower) || lower.includes(c.name.toLowerCase()));
+      if (match) {
+        setValue("customerId", match.id);
+      } else {
+        // Prompt to create the customer
+        setNewCustomerName(data.customerName);
+      }
+    }
+  }
+
+  async function createAndSelectCustomer() {
+    if (!newCustomerName) return;
+    setCreatingCustomer(true);
+    try {
+      const res = await fetch("/api/customers", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: newCustomerName }),
+      });
+      if (res.ok) {
+        const c = await res.json();
+        await loadCustomers();
+        setValue("customerId", c.id);
+        setNewCustomerName("");
+      }
+    } finally {
+      setCreatingCustomer(false);
+    }
+  }
 
   async function onSubmit(data: FormData) {
     setSubmitting(true);
@@ -87,13 +152,41 @@ export default function NewCustomerInvoicePage() {
         </Link>
         <div>
           <h1 className="text-2xl font-bold text-gray-900">New Customer Invoice</h1>
-          <p className="text-sm text-gray-500">Create a sales invoice</p>
+          <p className="text-sm text-gray-500">Upload an invoice file or fill in the form manually</p>
         </div>
       </div>
 
+      {/* AI Extractor */}
+      <div className="card">
+        <div className="flex items-center justify-between mb-3">
+          <h2 className="font-semibold text-gray-800">Step 1 — Upload Invoice (optional)</h2>
+          <span className="text-xs text-gray-400 bg-gray-100 px-2 py-1 rounded-full">AI-powered</span>
+        </div>
+        <InvoiceExtractor type="customer" onExtracted={handleExtracted} />
+      </div>
+
+      {/* Prompt to create unmatched customer */}
+      {newCustomerName && (
+        <div className="bg-yellow-50 border border-yellow-200 rounded-xl p-4 flex items-center justify-between gap-4">
+          <div>
+            <p className="text-sm font-medium text-yellow-800">
+              Customer not found: <span className="font-bold">{newCustomerName}</span>
+            </p>
+            <p className="text-xs text-yellow-600 mt-0.5">Create them now and auto-select?</p>
+          </div>
+          <div className="flex gap-2">
+            <button onClick={() => setNewCustomerName("")} className="btn-secondary text-xs py-1.5">Skip</button>
+            <button onClick={createAndSelectCustomer} disabled={creatingCustomer} className="btn-primary text-xs py-1.5">
+              {creatingCustomer && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+              Create &amp; Select
+            </button>
+          </div>
+        </div>
+      )}
+
       <form onSubmit={handleSubmit(onSubmit)} className="space-y-6">
         <div className="card space-y-4">
-          <h2 className="font-semibold text-gray-800">Invoice Details</h2>
+          <h2 className="font-semibold text-gray-800">Step 2 — Review &amp; Complete Invoice Details</h2>
 
           <div className="grid grid-cols-2 gap-4">
             <div>

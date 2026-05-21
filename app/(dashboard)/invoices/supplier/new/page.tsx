@@ -8,6 +8,7 @@ import { z } from "zod";
 import { ArrowLeft, Loader2 } from "lucide-react";
 import Link from "next/link";
 import InvoiceItemsEditor from "@/components/InvoiceItemsEditor";
+import InvoiceExtractor from "@/components/InvoiceExtractor";
 
 const schema = z.object({
   supplierId: z.string().min(1, "Select a supplier"),
@@ -36,8 +37,10 @@ export default function NewSupplierInvoicePage() {
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
+  const [newSupplierName, setNewSupplierName] = useState("");
+  const [creatingSupplier, setCreatingSupplier] = useState(false);
 
-  const { register, handleSubmit, control, formState: { errors } } = useForm<FormData>({
+  const { register, handleSubmit, control, setValue, formState: { errors } } = useForm<FormData>({
     resolver: zodResolver(schema),
     defaultValues: {
       category: "COGS",
@@ -47,9 +50,72 @@ export default function NewSupplierInvoicePage() {
     },
   });
 
-  useEffect(() => {
-    fetch("/api/suppliers").then((r) => r.json()).then(setSuppliers);
-  }, []);
+  async function loadSuppliers() {
+    const res = await fetch("/api/suppliers");
+    const list = await res.json();
+    setSuppliers(list);
+    return list as Supplier[];
+  }
+
+  useEffect(() => { loadSuppliers(); }, []);
+
+  async function handleExtracted(data: {
+    invoiceNumber?: string | null;
+    invoiceDate?: string | null;
+    dueDate?: string | null;
+    supplierName?: string | null;
+    category?: "COGS" | "SERVICES_EXPENSE" | "OPERATING_EXPENSE" | "OTHER" | null;
+    items?: { description: string; quantity: string; unitCost: string; taxRate: string }[];
+    notes?: string | null;
+  }) {
+    if (data.invoiceNumber) setValue("invoiceNumber", data.invoiceNumber);
+    if (data.invoiceDate) setValue("invoiceDate", data.invoiceDate);
+    if (data.dueDate) setValue("dueDate", data.dueDate);
+    if (data.notes) setValue("notes", data.notes);
+    if (data.category) setValue("category", data.category);
+
+    if (data.items && data.items.length > 0) {
+      setValue("items", data.items.map((item) => ({
+        description: item.description ?? "",
+        quantity: item.quantity ?? "1",
+        unitCost: item.unitCost ?? "0",
+        taxRate: item.taxRate ?? "0",
+      })));
+    }
+
+    if (data.supplierName) {
+      const current = await loadSuppliers();
+      const lower = data.supplierName.toLowerCase();
+      const match = current.find(
+        (s) => s.name.toLowerCase().includes(lower) || lower.includes(s.name.toLowerCase())
+      );
+      if (match) {
+        setValue("supplierId", match.id);
+      } else {
+        setNewSupplierName(data.supplierName);
+      }
+    }
+  }
+
+  async function createAndSelectSupplier() {
+    if (!newSupplierName) return;
+    setCreatingSupplier(true);
+    try {
+      const res = await fetch("/api/suppliers", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: newSupplierName }),
+      });
+      if (res.ok) {
+        const s = await res.json();
+        await loadSuppliers();
+        setValue("supplierId", s.id);
+        setNewSupplierName("");
+      }
+    } finally {
+      setCreatingSupplier(false);
+    }
+  }
 
   async function onSubmit(data: FormData) {
     setSubmitting(true);
@@ -80,13 +146,41 @@ export default function NewSupplierInvoicePage() {
         </Link>
         <div>
           <h1 className="text-2xl font-bold text-gray-900">New Supplier Invoice</h1>
-          <p className="text-sm text-gray-500">Create a purchase invoice</p>
+          <p className="text-sm text-gray-500">Upload an invoice file or fill in the form manually</p>
         </div>
       </div>
 
+      {/* AI Extractor */}
+      <div className="card">
+        <div className="flex items-center justify-between mb-3">
+          <h2 className="font-semibold text-gray-800">Step 1 — Upload Invoice (optional)</h2>
+          <span className="text-xs text-gray-400 bg-gray-100 px-2 py-1 rounded-full">AI-powered</span>
+        </div>
+        <InvoiceExtractor type="supplier" onExtracted={handleExtracted} />
+      </div>
+
+      {/* Unmatched supplier prompt */}
+      {newSupplierName && (
+        <div className="bg-yellow-50 border border-yellow-200 rounded-xl p-4 flex items-center justify-between gap-4">
+          <div>
+            <p className="text-sm font-medium text-yellow-800">
+              Supplier not found: <span className="font-bold">{newSupplierName}</span>
+            </p>
+            <p className="text-xs text-yellow-600 mt-0.5">Create them now and auto-select?</p>
+          </div>
+          <div className="flex gap-2">
+            <button onClick={() => setNewSupplierName("")} className="btn-secondary text-xs py-1.5">Skip</button>
+            <button onClick={createAndSelectSupplier} disabled={creatingSupplier} className="btn-primary text-xs py-1.5">
+              {creatingSupplier && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+              Create &amp; Select
+            </button>
+          </div>
+        </div>
+      )}
+
       <form onSubmit={handleSubmit(onSubmit)} className="space-y-6">
         <div className="card space-y-4">
-          <h2 className="font-semibold text-gray-800">Invoice Details</h2>
+          <h2 className="font-semibold text-gray-800">Step 2 — Review &amp; Complete Invoice Details</h2>
 
           <div className="grid grid-cols-2 gap-4">
             <div>
