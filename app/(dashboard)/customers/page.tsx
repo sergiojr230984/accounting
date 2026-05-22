@@ -125,15 +125,20 @@ export default function CustomersPage() {
 
   async function parseError(res: Response, fallback: string): Promise<string> {
     try {
-      const d = await res.json();
-      return (
-        d.error?.fieldErrors?.name?.[0] ??
-        (typeof d.error === "string" ? d.error : null) ??
-        d.message ??
-        fallback
-      );
+      const text = await res.text();
+      try {
+        const d = JSON.parse(text);
+        const msg =
+          d.error?.fieldErrors?.name?.[0] ??
+          (typeof d.error === "string" ? d.error : null) ??
+          d.message ??
+          null;
+        return msg ?? `[${res.status}] ${text.slice(0, 300)}`;
+      } catch {
+        return `[${res.status}] ${text.slice(0, 300)}`;
+      }
     } catch {
-      return `${fallback} (server error ${res.status})`;
+      return `${fallback} (network error)`;
     }
   }
 
