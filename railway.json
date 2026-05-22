@@ -4,7 +4,7 @@
     "builder": "NIXPACKS"
   },
   "deploy": {
-    "buildCommand": "npm ci && npm run build",
+    "buildCommand": "npm ci && npx prisma db push && npm run build",
     "startCommand": "npm start",
     "healthcheckPath": "/",
     "restartPolicyType": "ON_FAILURE"
