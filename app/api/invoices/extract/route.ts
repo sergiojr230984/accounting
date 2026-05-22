@@ -2,7 +2,8 @@ import { NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import Anthropic from "@anthropic-ai/sdk";
 
-const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+// Increase body size limit for PDF uploads and allow longer AI response time
+export const maxDuration = 60;
 
 const CUSTOMER_SYSTEM = `You are an invoice data extractor. Extract structured data from the invoice and return ONLY valid JSON, no other text.
 
@@ -27,7 +28,7 @@ Rules:
 - All numbers must be plain strings without currency symbols
 - Dates must be YYYY-MM-DD format
 - taxRate is a decimal (0.08 means 8%)
-- If tax is shown as a single total, estimate a rate from the subtotal
+- If tax is a single total line, estimate the rate from the subtotal
 - Return empty array for items if none found`;
 
 const SUPPLIER_SYSTEM = `You are an invoice data extractor. Extract structured data from the invoice and return ONLY valid JSON, no other text.
@@ -52,9 +53,9 @@ Return this exact structure:
 
 Category rules:
 - COGS: raw materials, inventory, goods for resale, manufacturing supplies
-- SERVICES_EXPENSE: software subscriptions, cloud hosting, consulting, professional services
+- SERVICES_EXPENSE: software, cloud hosting, consulting, professional services
 - OPERATING_EXPENSE: rent, utilities, office supplies, insurance, marketing
-- OTHER: anything that doesn't clearly fit above
+- OTHER: anything that does not clearly fit above
 
 Rules:
 - All numbers must be plain strings without currency symbols
@@ -65,14 +66,27 @@ export async function POST(request: Request) {
   const session = await auth();
   if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-  if (!process.env.ANTHROPIC_API_KEY) {
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  if (!apiKey) {
     return NextResponse.json(
-      { error: "ANTHROPIC_API_KEY not configured. Add it in Railway → Variables." },
+      { error: "ANTHROPIC_API_KEY is not set. Add it in Railway → Variables tab." },
       { status: 503 }
     );
   }
 
-  const formData = await request.formData();
+  // Initialize client inside handler so env var is always fresh
+  const client = new Anthropic({ apiKey });
+
+  let formData: FormData;
+  try {
+    formData = await request.formData();
+  } catch (e) {
+    return NextResponse.json(
+      { error: `Could not read uploaded file: ${e instanceof Error ? e.message : String(e)}` },
+      { status: 400 }
+    );
+  }
+
   const file = formData.get("file") as File | null;
   const type = (formData.get("type") as string) ?? "customer";
 
@@ -82,46 +96,29 @@ export async function POST(request: Request) {
   const base64 = buffer.toString("base64");
   const systemPrompt = type === "supplier" ? SUPPLIER_SYSTEM : CUSTOMER_SYSTEM;
 
-  let messageContent: Anthropic.MessageParam["content"];
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let messageContent: any[];
 
   if (file.type === "application/pdf") {
-    // Send PDF natively to Claude — no pdf-parse needed
     messageContent = [
       {
         type: "document",
-        source: {
-          type: "base64",
-          media_type: "application/pdf",
-          data: base64,
-        },
-      } as unknown as Anthropic.TextBlockParam,
-      {
-        type: "text",
-        text: "Extract all invoice data from this document.",
+        source: { type: "base64", media_type: "application/pdf", data: base64 },
       },
+      { type: "text", text: "Extract all invoice data from this document." },
     ];
-  } else if (
-    file.type === "image/jpeg" ||
-    file.type === "image/png" ||
-    file.type === "image/webp"
-  ) {
+  } else if (["image/jpeg", "image/jpg", "image/png", "image/webp"].includes(file.type)) {
+    const mediaType = file.type === "image/jpg" ? "image/jpeg" : file.type;
     messageContent = [
       {
         type: "image",
-        source: {
-          type: "base64",
-          media_type: file.type as "image/jpeg" | "image/png" | "image/webp",
-          data: base64,
-        },
+        source: { type: "base64", media_type: mediaType, data: base64 },
       },
-      {
-        type: "text",
-        text: "Extract all invoice data from this image.",
-      },
+      { type: "text", text: "Extract all invoice data from this image." },
     ];
   } else {
     return NextResponse.json(
-      { error: "Only PDF, JPG, PNG, or WEBP files are supported." },
+      { error: `Unsupported file type: ${file.type}. Use PDF, JPG, or PNG.` },
       { status: 400 }
     );
   }
@@ -134,14 +131,11 @@ export async function POST(request: Request) {
       messages: [{ role: "user", content: messageContent }],
     });
 
-    const raw =
-      message.content[0].type === "text" ? message.content[0].text : "";
-
-    // Pull JSON out of the response (handles any leading/trailing text)
+    const raw = message.content[0].type === "text" ? message.content[0].text : "";
     const jsonMatch = raw.match(/\{[\s\S]*\}/);
     if (!jsonMatch) {
       return NextResponse.json(
-        { error: "Could not parse invoice data from file. Try a clearer scan." },
+        { error: "Could not find invoice data in file. Try a clearer scan or different file." },
         { status: 422 }
       );
     }
@@ -149,11 +143,8 @@ export async function POST(request: Request) {
     const extracted = JSON.parse(jsonMatch[0]);
     return NextResponse.json(extracted);
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    console.error("Extraction error:", message);
-    return NextResponse.json(
-      { error: `AI extraction failed: ${message}` },
-      { status: 500 }
-    );
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error("[extract] Anthropic error:", msg);
+    return NextResponse.json({ error: `Extraction failed: ${msg}` }, { status: 500 });
   }
 }
