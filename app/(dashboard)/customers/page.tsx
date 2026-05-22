@@ -123,16 +123,27 @@ export default function CustomersPage() {
 
   useEffect(() => { load(); }, []);
 
+  async function parseError(res: Response, fallback: string): Promise<string> {
+    try {
+      const d = await res.json();
+      return (
+        d.error?.fieldErrors?.name?.[0] ??
+        (typeof d.error === "string" ? d.error : null) ??
+        d.message ??
+        fallback
+      );
+    } catch {
+      return `${fallback} (server error ${res.status})`;
+    }
+  }
+
   async function handleAdd(data: FormData): Promise<string | null> {
     const res = await fetch("/api/customers", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(data),
     });
-    if (!res.ok) {
-      const d = await res.json();
-      return d.error?.fieldErrors?.name?.[0] ?? d.error ?? "Failed to add customer";
-    }
+    if (!res.ok) return parseError(res, "Failed to add customer");
     setShowAddForm(false);
     await load();
     return null;
@@ -144,10 +155,7 @@ export default function CustomersPage() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(data),
     });
-    if (!res.ok) {
-      const d = await res.json();
-      return d.error?.fieldErrors?.name?.[0] ?? d.error ?? "Failed to update customer";
-    }
+    if (!res.ok) return parseError(res, "Failed to update customer");
     setEditingId(null);
     await load();
     return null;
