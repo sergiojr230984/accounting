@@ -47,20 +47,29 @@ export default function InvoiceExtractor({ type, onExtracted }: InvoiceExtractor
 
     try {
       const res = await fetch("/api/invoices/extract", { method: "POST", body: fd });
-      const data = await res.json();
+
+      let data: Record<string, unknown>;
+      try {
+        data = await res.json();
+      } catch {
+        // Response wasn't JSON — server likely crashed
+        setState("error");
+        setMessage(`Server error (${res.status}). Check that ANTHROPIC_API_KEY is set in Railway → Variables.`);
+        return;
+      }
 
       if (!res.ok) {
         setState("error");
-        setMessage(data.error ?? "Extraction failed");
+        setMessage((data.error as string) ?? "Extraction failed");
         return;
       }
 
       setState("success");
-      setMessage(`Data extracted from ${file.name} — form has been pre-filled. Review and adjust before saving.`);
+      setMessage(`Extracted from "${file.name}" — form pre-filled. Review before saving.`);
       onExtracted(data);
     } catch {
       setState("error");
-      setMessage("Network error during extraction.");
+      setMessage("Could not reach the server. Check your Railway deployment is running.");
     }
   }
 
