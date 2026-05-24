@@ -33,13 +33,19 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
   }
 
-  const customer = await prisma.customer.create({
-    data: {
-      name: parsed.data.name,
-      email: parsed.data.email || null,
-      phone: parsed.data.phone || null,
-      address: parsed.data.address || null,
-    },
-  });
-  return NextResponse.json(customer, { status: 201 });
+  try {
+    const customer = await prisma.customer.create({
+      data: {
+        name: parsed.data.name,
+        email: parsed.data.email || null,
+        phone: parsed.data.phone || null,
+        address: parsed.data.address || null,
+      },
+    });
+    return NextResponse.json(customer, { status: 201 });
+  } catch (e) {
+    console.error("[POST /api/customers] create failed:", e);
+    const message = e instanceof Error ? e.message : "Database error";
+    return NextResponse.json({ error: message }, { status: 500 });
+  }
 }
