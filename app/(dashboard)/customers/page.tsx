@@ -53,13 +53,16 @@ export default function CustomersPage() {
         body: JSON.stringify(data),
       });
       if (!res.ok) {
-        const d = await res.json();
-        setError(d.error?.fieldErrors?.name?.[0] ?? "Failed to add customer");
+        const d = await res.json().catch(() => ({}));
+        const fieldErr = d?.error?.fieldErrors?.name?.[0] ?? d?.error?.fieldErrors?.email?.[0];
+        setError(fieldErr ?? (typeof d?.error === "string" ? d.error : null) ?? `Failed to add customer (${res.status})`);
         return;
       }
       reset();
       setShowForm(false);
       load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Network error");
     } finally {
       setSubmitting(false);
     }
@@ -81,7 +84,7 @@ export default function CustomersPage() {
       {showForm && (
         <div className="card">
           <h2 className="font-semibold text-gray-800 mb-4">New Customer</h2>
-          <form onSubmit={handleSubmit(onSubmit)} className="grid grid-cols-2 gap-4">
+          <form onSubmit={handleSubmit(onSubmit)} noValidate className="grid grid-cols-2 gap-4">
             <div>
               <label className="label">Name *</label>
               <input className="input" {...register("name")} />

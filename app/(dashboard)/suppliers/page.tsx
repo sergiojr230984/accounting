@@ -52,12 +52,16 @@ export default function SuppliersPage() {
         body: JSON.stringify(data),
       });
       if (!res.ok) {
-        setError("Failed to add supplier");
+        const d = await res.json().catch(() => ({}));
+        const fieldErr = d?.error?.fieldErrors?.name?.[0] ?? d?.error?.fieldErrors?.email?.[0];
+        setError(fieldErr ?? (typeof d?.error === "string" ? d.error : null) ?? `Failed to add supplier (${res.status})`);
         return;
       }
       reset();
       setShowForm(false);
       load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Network error");
     } finally {
       setSubmitting(false);
     }
@@ -79,7 +83,7 @@ export default function SuppliersPage() {
       {showForm && (
         <div className="card">
           <h2 className="font-semibold text-gray-800 mb-4">New Supplier</h2>
-          <form onSubmit={handleSubmit(onSubmit)} className="grid grid-cols-2 gap-4">
+          <form onSubmit={handleSubmit(onSubmit)} noValidate className="grid grid-cols-2 gap-4">
             <div>
               <label className="label">Name *</label>
               <input className="input" {...register("name")} />
@@ -88,6 +92,7 @@ export default function SuppliersPage() {
             <div>
               <label className="label">Email</label>
               <input type="email" className="input" {...register("email")} />
+              {errors.email && <p className="text-red-500 text-xs mt-1">{errors.email.message}</p>}
             </div>
             <div>
               <label className="label">Phone</label>
