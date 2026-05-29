@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
+import { initializeDatabase } from "@/lib/init-db";
 import { z } from "zod";
 
 const schema = z.object({
@@ -14,6 +15,7 @@ export async function GET() {
   const session = await auth();
   if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
+  await initializeDatabase();
   try {
     const suppliers = await prisma.supplier.findMany({
       orderBy: { name: "asc" },
@@ -44,6 +46,7 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
   }
 
+  await initializeDatabase();
   try {
     const supplier = await prisma.supplier.create({
       data: {
