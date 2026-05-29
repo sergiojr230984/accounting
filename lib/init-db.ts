@@ -135,18 +135,27 @@ export async function initializeDatabase() {
   console.log("[init-db] Schema ready");
 
   try {
+    const legacyAdmin = await prisma.user.findUnique({ where: { email: "admin@bizledger.com" } });
+    if (legacyAdmin) {
+      await prisma.user.update({
+        where: { id: legacyAdmin.id },
+        data: { email: "admin@lacuevita.com" },
+      });
+      console.log("[init-db] Migrated admin email bizledger -> lacuevita");
+    }
+
     const adminCount = await prisma.user.count({ where: { role: "ADMIN" } });
     if (adminCount === 0) {
       const hash = await bcrypt.hash("admin123", 12);
       await prisma.user.create({
         data: {
-          email: "admin@bizledger.com",
+          email: "admin@lacuevita.com",
           name: "Admin",
           password: hash,
           role: "ADMIN",
         },
       });
-      console.log("[init-db] Default admin seeded: admin@bizledger.com / admin123");
+      console.log("[init-db] Default admin seeded: admin@lacuevita.com / admin123");
     }
   } catch (e) {
     console.error("[init-db] admin seed failed:", e);
