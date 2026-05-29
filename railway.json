@@ -5,6 +5,7 @@
   },
   "deploy": {
     "buildCommand": "npm ci && npm run build",
+    "preDeployCommand": "",
     "startCommand": "npm start",
     "healthcheckPath": "/",
     "restartPolicyType": "ON_FAILURE"
