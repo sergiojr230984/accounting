@@ -5,7 +5,7 @@
   },
   "deploy": {
     "buildCommand": "npm ci && npm run build",
-    "startCommand": "npx prisma db push --accept-data-loss && npm start",
+    "startCommand": "npm start",
     "healthcheckPath": "/",
     "restartPolicyType": "ON_FAILURE"
   }
