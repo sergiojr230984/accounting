@@ -66,7 +66,7 @@ export async function POST(request: Request) {
   const session = await auth();
   if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-  const apiKey = process.env.ANTHROPIC_API_KEY;
+  const apiKey = process.env.ANTHROPIC_API_KEY?.trim();
   if (!apiKey) {
     return NextResponse.json(
       { error: "ANTHROPIC_API_KEY is not set. Add it in Railway → Variables tab." },

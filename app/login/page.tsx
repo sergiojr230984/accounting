@@ -45,8 +45,8 @@ export default function LoginPage() {
           <div className="inline-flex items-center justify-center w-16 h-16 bg-white rounded-2xl shadow-lg mb-4">
             <BookOpen className="w-8 h-8 text-brand-600" />
           </div>
-          <h1 className="text-3xl font-bold text-white">BizLedger</h1>
-          <p className="text-brand-100 mt-1">Business Accounting System</p>
+          <h1 className="text-3xl font-bold text-white">La Cuevita</h1>
+          <p className="text-brand-100 mt-1">Accounting</p>
         </div>
 
         <div className="bg-white rounded-2xl shadow-xl p-8">
@@ -101,8 +101,7 @@ export default function LoginPage() {
 
           <div className="mt-6 p-4 bg-gray-50 rounded-lg text-xs text-gray-500">
             <p className="font-medium mb-1">Demo credentials:</p>
-            <p>Admin: admin@bizledger.com / admin123</p>
-            <p>Manager: manager@bizledger.com / manager123</p>
+            <p>Admin: admin@lacuevita.com / admin123</p>
           </div>
         </div>
       </div>

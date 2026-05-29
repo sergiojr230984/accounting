@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
+import { initializeDatabase } from "@/lib/init-db";
 import { z } from "zod";
 
 const schema = z.object({
@@ -14,25 +15,38 @@ export async function GET() {
   const session = await auth();
   if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-  const suppliers = await prisma.supplier.findMany({
-    orderBy: { name: "asc" },
-    include: {
-      _count: { select: { invoices: true } },
-    },
-  });
-  return NextResponse.json(suppliers);
+  await initializeDatabase();
+  try {
+    const suppliers = await prisma.supplier.findMany({
+      orderBy: { name: "asc" },
+      include: {
+        _count: { select: { invoices: true } },
+      },
+    });
+    return NextResponse.json(suppliers);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return NextResponse.json({ error: msg }, { status: 500 });
+  }
 }
 
 export async function POST(request: Request) {
   const session = await auth();
   if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-  const body = await request.json();
+  let body: unknown;
+  try {
+    body = await request.json();
+  } catch {
+    return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
+  }
+
   const parsed = schema.safeParse(body);
   if (!parsed.success) {
     return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
   }
 
+  await initializeDatabase();
   try {
     const supplier = await prisma.supplier.create({
       data: {
@@ -43,9 +57,9 @@ export async function POST(request: Request) {
       },
     });
     return NextResponse.json(supplier, { status: 201 });
-  } catch (e) {
-    console.error("[POST /api/suppliers] create failed:", e);
-    const message = e instanceof Error ? e.message : "Database error";
-    return NextResponse.json({ error: message }, { status: 500 });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error("[suppliers POST]", msg);
+    return NextResponse.json({ error: msg }, { status: 500 });
   }
 }

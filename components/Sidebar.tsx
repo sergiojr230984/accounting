@@ -32,7 +32,7 @@ export default function Sidebar() {
             <BookOpen className="w-5 h-5" />
           </div>
           <div>
-            <p className="font-bold text-sm">BizLedger</p>
+            <p className="font-bold text-sm">La Cuevita</p>
             <p className="text-brand-300 text-xs">Accounting</p>
           </div>
         </div>
