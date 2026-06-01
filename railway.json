@@ -5,6 +5,7 @@
   },
   "deploy": {
     "buildCommand": "npm ci && npm run build",
+    "preDeployCommand": "npx prisma db push --skip-generate && npx tsx prisma/bootstrap.ts",
     "startCommand": "npm start",
     "healthcheckPath": "/",
     "restartPolicyType": "ON_FAILURE"
