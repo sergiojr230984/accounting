@@ -11,9 +11,11 @@ export default async function DashboardLayout({
   const session = await auth();
   if (!session) redirect("/login");
 
+  const role = (session.user as { role?: string }).role;
+
   return (
     <div className="flex h-screen overflow-hidden">
-      <Sidebar />
+      <Sidebar role={role} />
       <div className="flex-1 flex flex-col overflow-hidden">
         <TopBar user={session.user ?? {}} />
         <main className="flex-1 overflow-y-auto p-6">{children}</main>
