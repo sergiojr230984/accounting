@@ -432,6 +432,13 @@ async function main() {
 
   const leadSeed = [
     {
+      // Número real de prueba (E.164). Úsalo para probar el envío/recepción de
+      // WhatsApp. Ajusta el código de país si no es +1.
+      id: "lead-test", name: "Número de prueba", phone: "+17863163774", assignedToId: "sp-ana",
+      status: LeadStatus.NEW, priority: LeadPriority.HIGH, source: LeadSource.WHATSAPP, days: 0,
+      msgs: [{ dir: MessageDirection.INBOUND, body: "Hola, este es un mensaje de prueba 👋" }],
+    },
+    {
       id: "lead-1", name: "Mariana López", phone: "+5215522220001", assignedToId: "sp-ana",
       status: LeadStatus.NEW, priority: LeadPriority.HIGH, source: LeadSource.WHATSAPP, days: 0,
       msgs: [{ dir: MessageDirection.INBOUND, body: "Hola, vi una sala modular en su catálogo. ¿Tienen disponible?" }],
