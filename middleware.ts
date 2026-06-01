@@ -4,7 +4,8 @@ import { NextResponse } from "next/server";
 export default auth((req) => {
   const { pathname } = req.nextUrl;
 
-  const publicPaths = ["/login", "/api/auth"];
+  // El webhook de WhatsApp lo llama Meta sin sesión → debe ser público
+  const publicPaths = ["/login", "/api/auth", "/api/crm/webhook"];
   const isPublic = publicPaths.some((p) => pathname.startsWith(p));
 
   if (!req.auth && !isPublic) {
@@ -12,7 +13,7 @@ export default auth((req) => {
   }
 
   if (req.auth && pathname === "/login") {
-    return NextResponse.redirect(new URL("/dashboard", req.url));
+    return NextResponse.redirect(new URL("/crm/dashboard", req.url));
   }
 
   return NextResponse.next();

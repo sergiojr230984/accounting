@@ -6,7 +6,7 @@ import { useRouter } from "next/navigation";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
-import { BookOpen, Loader2 } from "lucide-react";
+import { MessageSquare, Loader2 } from "lucide-react";
 
 const schema = z.object({
   email: z.string().email("Invalid email"),
@@ -33,7 +33,7 @@ export default function LoginPage() {
     if (result?.error) {
       setError("Invalid email or password");
     } else {
-      router.push("/dashboard");
+      router.push("/crm/dashboard");
       router.refresh();
     }
   }
@@ -43,10 +43,10 @@ export default function LoginPage() {
       <div className="w-full max-w-md">
         <div className="text-center mb-8">
           <div className="inline-flex items-center justify-center w-16 h-16 bg-white rounded-2xl shadow-lg mb-4">
-            <BookOpen className="w-8 h-8 text-brand-600" />
+            <MessageSquare className="w-8 h-8 text-brand-600" />
           </div>
-          <h1 className="text-3xl font-bold text-white">BizLedger</h1>
-          <p className="text-brand-100 mt-1">Business Accounting System</p>
+          <h1 className="text-3xl font-bold text-white">La Cuevita CRM</h1>
+          <p className="text-brand-100 mt-1">Gestión de leads de WhatsApp</p>
         </div>
 
         <div className="bg-white rounded-2xl shadow-xl p-8">
@@ -100,9 +100,9 @@ export default function LoginPage() {
           </form>
 
           <div className="mt-6 p-4 bg-gray-50 rounded-lg text-xs text-gray-500">
-            <p className="font-medium mb-1">Demo credentials:</p>
-            <p>Admin: admin@bizledger.com / admin123</p>
-            <p>Manager: manager@bizledger.com / manager123</p>
+            <p className="font-medium mb-1">Credenciales de demo:</p>
+            <p>Admin: admin@lacuevita.com / admin123</p>
+            <p>Vendedora: ana@lacuevita.com / ventas123</p>
           </div>
         </div>
       </div>
