@@ -75,7 +75,7 @@
     const style = document.createElement('style');
     style.textContent = `
       #lcv-btn {
-        position: fixed; bottom: 160px; right: 24px; z-index: 9999;
+        position: fixed; bottom: 24px; left: 24px; z-index: 9999;
         width: 56px; height: 56px; border-radius: 50%;
         background: #6B3A2A; color: #fff; border: none; cursor: pointer;
         font-size: 26px; box-shadow: 0 4px 16px rgba(0,0,0,0.25);
@@ -84,7 +84,7 @@
       }
       #lcv-btn:hover { background: #4e2a1e; }
       #lcv-box {
-        position: fixed; bottom: 226px; right: 24px; z-index: 9998;
+        position: fixed; bottom: 90px; left: 24px; z-index: 9998;
         width: 340px; max-height: 520px;
         background: #fff; border-radius: 14px;
         box-shadow: 0 8px 32px rgba(0,0,0,0.18);
