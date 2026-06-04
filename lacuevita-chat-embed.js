@@ -1,5 +1,5 @@
 (function () {
-  const BACKEND_URL = 'https://YOUR-BACKEND-URL.up.railway.app/chat';
+  const BACKEND_URL = 'https://lacuevita-chat-backend-production.up.railway.app/chat';
 
   const TRANSLATIONS = {
     en: {
