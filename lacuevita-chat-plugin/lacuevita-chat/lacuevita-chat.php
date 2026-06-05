@@ -1,8 +1,8 @@
 <?php
 /**
- * Plugin Name: La Cuevita Chat Widget
+ * Plugin Name: La Cuevita Chat Widget v2
  * Description: Bilingual EN/ES chat widget for La Cuevita Furniture
- * Version: 1.0
+ * Version: 2.0
  * Author: La Cuevita
  */
 
