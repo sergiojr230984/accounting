@@ -10,10 +10,10 @@ if ( ! defined( 'ABSPATH' ) ) exit;
 
 function lacuevita_enqueue_chat() {
     wp_enqueue_script(
-        'lacuevita-chat',
-        plugin_dir_url( __FILE__ ) . 'lacuevita-chat-embed.js',
+        'lcv-widget',
+        plugin_dir_url( __FILE__ ) . 'lcv-widget.js',
         array(),
-        '1.0',
+        '2.0',
         true
     );
 }
