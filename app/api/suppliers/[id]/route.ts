@@ -8,6 +8,17 @@ const updateSchema = z.object({
   email: z.string().email("Invalid email").optional().or(z.literal("")).or(z.null()),
   phone: z.string().optional().or(z.null()),
   address: z.string().optional().or(z.null()),
+  paymentTermsDays: z.number().int().min(0).max(365).optional(),
+  defaultCategory: z
+    .enum(["COGS", "SERVICES_EXPENSE", "OPERATING_EXPENSE", "OTHER"])
+    .or(z.literal(""))
+    .optional()
+    .nullable()
+    .transform((v) => (v === "" ? null : v ?? null)),
+  bankName: z.string().optional().or(z.null()),
+  bankAccountNumber: z.string().optional().or(z.null()),
+  bankRouting: z.string().optional().or(z.null()),
+  paymentInstructions: z.string().optional().or(z.null()),
 });
 
 export async function PATCH(
@@ -24,15 +35,20 @@ export async function PATCH(
     return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
   }
 
-  const supplier = await prisma.supplier.update({
-    where: { id },
-    data: {
-      name: parsed.data.name,
-      email: parsed.data.email || null,
-      phone: parsed.data.phone || null,
-      address: parsed.data.address || null,
-    },
-  });
+  const data: Record<string, unknown> = {
+    name: parsed.data.name,
+    email: parsed.data.email || null,
+    phone: parsed.data.phone || null,
+    address: parsed.data.address || null,
+  };
+  if (parsed.data.paymentTermsDays !== undefined) data.paymentTermsDays = parsed.data.paymentTermsDays;
+  if (parsed.data.defaultCategory !== undefined) data.defaultCategory = parsed.data.defaultCategory ?? null;
+  if (parsed.data.bankName !== undefined) data.bankName = parsed.data.bankName || null;
+  if (parsed.data.bankAccountNumber !== undefined) data.bankAccountNumber = parsed.data.bankAccountNumber || null;
+  if (parsed.data.bankRouting !== undefined) data.bankRouting = parsed.data.bankRouting || null;
+  if (parsed.data.paymentInstructions !== undefined) data.paymentInstructions = parsed.data.paymentInstructions || null;
+
+  const supplier = await prisma.supplier.update({ where: { id }, data });
   return NextResponse.json(supplier);
 }
 

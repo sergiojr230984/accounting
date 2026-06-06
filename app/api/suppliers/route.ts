@@ -9,6 +9,17 @@ const schema = z.object({
   email: z.string().email().optional().or(z.literal("")),
   phone: z.string().optional(),
   address: z.string().optional(),
+  paymentTermsDays: z.number().int().min(0).max(365).default(30),
+  defaultCategory: z
+    .enum(["COGS", "SERVICES_EXPENSE", "OPERATING_EXPENSE", "OTHER"])
+    .or(z.literal(""))
+    .optional()
+    .nullable()
+    .transform((v) => (v === "" ? null : v ?? null)),
+  bankName: z.string().optional(),
+  bankAccountNumber: z.string().optional(),
+  bankRouting: z.string().optional(),
+  paymentInstructions: z.string().optional(),
 });
 
 export async function GET() {
@@ -54,6 +65,12 @@ export async function POST(request: Request) {
         email: parsed.data.email || null,
         phone: parsed.data.phone || null,
         address: parsed.data.address || null,
+        paymentTermsDays: parsed.data.paymentTermsDays,
+        defaultCategory: parsed.data.defaultCategory ?? null,
+        bankName: parsed.data.bankName || null,
+        bankAccountNumber: parsed.data.bankAccountNumber || null,
+        bankRouting: parsed.data.bankRouting || null,
+        paymentInstructions: parsed.data.paymentInstructions || null,
       },
     });
     return NextResponse.json(supplier, { status: 201 });

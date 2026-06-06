@@ -6,7 +6,8 @@ import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import Link from "next/link";
-import { ArrowLeft, Edit2, Save, X, Trash2, Loader2, Send, Copy, Check } from "lucide-react";
+import { ArrowLeft, Edit2, Save, X, Trash2, Loader2, Send, Copy, Check, Printer } from "lucide-react";
+import { generateInvoicePDF } from "@/lib/invoice-pdf";
 import { format } from "date-fns";
 import PaymentBadge from "@/components/PaymentBadge";
 import FileUpload from "@/components/FileUpload";
@@ -50,7 +51,7 @@ interface InvoiceDetail {
   sentAt: string | null;
   employeeId: string | null;
   commissionRate: string;
-  customer: { id: string; name: string; email: string | null; phone: string | null };
+  customer: { id: string; name: string; email: string | null; phone: string | null; address: string | null };
   items: { id: string; description: string; quantity: string; unitPrice: string; taxRate: string; lineTotal: string }[];
   payments: { id: string; amount: string; paymentDate: string; notes: string | null }[];
   files: { id: string; originalName: string; mimeType: string }[];
@@ -169,6 +170,19 @@ export default function CustomerInvoiceDetailPage() {
     setTimeout(() => setLinkCopied(false), 2000);
   }
 
+  function downloadPDF() {
+    if (!invoice) return;
+    const doc = generateInvoicePDF(invoice);
+    doc.save(`${invoice.invoiceNumber}.pdf`);
+  }
+
+  function printPDF() {
+    if (!invoice) return;
+    const doc = generateInvoicePDF(invoice);
+    const url = doc.output("bloburl");
+    window.open(url, "_blank");
+  }
+
   if (!invoice) {
     return <div className="flex items-center justify-center h-48"><Loader2 className="w-6 h-6 animate-spin text-brand-500" /></div>;
   }
@@ -189,14 +203,22 @@ export default function CustomerInvoiceDetailPage() {
         <div className="flex items-center gap-2">
           {!editing ? (
             <>
-              <button onClick={handleSend} disabled={sending} className="btn-primary">
+              <button onClick={printPDF} className="btn-primary" title="Print or save as PDF">
+                <Printer className="w-4 h-4" />
+                Print
+              </button>
+              <button onClick={downloadPDF} className="btn-secondary" title="Download PDF">
+                <Save className="w-4 h-4" />
+                PDF
+              </button>
+              <button onClick={handleSend} disabled={sending} className="btn-secondary" title="Email invoice to customer">
                 {sending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
-                {invoice.sentAt ? "Resend" : "Send"}
+                {invoice.sentAt ? "Resend" : "Email"}
               </button>
               {invoice.viewToken && (
                 <button onClick={copyLink} className="btn-secondary" title="Copy payment link">
                   {linkCopied ? <Check className="w-4 h-4 text-green-600" /> : <Copy className="w-4 h-4" />}
-                  {linkCopied ? "Copied" : "Copy link"}
+                  {linkCopied ? "Copied" : "Link"}
                 </button>
               )}
               <button onClick={() => setEditing(true)} className="btn-secondary">

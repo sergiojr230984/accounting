@@ -47,14 +47,20 @@ model Customer {
 }
 
 model Supplier {
-  id        String            @id @default(cuid())
-  name      String
-  email     String?
-  phone     String?
-  address   String?
-  createdAt DateTime          @default(now())
-  updatedAt DateTime          @updatedAt
-  invoices  SupplierInvoice[]
+  id                  String            @id @default(cuid())
+  name                String
+  email               String?
+  phone               String?
+  address             String?
+  paymentTermsDays    Int               @default(30)
+  defaultCategory     SupplierCategory?
+  bankName            String?
+  bankAccountNumber   String?
+  bankRouting         String?
+  paymentInstructions String?
+  createdAt           DateTime          @default(now())
+  updatedAt           DateTime          @updatedAt
+  invoices            SupplierInvoice[]
 }
 
 model CustomerInvoice {

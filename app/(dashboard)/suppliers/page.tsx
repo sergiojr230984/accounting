@@ -7,11 +7,19 @@ import { z } from "zod";
 import { Plus, Truck, Loader2, Search, Pencil, Trash2, X, Check } from "lucide-react";
 import Link from "next/link";
 
+const CATEGORIES = ["COGS", "SERVICES_EXPENSE", "OPERATING_EXPENSE", "OTHER"] as const;
+
 const schema = z.object({
   name: z.string().min(1, "Name is required"),
   email: z.string().email("Must be a valid email").optional().or(z.literal("")),
   phone: z.string().optional(),
   address: z.string().optional(),
+  paymentTermsDays: z.coerce.number().int().min(0).max(365).default(30),
+  defaultCategory: z.enum(CATEGORIES).optional().or(z.literal("")),
+  bankName: z.string().optional(),
+  bankAccountNumber: z.string().optional(),
+  bankRouting: z.string().optional(),
+  paymentInstructions: z.string().optional(),
 });
 type FormData = z.infer<typeof schema>;
 
@@ -21,6 +29,12 @@ interface Supplier {
   email: string | null;
   phone: string | null;
   address: string | null;
+  paymentTermsDays: number;
+  defaultCategory: string | null;
+  bankName: string | null;
+  bankAccountNumber: string | null;
+  bankRouting: string | null;
+  paymentInstructions: string | null;
   _count: { invoices: number };
 }
 
@@ -44,7 +58,7 @@ function SupplierForm({
     formState: { errors },
   } = useForm<FormData>({
     resolver: zodResolver(schema),
-    defaultValues: defaultValues ?? {},
+    defaultValues: { paymentTermsDays: 30, defaultCategory: "", ...(defaultValues ?? {}) } as FormData,
   });
 
   async function onSubmit(data: FormData) {
@@ -79,6 +93,48 @@ function SupplierForm({
         <div>
           <label className="label">Address</label>
           <input className="input" placeholder="123 Main St, City, State" {...register("address")} />
+        </div>
+        <div>
+          <label className="label">Payment terms (days)</label>
+          <input type="number" className="input" placeholder="30" {...register("paymentTermsDays")} />
+          <p className="text-xs text-gray-400 mt-1">e.g. 30 = Net 30. Auto-calculates due date on their invoices.</p>
+        </div>
+        <div>
+          <label className="label">Default expense category</label>
+          <select className="input" {...register("defaultCategory")}>
+            <option value="">— None —</option>
+            <option value="COGS">Cost of Goods Sold</option>
+            <option value="SERVICES_EXPENSE">Services Expense</option>
+            <option value="OPERATING_EXPENSE">Operating Expense</option>
+            <option value="OTHER">Other</option>
+          </select>
+        </div>
+      </div>
+
+      <div className="mt-5 pt-4 border-t">
+        <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3">Payment details</p>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <div>
+            <label className="label">Bank name</label>
+            <input className="input" placeholder="First National Bank" {...register("bankName")} />
+          </div>
+          <div>
+            <label className="label">Account number</label>
+            <input className="input" placeholder="••••1234" {...register("bankAccountNumber")} />
+          </div>
+          <div>
+            <label className="label">Routing / ABA</label>
+            <input className="input" {...register("bankRouting")} />
+          </div>
+          <div className="sm:col-span-2">
+            <label className="label">Payment instructions</label>
+            <textarea
+              className="input"
+              rows={2}
+              placeholder="Pay via Zelle to ops@acme.com, reference invoice #"
+              {...register("paymentInstructions")}
+            />
+          </div>
         </div>
       </div>
 
@@ -310,6 +366,12 @@ export default function SuppliersPage() {
                             email: s.email ?? "",
                             phone: s.phone ?? "",
                             address: s.address ?? "",
+                            paymentTermsDays: s.paymentTermsDays ?? 30,
+                            defaultCategory: (s.defaultCategory as FormData["defaultCategory"]) ?? "",
+                            bankName: s.bankName ?? "",
+                            bankAccountNumber: s.bankAccountNumber ?? "",
+                            bankRouting: s.bankRouting ?? "",
+                            paymentInstructions: s.paymentInstructions ?? "",
                           }}
                           submitLabel="Save Changes"
                           onSave={(data) => handleEdit(s.id, data)}

@@ -115,6 +115,12 @@ const SCHEMA_STATEMENTS: string[] = [
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updatedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP
   );`,
+  `ALTER TABLE "Supplier" ADD COLUMN IF NOT EXISTS "paymentTermsDays" INTEGER NOT NULL DEFAULT 30;`,
+  `ALTER TABLE "Supplier" ADD COLUMN IF NOT EXISTS "defaultCategory" "SupplierCategory";`,
+  `ALTER TABLE "Supplier" ADD COLUMN IF NOT EXISTS "bankName" TEXT;`,
+  `ALTER TABLE "Supplier" ADD COLUMN IF NOT EXISTS "bankAccountNumber" TEXT;`,
+  `ALTER TABLE "Supplier" ADD COLUMN IF NOT EXISTS "bankRouting" TEXT;`,
+  `ALTER TABLE "Supplier" ADD COLUMN IF NOT EXISTS "paymentInstructions" TEXT;`,
   `ALTER TABLE "CustomerInvoice" ADD COLUMN IF NOT EXISTS "downPayment" DECIMAL(15,2) NOT NULL DEFAULT 0;`,
   `ALTER TABLE "CustomerInvoice" ADD COLUMN IF NOT EXISTS "viewToken" TEXT;`,
   `ALTER TABLE "CustomerInvoice" ADD COLUMN IF NOT EXISTS "sentAt" TIMESTAMP(3);`,

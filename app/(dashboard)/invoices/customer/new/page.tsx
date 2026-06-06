@@ -12,11 +12,13 @@ import {
   Loader2,
   Search,
   X,
+  Printer,
 } from "lucide-react";
 import Decimal from "decimal.js";
 import CustomerCreateModal from "@/components/CustomerCreateModal";
 import InvoiceExtractor from "@/components/InvoiceExtractor";
 import { formatCurrency } from "@/lib/money";
+import { generateInvoicePDF } from "@/lib/invoice-pdf";
 
 interface Customer {
   id: string;
@@ -69,7 +71,7 @@ export default function NewCustomerInvoicePage() {
   const [modalOpen, setModalOpen] = useState(false);
   const [modalSeedName, setModalSeedName] = useState("");
 
-  const [saving, setSaving] = useState<"idle" | "save" | "send">("idle");
+  const [saving, setSaving] = useState<"idle" | "save" | "print" | "send">("idle");
   const [error, setError] = useState("");
 
   async function loadCustomers() {
@@ -168,7 +170,7 @@ export default function NewCustomerInvoicePage() {
     }
   }
 
-  async function save(action: "save" | "send"): Promise<void> {
+  async function save(action: "save" | "print" | "send"): Promise<void> {
     setError("");
     if (!customerId) {
       setError("Please select a customer");
@@ -208,9 +210,34 @@ export default function NewCustomerInvoicePage() {
         const sendRes = await fetch(`/api/invoices/customer/${inv.id}/send`, { method: "POST" });
         if (!sendRes.ok) {
           const d = await sendRes.json().catch(() => ({}));
-          // Don't block — invoice was created; surface the send error in detail page
           router.push(`/invoices/customer/${inv.id}?sendError=${encodeURIComponent(d.error ?? "send failed")}`);
           return;
+        }
+      }
+      if (action === "print") {
+        const customer = customers.find((c) => c.id === customerId);
+        if (customer) {
+          const doc = generateInvoicePDF({
+            invoiceNumber,
+            invoiceDate,
+            dueDate,
+            subtotal: totals.subtotal.toFixed(2),
+            taxAmount: totals.taxAmount.toFixed(2),
+            totalAmount: totals.total.toFixed(2),
+            paidAmount: "0",
+            downPayment: downPayment || "0",
+            notes,
+            customer: { name: customer.name, email: customer.email, phone: null, address: null },
+            items: real.map((i) => ({
+              description: i.description,
+              quantity: i.quantity,
+              unitPrice: i.unitPrice,
+              taxRate: i.taxRate,
+              lineTotal: new Decimal(i.quantity || "0").times(i.unitPrice || "0").toFixed(2),
+            })),
+          });
+          const url = doc.output("bloburl");
+          window.open(url, "_blank");
         }
       }
       router.push(`/invoices/customer/${inv.id}`);
@@ -507,12 +534,12 @@ export default function NewCustomerInvoicePage() {
 
           <div className="space-y-2">
             <button
-              onClick={() => save("send")}
+              onClick={() => save("print")}
               disabled={saving !== "idle"}
               className="btn-primary w-full justify-center"
             >
-              {saving === "send" ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
-              Save & Send
+              {saving === "print" ? <Loader2 className="w-4 h-4 animate-spin" /> : <Printer className="w-4 h-4" />}
+              Save & Print PDF
             </button>
             <button
               onClick={() => save("save")}
@@ -521,6 +548,15 @@ export default function NewCustomerInvoicePage() {
             >
               {saving === "save" ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
               Save as draft
+            </button>
+            <button
+              onClick={() => save("send")}
+              disabled={saving !== "idle"}
+              className="btn-secondary w-full justify-center"
+              title="Email invoice to customer (requires RESEND_API_KEY)"
+            >
+              {saving === "send" ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
+              Save & Email
             </button>
           </div>
         </div>
