@@ -20,6 +20,9 @@ const invoiceSchema = z.object({
   notes: z.string().optional(),
   paymentStatus: z.enum(["UNPAID", "PARTIALLY_PAID", "PAID"]).default("UNPAID"),
   paidAmount: z.string().regex(/^\d+(\.\d+)?$/).default("0"),
+  downPayment: z.string().regex(/^\d+(\.\d+)?$/).default("0"),
+  employeeId: z.string().optional().nullable(),
+  commissionRate: z.string().regex(/^\d+(\.\d+)?$/).default("0"),
 });
 
 export async function GET(request: Request) {
@@ -72,8 +75,19 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
   }
 
-  const { customerId, invoiceNumber, invoiceDate, dueDate, items, notes, paymentStatus, paidAmount } =
-    parsed.data;
+  const {
+    customerId,
+    invoiceNumber,
+    invoiceDate,
+    dueDate,
+    items,
+    notes,
+    paymentStatus,
+    paidAmount,
+    downPayment,
+    employeeId,
+    commissionRate,
+  } = parsed.data;
 
   // Duplicate check
   const existing = await prisma.customerInvoice.findUnique({
@@ -113,6 +127,9 @@ export async function POST(request: Request) {
       totalAmount: totalAmount.toFixed(2),
       paidAmount: paidAmount ?? "0",
       paymentStatus: paymentStatus ?? "UNPAID",
+      downPayment: downPayment ?? "0",
+      employeeId: employeeId ?? null,
+      commissionRate: commissionRate ?? "0",
       notes,
       items: {
         create: computedItems.map((item) => ({

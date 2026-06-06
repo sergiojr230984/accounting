@@ -6,7 +6,7 @@ import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import Link from "next/link";
-import { ArrowLeft, Edit2, Save, X, Trash2, Loader2 } from "lucide-react";
+import { ArrowLeft, Edit2, Save, X, Trash2, Loader2, Send, Copy, Check } from "lucide-react";
 import { format } from "date-fns";
 import PaymentBadge from "@/components/PaymentBadge";
 import FileUpload from "@/components/FileUpload";
@@ -19,6 +19,7 @@ const editSchema = z.object({
   dueDate: z.string(),
   paymentStatus: z.enum(["UNPAID", "PARTIALLY_PAID", "PAID"]),
   paidAmount: z.string(),
+  downPayment: z.string().default("0"),
   notes: z.string().optional(),
   items: z.array(
     z.object({
@@ -40,8 +41,11 @@ interface InvoiceDetail {
   taxAmount: string;
   totalAmount: string;
   paidAmount: string;
+  downPayment: string;
   paymentStatus: "UNPAID" | "PARTIALLY_PAID" | "PAID";
   notes: string | null;
+  viewToken: string | null;
+  sentAt: string | null;
   customer: { id: string; name: string; email: string | null; phone: string | null };
   items: { id: string; description: string; quantity: string; unitPrice: string; taxRate: string; lineTotal: string }[];
   payments: { id: string; amount: string; paymentDate: string; notes: string | null }[];
@@ -57,6 +61,9 @@ export default function CustomerInvoiceDetailPage() {
   const [error, setError] = useState("");
   const [deleting, setDeleting] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [sending, setSending] = useState(false);
+  const [sendMessage, setSendMessage] = useState<{ kind: "success" | "error"; text: string } | null>(null);
+  const [linkCopied, setLinkCopied] = useState(false);
 
   const { register, handleSubmit, control, reset, formState: { errors } } = useForm<EditForm>({
     resolver: zodResolver(editSchema),
@@ -73,6 +80,7 @@ export default function CustomerInvoiceDetailPage() {
       dueDate: data.dueDate.split("T")[0],
       paymentStatus: data.paymentStatus,
       paidAmount: data.paidAmount,
+      downPayment: data.downPayment ?? "0",
       notes: data.notes ?? "",
       items: data.items.map((item: InvoiceDetail["items"][0]) => ({
         description: item.description,
@@ -112,6 +120,37 @@ export default function CustomerInvoiceDetailPage() {
     router.push("/invoices/customer");
   }
 
+  async function handleSend() {
+    setSending(true);
+    setSendMessage(null);
+    try {
+      const res = await fetch(`/api/invoices/customer/${id}/send`, { method: "POST" });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setSendMessage({ kind: "error", text: data.error ?? "Failed to send" });
+        if (data.link) {
+          // even if email failed, we have a public link
+          await load();
+        }
+      } else {
+        setSendMessage({ kind: "success", text: `Sent to ${invoice?.customer.email}` });
+        await load();
+      }
+    } catch (e) {
+      setSendMessage({ kind: "error", text: (e as Error).message });
+    } finally {
+      setSending(false);
+    }
+  }
+
+  async function copyLink() {
+    if (!invoice?.viewToken) return;
+    const url = `${window.location.origin}/pay/${invoice.viewToken}`;
+    await navigator.clipboard.writeText(url);
+    setLinkCopied(true);
+    setTimeout(() => setLinkCopied(false), 2000);
+  }
+
   if (!invoice) {
     return <div className="flex items-center justify-center h-48"><Loader2 className="w-6 h-6 animate-spin text-brand-500" /></div>;
   }
@@ -132,6 +171,16 @@ export default function CustomerInvoiceDetailPage() {
         <div className="flex items-center gap-2">
           {!editing ? (
             <>
+              <button onClick={handleSend} disabled={sending} className="btn-primary">
+                {sending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
+                {invoice.sentAt ? "Resend" : "Send"}
+              </button>
+              {invoice.viewToken && (
+                <button onClick={copyLink} className="btn-secondary" title="Copy payment link">
+                  {linkCopied ? <Check className="w-4 h-4 text-green-600" /> : <Copy className="w-4 h-4" />}
+                  {linkCopied ? "Copied" : "Copy link"}
+                </button>
+              )}
               <button onClick={() => setEditing(true)} className="btn-secondary">
                 <Edit2 className="w-4 h-4" />
                 Edit
@@ -170,6 +219,24 @@ export default function CustomerInvoiceDetailPage() {
         <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg text-sm">{error}</div>
       )}
 
+      {sendMessage && (
+        <div
+          className={`px-4 py-3 rounded-lg text-sm border ${
+            sendMessage.kind === "success"
+              ? "bg-green-50 border-green-200 text-green-800"
+              : "bg-red-50 border-red-200 text-red-700"
+          }`}
+        >
+          {sendMessage.text}
+        </div>
+      )}
+
+      {invoice.sentAt && (
+        <div className="bg-brand-50 border border-brand-200 text-brand-800 px-4 py-2 rounded-lg text-xs">
+          Last sent {format(new Date(invoice.sentAt), "MMM d, yyyy 'at' h:mm a")}
+        </div>
+      )}
+
       {editing ? (
         <form className="space-y-6">
           <div className="card space-y-4">
@@ -199,6 +266,10 @@ export default function CustomerInvoiceDetailPage() {
               <div>
                 <label className="label">Amount Paid ($)</label>
                 <input type="number" step="0.01" min="0" className="input" {...register("paidAmount")} />
+              </div>
+              <div>
+                <label className="label">Down payment ($)</label>
+                <input type="number" step="0.01" min="0" className="input" {...register("downPayment")} />
               </div>
             </div>
             <div>
@@ -283,13 +354,27 @@ export default function CustomerInvoiceDetailPage() {
                 <span>Total</span>
                 <span>{formatCurrency(invoice.totalAmount)}</span>
               </div>
+              {parseFloat(invoice.downPayment) > 0 && (
+                <div className="flex justify-between text-green-700">
+                  <span>Down payment</span>
+                  <span>−{formatCurrency(invoice.downPayment)}</span>
+                </div>
+              )}
               <div className="flex justify-between text-green-600">
                 <span>Paid</span>
                 <span>{formatCurrency(invoice.paidAmount)}</span>
               </div>
               <div className="flex justify-between font-semibold text-red-600">
                 <span>Balance Due</span>
-                <span>{formatCurrency((parseFloat(invoice.totalAmount) - parseFloat(invoice.paidAmount)).toFixed(2))}</span>
+                <span>
+                  {formatCurrency(
+                    (
+                      parseFloat(invoice.totalAmount) -
+                      parseFloat(invoice.paidAmount) -
+                      parseFloat(invoice.downPayment)
+                    ).toFixed(2)
+                  )}
+                </span>
               </div>
             </div>
           </div>

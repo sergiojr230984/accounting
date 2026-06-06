@@ -11,6 +11,9 @@ const updateSchema = z.object({
   notes: z.string().optional(),
   paymentStatus: z.enum(["UNPAID", "PARTIALLY_PAID", "PAID"]).optional(),
   paidAmount: z.string().optional(),
+  downPayment: z.string().optional(),
+  employeeId: z.string().nullable().optional(),
+  commissionRate: z.string().optional(),
   items: z
     .array(
       z.object({
@@ -73,6 +76,9 @@ export async function PATCH(
   if (data.notes !== undefined) updateData.notes = data.notes;
   if (data.paymentStatus) updateData.paymentStatus = data.paymentStatus;
   if (data.paidAmount !== undefined) updateData.paidAmount = data.paidAmount;
+  if (data.downPayment !== undefined) updateData.downPayment = data.downPayment;
+  if (data.employeeId !== undefined) updateData.employeeId = data.employeeId;
+  if (data.commissionRate !== undefined) updateData.commissionRate = data.commissionRate;
 
   if (data.items) {
     let subtotal = new Decimal(0);

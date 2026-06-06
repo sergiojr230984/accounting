@@ -68,8 +68,14 @@ model CustomerInvoice {
   taxAmount     Decimal               @db.Decimal(15, 2) @default(0)
   totalAmount   Decimal               @db.Decimal(15, 2)
   paidAmount    Decimal               @db.Decimal(15, 2) @default(0)
+  downPayment   Decimal               @db.Decimal(15, 2) @default(0)
   paymentStatus PaymentStatus         @default(UNPAID)
   notes         String?
+  viewToken     String?               @unique
+  sentAt        DateTime?
+  employeeId    String?
+  employee      Employee?             @relation(fields: [employeeId], references: [id])
+  commissionRate Decimal              @db.Decimal(5, 4) @default(0)
   createdAt     DateTime              @default(now())
   updatedAt     DateTime              @updatedAt
   items         CustomerInvoiceItem[]
@@ -139,6 +145,18 @@ model Payment {
   supplierInvoice   SupplierInvoice? @relation(fields: [supplierInvoiceId], references: [id])
   createdAt         DateTime         @default(now())
   updatedAt         DateTime         @updatedAt
+}
+
+model Employee {
+  id             String            @id @default(cuid())
+  name           String
+  email          String?           @unique
+  phone          String?
+  commissionRate Decimal           @db.Decimal(5, 4) @default(0)
+  active         Boolean           @default(true)
+  createdAt      DateTime          @default(now())
+  updatedAt      DateTime          @updatedAt
+  invoices       CustomerInvoice[]
 }
 
 model UploadedFile {

@@ -105,6 +105,25 @@ const SCHEMA_STATEMENTS: string[] = [
     CONSTRAINT "Payment_customerInvoiceId_fkey" FOREIGN KEY ("customerInvoiceId") REFERENCES "CustomerInvoice"("id") ON DELETE SET NULL ON UPDATE CASCADE,
     CONSTRAINT "Payment_supplierInvoiceId_fkey" FOREIGN KEY ("supplierInvoiceId") REFERENCES "SupplierInvoice"("id") ON DELETE SET NULL ON UPDATE CASCADE
   );`,
+  `CREATE TABLE IF NOT EXISTS "Employee" (
+    "id" TEXT NOT NULL PRIMARY KEY,
+    "name" TEXT NOT NULL,
+    "email" TEXT UNIQUE,
+    "phone" TEXT,
+    "commissionRate" DECIMAL(5,4) NOT NULL DEFAULT 0,
+    "active" BOOLEAN NOT NULL DEFAULT true,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP
+  );`,
+  `ALTER TABLE "CustomerInvoice" ADD COLUMN IF NOT EXISTS "downPayment" DECIMAL(15,2) NOT NULL DEFAULT 0;`,
+  `ALTER TABLE "CustomerInvoice" ADD COLUMN IF NOT EXISTS "viewToken" TEXT;`,
+  `ALTER TABLE "CustomerInvoice" ADD COLUMN IF NOT EXISTS "sentAt" TIMESTAMP(3);`,
+  `ALTER TABLE "CustomerInvoice" ADD COLUMN IF NOT EXISTS "employeeId" TEXT;`,
+  `ALTER TABLE "CustomerInvoice" ADD COLUMN IF NOT EXISTS "commissionRate" DECIMAL(5,4) NOT NULL DEFAULT 0;`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS "CustomerInvoice_viewToken_key" ON "CustomerInvoice"("viewToken");`,
+  `DO $$ BEGIN
+    ALTER TABLE "CustomerInvoice" ADD CONSTRAINT "CustomerInvoice_employeeId_fkey" FOREIGN KEY ("employeeId") REFERENCES "Employee"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+   EXCEPTION WHEN duplicate_object THEN NULL; END $$;`,
   `CREATE TABLE IF NOT EXISTS "UploadedFile" (
     "id" TEXT NOT NULL PRIMARY KEY,
     "originalName" TEXT NOT NULL,

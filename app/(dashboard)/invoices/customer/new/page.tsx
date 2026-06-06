@@ -1,265 +1,477 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { useForm } from "react-hook-form";
-import { zodResolver } from "@hookform/resolvers/zod";
-import { z } from "zod";
-import { ArrowLeft, Loader2 } from "lucide-react";
 import Link from "next/link";
-import InvoiceItemsEditor from "@/components/InvoiceItemsEditor";
-import InvoiceExtractor from "@/components/InvoiceExtractor";
+import {
+  ArrowLeft,
+  Plus,
+  Trash2,
+  Save,
+  Send,
+  Loader2,
+  Search,
+  X,
+} from "lucide-react";
 import Decimal from "decimal.js";
+import CustomerCreateModal from "@/components/CustomerCreateModal";
+import InvoiceExtractor from "@/components/InvoiceExtractor";
+import { formatCurrency } from "@/lib/money";
 
-const schema = z.object({
-  customerId: z.string().min(1, "Select a customer"),
-  invoiceNumber: z.string().min(1, "Required"),
-  invoiceDate: z.string().min(1, "Required"),
-  dueDate: z.string().min(1, "Required"),
-  paymentStatus: z.enum(["UNPAID", "PARTIALLY_PAID", "PAID"]),
-  paidAmount: z.string().default("0"),
-  notes: z.string().optional(),
-  items: z.array(
-    z.object({
-      description: z.string().min(1, "Required"),
-      quantity: z.string().min(1),
-      unitPrice: z.string().min(1),
-      taxRate: z.string().default("0"),
-    })
-  ).min(1),
-});
+interface Customer {
+  id: string;
+  name: string;
+  email: string | null;
+}
 
-type FormData = z.infer<typeof schema>;
+interface LineItem {
+  description: string;
+  quantity: string;
+  unitPrice: string;
+  taxRate: string;
+}
 
-interface Customer { id: string; name: string }
+const blankItem = (): LineItem => ({ description: "", quantity: "1", unitPrice: "0", taxRate: "0" });
+
+const todayISO = () => new Date().toISOString().split("T")[0];
+const plusDaysISO = (days: number) => {
+  const d = new Date();
+  d.setDate(d.getDate() + days);
+  return d.toISOString().split("T")[0];
+};
 
 export default function NewCustomerInvoicePage() {
   const router = useRouter();
+
   const [customers, setCustomers] = useState<Customer[]>([]);
-  const [submitting, setSubmitting] = useState(false);
+  const [customerId, setCustomerId] = useState("");
+  const [customerQuery, setCustomerQuery] = useState("");
+  const [customerOpen, setCustomerOpen] = useState(false);
+
+  const [invoiceNumber, setInvoiceNumber] = useState("");
+  const [invoiceDate, setInvoiceDate] = useState(todayISO());
+  const [dueDate, setDueDate] = useState(plusDaysISO(30));
+  const [downPayment, setDownPayment] = useState("0");
+  const [notes, setNotes] = useState("");
+  const [items, setItems] = useState<LineItem[]>([blankItem()]);
+
+  const [modalOpen, setModalOpen] = useState(false);
+  const [modalSeedName, setModalSeedName] = useState("");
+
+  const [saving, setSaving] = useState<"idle" | "save" | "send">("idle");
   const [error, setError] = useState("");
-  const [newCustomerName, setNewCustomerName] = useState("");
-  const [creatingCustomer, setCreatingCustomer] = useState(false);
-
-  const { register, handleSubmit, control, watch, setValue, formState: { errors } } = useForm<FormData>({
-    resolver: zodResolver(schema),
-    defaultValues: {
-      paymentStatus: "UNPAID",
-      paidAmount: "0",
-      items: [{ description: "", quantity: "1", unitPrice: "0", taxRate: "0" }],
-    },
-  });
-
-  const items = watch("items");
-  const subtotal = items?.reduce((sum, item) => {
-    try {
-      return sum.plus(new Decimal(item.quantity || "0").times(new Decimal(item.unitPrice || "0")));
-    } catch { return sum; }
-  }, new Decimal(0)) ?? new Decimal(0);
 
   async function loadCustomers() {
     const res = await fetch("/api/customers");
-    const list = await res.json();
+    if (!res.ok) return [] as Customer[];
+    const list: Customer[] = await res.json();
     setCustomers(list);
-    return list as Customer[];
+    return list;
   }
 
-  useEffect(() => { loadCustomers(); }, []);
+  useEffect(() => {
+    loadCustomers();
+    fetch("/api/invoices/customer?page=1&limit=1")
+      .then((r) => r.json())
+      .then(({ total }: { total: number }) => {
+        const next = String(1001 + total).padStart(4, "0");
+        setInvoiceNumber(`INV-${new Date().getFullYear()}-${next}`);
+      })
+      .catch(() => {});
+  }, []);
 
-  // Called when AI extraction completes — pre-fill the form
+  const selectedCustomer = customers.find((c) => c.id === customerId) ?? null;
+  const filteredCustomers = useMemo(
+    () => customers.filter((c) => c.name.toLowerCase().includes(customerQuery.toLowerCase())),
+    [customers, customerQuery]
+  );
+
+  const totals = useMemo(() => {
+    let subtotal = new Decimal(0);
+    let taxAmount = new Decimal(0);
+    for (const item of items) {
+      try {
+        const line = new Decimal(item.quantity || "0").times(item.unitPrice || "0");
+        subtotal = subtotal.plus(line);
+        taxAmount = taxAmount.plus(line.times(item.taxRate || "0"));
+      } catch {
+        // skip invalid rows
+      }
+    }
+    const total = subtotal.plus(taxAmount);
+    const down = (() => {
+      try { return new Decimal(downPayment || "0"); } catch { return new Decimal(0); }
+    })();
+    const balance = Decimal.max(total.minus(down), 0);
+    return { subtotal, taxAmount, total, downPayment: down, balance };
+  }, [items, downPayment]);
+
+  function updateItem(idx: number, field: keyof LineItem, value: string) {
+    setItems((prev) => {
+      const next = [...prev];
+      next[idx] = { ...next[idx], [field]: value };
+      // Wave-style: auto-add a fresh blank row when typing in the last row's description
+      if (field === "description" && idx === next.length - 1 && value.trim() !== "") {
+        next.push(blankItem());
+      }
+      return next;
+    });
+  }
+
+  function removeItem(idx: number) {
+    setItems((prev) => (prev.length === 1 ? prev : prev.filter((_, i) => i !== idx)));
+  }
+
   async function handleExtracted(data: {
     invoiceNumber?: string | null;
     invoiceDate?: string | null;
     dueDate?: string | null;
     customerName?: string | null;
-    items?: { description: string; quantity: string; unitPrice: string; taxRate: string }[];
+    items?: LineItem[];
     notes?: string | null;
   }) {
-    if (data.invoiceNumber) setValue("invoiceNumber", data.invoiceNumber);
-    if (data.invoiceDate) setValue("invoiceDate", data.invoiceDate);
-    if (data.dueDate) setValue("dueDate", data.dueDate);
-    if (data.notes) setValue("notes", data.notes);
-
-    if (data.items && data.items.length > 0) {
-      setValue("items", data.items.map((item) => ({
-        description: item.description ?? "",
-        quantity: item.quantity ?? "1",
-        unitPrice: item.unitPrice ?? "0",
-        taxRate: item.taxRate ?? "0",
-      })));
+    if (data.invoiceNumber) setInvoiceNumber(data.invoiceNumber);
+    if (data.invoiceDate) setInvoiceDate(data.invoiceDate);
+    if (data.dueDate) setDueDate(data.dueDate);
+    if (data.notes) setNotes(data.notes);
+    if (data.items?.length) {
+      setItems([...data.items.map((i) => ({ ...i, taxRate: i.taxRate || "0" })), blankItem()]);
     }
-
-    // Try to match extracted customer name to existing customers
     if (data.customerName) {
       const current = await loadCustomers();
       const lower = data.customerName.toLowerCase();
       const match = current.find((c) => c.name.toLowerCase().includes(lower) || lower.includes(c.name.toLowerCase()));
       if (match) {
-        setValue("customerId", match.id);
+        setCustomerId(match.id);
       } else {
-        // Prompt to create the customer
-        setNewCustomerName(data.customerName);
+        setModalSeedName(data.customerName);
+        setModalOpen(true);
       }
     }
   }
 
-  async function createAndSelectCustomer() {
-    if (!newCustomerName) return;
-    setCreatingCustomer(true);
-    try {
-      const res = await fetch("/api/customers", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: newCustomerName }),
-      });
-      if (res.ok) {
-        const c = await res.json();
-        await loadCustomers();
-        setValue("customerId", c.id);
-        setNewCustomerName("");
-      }
-    } finally {
-      setCreatingCustomer(false);
-    }
-  }
-
-  async function onSubmit(data: FormData) {
-    setSubmitting(true);
+  async function save(action: "save" | "send"): Promise<void> {
     setError("");
+    if (!customerId) {
+      setError("Please select a customer");
+      return;
+    }
+    const real = items.filter((i) => i.description.trim() !== "");
+    if (real.length === 0) {
+      setError("Add at least one line item");
+      return;
+    }
+    setSaving(action);
     try {
       const res = await fetch("/api/invoices/customer", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(data),
+        body: JSON.stringify({
+          customerId,
+          invoiceNumber,
+          invoiceDate,
+          dueDate,
+          items: real,
+          notes,
+          downPayment,
+          paidAmount: "0",
+          paymentStatus: "UNPAID",
+        }),
       });
       if (!res.ok) {
-        const d = await res.json();
-        setError(d.error?.formErrors?.[0] ?? d.error ?? "Failed to create invoice");
+        const d = await res.json().catch(() => ({}));
+        setError(d.error?.formErrors?.[0] ?? (typeof d.error === "string" ? d.error : "Failed to create"));
         return;
       }
       const inv = await res.json();
+      if (action === "send") {
+        const sendRes = await fetch(`/api/invoices/customer/${inv.id}/send`, { method: "POST" });
+        if (!sendRes.ok) {
+          const d = await sendRes.json().catch(() => ({}));
+          // Don't block — invoice was created; surface the send error in detail page
+          router.push(`/invoices/customer/${inv.id}?sendError=${encodeURIComponent(d.error ?? "send failed")}`);
+          return;
+        }
+      }
       router.push(`/invoices/customer/${inv.id}`);
+    } catch (e) {
+      setError((e as Error).message);
     } finally {
-      setSubmitting(false);
+      setSaving("idle");
     }
   }
 
   return (
-    <div className="max-w-4xl mx-auto space-y-6">
-      <div className="flex items-center gap-3">
-        <Link href="/invoices/customer" className="btn-secondary p-2">
-          <ArrowLeft className="w-4 h-4" />
-        </Link>
-        <div>
-          <h1 className="text-2xl font-bold text-gray-900">New Customer Invoice</h1>
-          <p className="text-sm text-gray-500">Upload an invoice file or fill in the form manually</p>
-        </div>
-      </div>
-
-      {/* AI Extractor */}
-      <div className="card">
-        <div className="flex items-center justify-between mb-3">
-          <h2 className="font-semibold text-gray-800">Step 1 — Upload Invoice (optional)</h2>
-          <span className="text-xs text-gray-400 bg-gray-100 px-2 py-1 rounded-full">AI-powered</span>
-        </div>
-        <InvoiceExtractor type="customer" onExtracted={handleExtracted} />
-      </div>
-
-      {/* Prompt to create unmatched customer */}
-      {newCustomerName && (
-        <div className="bg-yellow-50 border border-yellow-200 rounded-xl p-4 flex items-center justify-between gap-4">
+    <div className="flex gap-6 max-w-7xl mx-auto">
+      {/* Main column */}
+      <div className="flex-1 min-w-0 space-y-5">
+        <div className="flex items-center gap-3">
+          <Link href="/invoices/customer" className="btn-secondary p-2"><ArrowLeft className="w-4 h-4" /></Link>
           <div>
-            <p className="text-sm font-medium text-yellow-800">
-              Customer not found: <span className="font-bold">{newCustomerName}</span>
-            </p>
-            <p className="text-xs text-yellow-600 mt-0.5">Create them now and auto-select?</p>
-          </div>
-          <div className="flex gap-2">
-            <button onClick={() => setNewCustomerName("")} className="btn-secondary text-xs py-1.5">Skip</button>
-            <button onClick={createAndSelectCustomer} disabled={creatingCustomer} className="btn-primary text-xs py-1.5">
-              {creatingCustomer && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
-              Create &amp; Select
-            </button>
-          </div>
-        </div>
-      )}
-
-      <form onSubmit={handleSubmit(onSubmit)} className="space-y-6">
-        <div className="card space-y-4">
-          <h2 className="font-semibold text-gray-800">Step 2 — Review &amp; Complete Invoice Details</h2>
-
-          <div className="grid grid-cols-2 gap-4">
-            <div>
-              <label className="label">Customer *</label>
-              <select className="input" {...register("customerId")}>
-                <option value="">Select customer…</option>
-                {customers.map((c) => (
-                  <option key={c.id} value={c.id}>{c.name}</option>
-                ))}
-              </select>
-              {errors.customerId && <p className="text-red-500 text-xs mt-1">{errors.customerId.message}</p>}
-              <Link href="/customers" className="text-xs text-brand-600 mt-1 inline-block">+ Add new customer</Link>
-            </div>
-
-            <div>
-              <label className="label">Invoice Number *</label>
-              <input className="input" placeholder="INV-2024-001" {...register("invoiceNumber")} />
-              {errors.invoiceNumber && <p className="text-red-500 text-xs mt-1">{errors.invoiceNumber.message}</p>}
-            </div>
-
-            <div>
-              <label className="label">Invoice Date *</label>
-              <input type="date" className="input" {...register("invoiceDate")} />
-              {errors.invoiceDate && <p className="text-red-500 text-xs mt-1">{errors.invoiceDate.message}</p>}
-            </div>
-
-            <div>
-              <label className="label">Due Date *</label>
-              <input type="date" className="input" {...register("dueDate")} />
-              {errors.dueDate && <p className="text-red-500 text-xs mt-1">{errors.dueDate.message}</p>}
-            </div>
-
-            <div>
-              <label className="label">Payment Status</label>
-              <select className="input" {...register("paymentStatus")}>
-                <option value="UNPAID">Unpaid</option>
-                <option value="PARTIALLY_PAID">Partially Paid</option>
-                <option value="PAID">Paid</option>
-              </select>
-            </div>
-
-            <div>
-              <label className="label">Amount Paid ($)</label>
-              <input type="number" step="0.01" min="0" className="input" {...register("paidAmount")} />
-            </div>
-          </div>
-
-          <div>
-            <label className="label">Notes</label>
-            <textarea className="input" rows={2} placeholder="Internal notes…" {...register("notes")} />
+            <h1 className="text-2xl font-bold text-gray-900">New Invoice</h1>
+            <p className="text-sm text-gray-500">Bill a customer — fill in the details below</p>
           </div>
         </div>
 
-        <div className="card">
-          <InvoiceItemsEditor control={control} type="customer" />
-          <div className="mt-4 pt-4 border-t text-right text-sm">
-            <span className="text-gray-500">Subtotal (before tax): </span>
-            <span className="font-semibold">${subtotal.toFixed(2)}</span>
+        {/* Optional AI extractor */}
+        <details className="card group">
+          <summary className="cursor-pointer flex items-center justify-between list-none">
+            <div>
+              <h2 className="font-semibold text-gray-800">Import from file (optional)</h2>
+              <p className="text-xs text-gray-500 mt-0.5">Upload an existing invoice PDF/image and AI will fill it in</p>
+            </div>
+            <span className="text-xs text-brand-600 group-open:hidden">Expand ↓</span>
+            <span className="text-xs text-brand-600 hidden group-open:inline">Collapse ↑</span>
+          </summary>
+          <div className="mt-4 pt-4 border-t">
+            <InvoiceExtractor type="customer" onExtracted={handleExtracted} />
           </div>
+        </details>
+
+        {/* Bill To + Invoice meta */}
+        <div className="card space-y-5">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+            <div>
+              <label className="label">Bill To</label>
+              {selectedCustomer ? (
+                <div className="flex items-center justify-between bg-brand-50 border border-brand-200 rounded-lg px-3 py-2">
+                  <div>
+                    <p className="font-medium text-sm text-gray-900">{selectedCustomer.name}</p>
+                    {selectedCustomer.email && <p className="text-xs text-gray-500">{selectedCustomer.email}</p>}
+                  </div>
+                  <button onClick={() => { setCustomerId(""); setCustomerQuery(""); }} className="text-gray-400 hover:text-gray-600">
+                    <X className="w-4 h-4" />
+                  </button>
+                </div>
+              ) : (
+                <div className="relative">
+                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+                  <input
+                    className="input pl-9"
+                    placeholder="Search customer or type a new name…"
+                    value={customerQuery}
+                    onChange={(e) => { setCustomerQuery(e.target.value); setCustomerOpen(true); }}
+                    onFocus={() => setCustomerOpen(true)}
+                  />
+                  {customerOpen && (customerQuery.trim() !== "" || filteredCustomers.length > 0) && (
+                    <div className="absolute z-10 mt-1 left-0 right-0 bg-white border border-gray-200 rounded-lg shadow-lg max-h-64 overflow-y-auto">
+                      {filteredCustomers.slice(0, 8).map((c) => (
+                        <button
+                          key={c.id}
+                          type="button"
+                          onClick={() => { setCustomerId(c.id); setCustomerOpen(false); setCustomerQuery(""); }}
+                          className="block w-full text-left px-3 py-2 hover:bg-gray-50 text-sm"
+                        >
+                          <p className="font-medium">{c.name}</p>
+                          {c.email && <p className="text-xs text-gray-500">{c.email}</p>}
+                        </button>
+                      ))}
+                      <button
+                        type="button"
+                        onClick={() => { setModalSeedName(customerQuery); setModalOpen(true); setCustomerOpen(false); }}
+                        className="block w-full text-left px-3 py-2 hover:bg-brand-50 text-sm text-brand-700 border-t font-medium"
+                      >
+                        <Plus className="w-3.5 h-3.5 inline mr-1" />
+                        Create new customer{customerQuery.trim() && `: "${customerQuery.trim()}"`}
+                      </button>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+
+            <div>
+              <label className="label">Invoice number</label>
+              <input className="input" value={invoiceNumber} onChange={(e) => setInvoiceNumber(e.target.value)} />
+            </div>
+
+            <div>
+              <label className="label">Invoice date</label>
+              <input type="date" className="input" value={invoiceDate} onChange={(e) => setInvoiceDate(e.target.value)} />
+            </div>
+
+            <div>
+              <label className="label">Due date</label>
+              <input type="date" className="input" value={dueDate} onChange={(e) => setDueDate(e.target.value)} />
+            </div>
+          </div>
+        </div>
+
+        {/* Line items */}
+        <div className="card p-0 overflow-hidden">
+          <div className="px-5 py-3 border-b bg-gray-50">
+            <h2 className="font-semibold text-gray-800 text-sm">Items</h2>
+          </div>
+          <table className="w-full text-sm">
+            <thead className="border-b">
+              <tr className="text-left text-gray-500">
+                <th className="px-3 py-2 text-xs font-medium uppercase">Description</th>
+                <th className="px-3 py-2 text-xs font-medium uppercase w-20 text-right">Qty</th>
+                <th className="px-3 py-2 text-xs font-medium uppercase w-28 text-right">Unit price</th>
+                <th className="px-3 py-2 text-xs font-medium uppercase w-20 text-right">Tax</th>
+                <th className="px-3 py-2 text-xs font-medium uppercase w-28 text-right">Amount</th>
+                <th className="w-10" />
+              </tr>
+            </thead>
+            <tbody>
+              {items.map((item, idx) => {
+                let line = new Decimal(0);
+                try { line = new Decimal(item.quantity || "0").times(item.unitPrice || "0"); } catch {}
+                return (
+                  <tr key={idx} className="border-b last:border-b-0 hover:bg-gray-50/50">
+                    <td className="px-2 py-1">
+                      <input
+                        className="w-full px-2 py-1.5 border-0 focus:outline-none focus:bg-brand-50 rounded text-sm"
+                        placeholder="Item or service description"
+                        value={item.description}
+                        onChange={(e) => updateItem(idx, "description", e.target.value)}
+                      />
+                    </td>
+                    <td className="px-2 py-1">
+                      <input
+                        type="number"
+                        step="0.01"
+                        min="0"
+                        className="w-full px-2 py-1.5 border-0 focus:outline-none focus:bg-brand-50 rounded text-sm text-right"
+                        value={item.quantity}
+                        onChange={(e) => updateItem(idx, "quantity", e.target.value)}
+                      />
+                    </td>
+                    <td className="px-2 py-1">
+                      <input
+                        type="number"
+                        step="0.01"
+                        min="0"
+                        className="w-full px-2 py-1.5 border-0 focus:outline-none focus:bg-brand-50 rounded text-sm text-right"
+                        value={item.unitPrice}
+                        onChange={(e) => updateItem(idx, "unitPrice", e.target.value)}
+                      />
+                    </td>
+                    <td className="px-2 py-1">
+                      <div className="relative">
+                        <input
+                          type="number"
+                          step="0.01"
+                          min="0"
+                          max="1"
+                          className="w-full px-2 py-1.5 pr-5 border-0 focus:outline-none focus:bg-brand-50 rounded text-sm text-right"
+                          value={item.taxRate}
+                          onChange={(e) => updateItem(idx, "taxRate", e.target.value)}
+                        />
+                      </div>
+                    </td>
+                    <td className="px-3 py-1.5 text-right font-medium text-sm text-gray-700">
+                      {formatCurrency(line.toFixed(2))}
+                    </td>
+                    <td className="pr-2">
+                      {items.length > 1 && (
+                        <button onClick={() => removeItem(idx)} className="text-gray-300 hover:text-red-500 p-1">
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+          <button
+            onClick={() => setItems((prev) => [...prev, blankItem()])}
+            className="w-full px-5 py-2.5 text-left text-sm text-brand-600 hover:bg-brand-50 border-t flex items-center gap-2"
+          >
+            <Plus className="w-4 h-4" />
+            Add a line
+          </button>
+        </div>
+
+        {/* Notes */}
+        <div className="card space-y-3">
+          <label className="label">Notes / Terms</label>
+          <textarea
+            className="input"
+            rows={3}
+            placeholder="Thanks for your business. Payment due in 30 days."
+            value={notes}
+            onChange={(e) => setNotes(e.target.value)}
+          />
         </div>
 
         {error && (
           <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg text-sm">{error}</div>
         )}
+      </div>
 
-        <div className="flex items-center gap-3 justify-end">
-          <Link href="/invoices/customer" className="btn-secondary">Cancel</Link>
-          <button type="submit" disabled={submitting} className="btn-primary">
-            {submitting && <Loader2 className="w-4 h-4 animate-spin" />}
-            Create Invoice
-          </button>
+      {/* Sticky totals panel */}
+      <aside className="w-80 shrink-0 hidden lg:block">
+        <div className="sticky top-6 space-y-4">
+          <div className="card space-y-3">
+            <h3 className="font-semibold text-gray-800 text-sm uppercase tracking-wide">Summary</h3>
+            <div className="space-y-1.5 text-sm">
+              <div className="flex justify-between">
+                <span className="text-gray-500">Subtotal</span>
+                <span className="font-medium">{formatCurrency(totals.subtotal.toFixed(2))}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-gray-500">Tax</span>
+                <span className="font-medium">{formatCurrency(totals.taxAmount.toFixed(2))}</span>
+              </div>
+              <div className="flex justify-between font-bold text-base border-t pt-2 mt-2">
+                <span>Total</span>
+                <span>{formatCurrency(totals.total.toFixed(2))}</span>
+              </div>
+            </div>
+          </div>
+
+          <div className="card space-y-3">
+            <h3 className="font-semibold text-gray-800 text-sm uppercase tracking-wide">Financing</h3>
+            <div>
+              <label className="label">Down payment ($)</label>
+              <input
+                type="number"
+                step="0.01"
+                min="0"
+                className="input"
+                value={downPayment}
+                onChange={(e) => setDownPayment(e.target.value)}
+              />
+            </div>
+            <div className="flex justify-between text-sm pt-1 border-t">
+              <span className="text-gray-500">Remaining balance</span>
+              <span className="font-bold text-brand-700">{formatCurrency(totals.balance.toFixed(2))}</span>
+            </div>
+          </div>
+
+          <div className="space-y-2">
+            <button
+              onClick={() => save("send")}
+              disabled={saving !== "idle"}
+              className="btn-primary w-full justify-center"
+            >
+              {saving === "send" ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
+              Save & Send
+            </button>
+            <button
+              onClick={() => save("save")}
+              disabled={saving !== "idle"}
+              className="btn-secondary w-full justify-center"
+            >
+              {saving === "save" ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+              Save as draft
+            </button>
+          </div>
         </div>
-      </form>
+      </aside>
+
+      <CustomerCreateModal
+        open={modalOpen}
+        initialName={modalSeedName}
+        onClose={() => setModalOpen(false)}
+        onCreated={(c) => {
+          setCustomers((prev) => [...prev, c as Customer]);
+          setCustomerId(c.id);
+          setCustomerQuery("");
+        }}
+      />
     </div>
   );
 }
