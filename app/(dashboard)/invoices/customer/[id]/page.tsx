@@ -20,6 +20,8 @@ const editSchema = z.object({
   paymentStatus: z.enum(["UNPAID", "PARTIALLY_PAID", "PAID"]),
   paidAmount: z.string(),
   downPayment: z.string().default("0"),
+  employeeId: z.string().default(""),
+  commissionRate: z.string().default("0"),
   notes: z.string().optional(),
   items: z.array(
     z.object({
@@ -46,11 +48,15 @@ interface InvoiceDetail {
   notes: string | null;
   viewToken: string | null;
   sentAt: string | null;
+  employeeId: string | null;
+  commissionRate: string;
   customer: { id: string; name: string; email: string | null; phone: string | null };
   items: { id: string; description: string; quantity: string; unitPrice: string; taxRate: string; lineTotal: string }[];
   payments: { id: string; amount: string; paymentDate: string; notes: string | null }[];
   files: { id: string; originalName: string; mimeType: string }[];
 }
+
+interface EmployeeOpt { id: string; name: string; commissionRate: string }
 
 export default function CustomerInvoiceDetailPage() {
   const { id } = useParams() as { id: string };
@@ -64,6 +70,7 @@ export default function CustomerInvoiceDetailPage() {
   const [sending, setSending] = useState(false);
   const [sendMessage, setSendMessage] = useState<{ kind: "success" | "error"; text: string } | null>(null);
   const [linkCopied, setLinkCopied] = useState(false);
+  const [employees, setEmployees] = useState<EmployeeOpt[]>([]);
 
   const { register, handleSubmit, control, reset, formState: { errors } } = useForm<EditForm>({
     resolver: zodResolver(editSchema),
@@ -81,6 +88,8 @@ export default function CustomerInvoiceDetailPage() {
       paymentStatus: data.paymentStatus,
       paidAmount: data.paidAmount,
       downPayment: data.downPayment ?? "0",
+      employeeId: data.employeeId ?? "",
+      commissionRate: data.commissionRate ?? "0",
       notes: data.notes ?? "",
       items: data.items.map((item: InvoiceDetail["items"][0]) => ({
         description: item.description,
@@ -92,6 +101,15 @@ export default function CustomerInvoiceDetailPage() {
   }, [id, reset, router]);
 
   useEffect(() => { load(); }, [load]);
+
+  useEffect(() => {
+    fetch("/api/employees")
+      .then((r) => (r.ok ? r.json() : []))
+      .then((list: { id: string; name: string; commissionRate: string; active: boolean }[]) =>
+        setEmployees(list.filter((e) => e.active).map((e) => ({ id: e.id, name: e.name, commissionRate: e.commissionRate })))
+      )
+      .catch(() => {});
+  }, []);
 
   async function onSave(data: EditForm) {
     setSaving(true);
@@ -271,6 +289,19 @@ export default function CustomerInvoiceDetailPage() {
                 <label className="label">Down payment ($)</label>
                 <input type="number" step="0.01" min="0" className="input" {...register("downPayment")} />
               </div>
+              <div>
+                <label className="label">Sales rep</label>
+                <select className="input" {...register("employeeId")}>
+                  <option value="">— None —</option>
+                  {employees.map((e) => (
+                    <option key={e.id} value={e.id}>{e.name}</option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="label">Commission rate (decimal)</label>
+                <input type="number" step="0.0001" min="0" max="1" className="input" {...register("commissionRate")} />
+              </div>
             </div>
             <div>
               <label className="label">Notes</label>
@@ -299,6 +330,19 @@ export default function CustomerInvoiceDetailPage() {
                   <span className="text-gray-500">Status</span>
                   <PaymentBadge status={invoice.paymentStatus} />
                 </div>
+                {invoice.employeeId && (
+                  <div className="flex justify-between pt-2 border-t">
+                    <span className="text-gray-500">Sales rep</span>
+                    <span className="font-medium">
+                      {employees.find((e) => e.id === invoice.employeeId)?.name ?? "—"}
+                      {parseFloat(invoice.commissionRate) > 0 && (
+                        <span className="text-green-700 text-xs ml-2">
+                          ({(parseFloat(invoice.commissionRate) * 100).toFixed(1)}% = {formatCurrency((parseFloat(invoice.totalAmount) * parseFloat(invoice.commissionRate)).toFixed(2))})
+                        </span>
+                      )}
+                    </span>
+                  </div>
+                )}
                 {invoice.notes && (
                   <div className="pt-2 border-t">
                     <span className="text-gray-500">Notes: </span>

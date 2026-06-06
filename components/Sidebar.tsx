@@ -10,6 +10,8 @@ import {
   Truck,
   BarChart3,
   BookOpen,
+  UserCog,
+  Trophy,
 } from "lucide-react";
 
 const navItems = [
@@ -18,6 +20,8 @@ const navItems = [
   { href: "/invoices/supplier", label: "Supplier Invoices", icon: ShoppingCart },
   { href: "/customers", label: "Customers", icon: Users },
   { href: "/suppliers", label: "Suppliers", icon: Truck },
+  { href: "/employees", label: "Employees", icon: UserCog },
+  { href: "/performance", label: "Performance", icon: Trophy },
   { href: "/reports", label: "Reports", icon: BarChart3 },
 ];
 

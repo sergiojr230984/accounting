@@ -24,6 +24,13 @@ interface Customer {
   email: string | null;
 }
 
+interface Employee {
+  id: string;
+  name: string;
+  commissionRate: string;
+  active: boolean;
+}
+
 interface LineItem {
   description: string;
   quantity: string;
@@ -48,6 +55,10 @@ export default function NewCustomerInvoicePage() {
   const [customerQuery, setCustomerQuery] = useState("");
   const [customerOpen, setCustomerOpen] = useState(false);
 
+  const [employees, setEmployees] = useState<Employee[]>([]);
+  const [employeeId, setEmployeeId] = useState("");
+  const [commissionRate, setCommissionRate] = useState("0");
+
   const [invoiceNumber, setInvoiceNumber] = useState("");
   const [invoiceDate, setInvoiceDate] = useState(todayISO());
   const [dueDate, setDueDate] = useState(plusDaysISO(30));
@@ -71,6 +82,10 @@ export default function NewCustomerInvoicePage() {
 
   useEffect(() => {
     loadCustomers();
+    fetch("/api/employees")
+      .then((r) => (r.ok ? r.json() : []))
+      .then((list: Employee[]) => setEmployees(list.filter((e) => e.active)))
+      .catch(() => {});
     fetch("/api/invoices/customer?page=1&limit=1")
       .then((r) => r.json())
       .then(({ total }: { total: number }) => {
@@ -103,8 +118,11 @@ export default function NewCustomerInvoicePage() {
       try { return new Decimal(downPayment || "0"); } catch { return new Decimal(0); }
     })();
     const balance = Decimal.max(total.minus(down), 0);
-    return { subtotal, taxAmount, total, downPayment: down, balance };
-  }, [items, downPayment]);
+    const commission = (() => {
+      try { return total.times(new Decimal(commissionRate || "0")); } catch { return new Decimal(0); }
+    })();
+    return { subtotal, taxAmount, total, downPayment: down, balance, commission };
+  }, [items, downPayment, commissionRate]);
 
   function updateItem(idx: number, field: keyof LineItem, value: string) {
     setItems((prev) => {
@@ -174,6 +192,8 @@ export default function NewCustomerInvoicePage() {
           items: real,
           notes,
           downPayment,
+          employeeId: employeeId || null,
+          commissionRate: commissionRate || "0",
           paidAmount: "0",
           paymentStatus: "UNPAID",
         }),
@@ -439,6 +459,50 @@ export default function NewCustomerInvoicePage() {
               <span className="text-gray-500">Remaining balance</span>
               <span className="font-bold text-brand-700">{formatCurrency(totals.balance.toFixed(2))}</span>
             </div>
+          </div>
+
+          <div className="card space-y-3">
+            <h3 className="font-semibold text-gray-800 text-sm uppercase tracking-wide">Sales rep</h3>
+            <div>
+              <label className="label">Employee</label>
+              <select
+                className="input"
+                value={employeeId}
+                onChange={(e) => {
+                  const id = e.target.value;
+                  setEmployeeId(id);
+                  const match = employees.find((emp) => emp.id === id);
+                  if (match) setCommissionRate(match.commissionRate);
+                  if (!id) setCommissionRate("0");
+                }}
+              >
+                <option value="">— None —</option>
+                {employees.map((emp) => (
+                  <option key={emp.id} value={emp.id}>
+                    {emp.name} ({(parseFloat(emp.commissionRate) * 100).toFixed(1)}%)
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className="label">Commission rate (decimal)</label>
+              <input
+                type="number"
+                step="0.0001"
+                min="0"
+                max="1"
+                className="input"
+                value={commissionRate}
+                onChange={(e) => setCommissionRate(e.target.value)}
+                disabled={!employeeId}
+              />
+            </div>
+            {employeeId && (
+              <div className="flex justify-between text-sm pt-1 border-t">
+                <span className="text-gray-500">Commission earned</span>
+                <span className="font-bold text-green-700">{formatCurrency(totals.commission.toFixed(2))}</span>
+              </div>
+            )}
           </div>
 
           <div className="space-y-2">
