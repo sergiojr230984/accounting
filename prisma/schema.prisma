@@ -75,6 +75,7 @@ model CustomerInvoice {
   totalAmount   Decimal               @db.Decimal(15, 2)
   paidAmount    Decimal               @db.Decimal(15, 2) @default(0)
   downPayment   Decimal               @db.Decimal(15, 2) @default(0)
+  creditCardFee Decimal               @db.Decimal(15, 2) @default(0)
   paymentStatus PaymentStatus         @default(UNPAID)
   notes         String?
   viewToken     String?               @unique
@@ -151,6 +152,28 @@ model Payment {
   supplierInvoice   SupplierInvoice? @relation(fields: [supplierInvoiceId], references: [id])
   createdAt         DateTime         @default(now())
   updatedAt         DateTime         @updatedAt
+}
+
+model CompanyProfile {
+  id                 String   @id @default("default")
+  name               String?
+  logo               String?  // base64 data URL
+  address            String?
+  email              String?
+  phone              String?
+  creditCardFeeRate  Decimal  @db.Decimal(5, 4) @default(0)
+  creditCardFeeLabel String   @default("Credit card processing fee")
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+}
+
+model TaxRate {
+  id        String   @id @default(cuid())
+  name      String
+  rate      Decimal  @db.Decimal(5, 4)
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 }
 
 model Employee {

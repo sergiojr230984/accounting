@@ -23,20 +23,29 @@ export default async function PublicInvoicePage({
   const total = Number(invoice.totalAmount);
   const paid = Number(invoice.paidAmount);
   const down = Number(invoice.downPayment);
+  const ccFee = Number(invoice.creditCardFee ?? 0);
   const balance = Math.max(total - paid - down, 0);
+  const profile = await prisma.companyProfile.findUnique({ where: { id: "default" } }).catch(() => null);
 
   return (
     <div className="min-h-screen bg-gray-50 p-6">
       <div className="max-w-3xl mx-auto">
         {/* Brand header */}
         <div className="flex items-center gap-3 mb-6">
-          <div className="w-10 h-10 bg-brand-600 rounded-lg flex items-center justify-center">
-            <BookOpen className="w-5 h-5 text-white" />
-          </div>
-          <div>
-            <p className="font-bold text-gray-900">La Cuevita</p>
-            <p className="text-xs text-gray-500">Accounting</p>
-          </div>
+          {profile?.logo ? (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img src={profile.logo} alt={profile.name ?? "Logo"} className="h-10 w-auto max-w-[160px] object-contain" />
+          ) : (
+            <>
+              <div className="w-10 h-10 bg-brand-600 rounded-lg flex items-center justify-center">
+                <BookOpen className="w-5 h-5 text-white" />
+              </div>
+              <div>
+                <p className="font-bold text-gray-900">{profile?.name ?? "La Cuevita"}</p>
+                <p className="text-xs text-gray-500">Accounting</p>
+              </div>
+            </>
+          )}
         </div>
 
         <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
@@ -98,6 +107,12 @@ export default async function PublicInvoicePage({
                 <span className="text-gray-500">Tax</span>
                 <span>{formatCurrency(invoice.taxAmount.toString())}</span>
               </div>
+              {ccFee > 0 && (
+                <div className="flex justify-between">
+                  <span className="text-gray-500">{profile?.creditCardFeeLabel ?? "Card processing fee"}</span>
+                  <span>{formatCurrency(ccFee.toFixed(2))}</span>
+                </div>
+              )}
               <div className="flex justify-between font-bold text-base border-t pt-2 mt-2">
                 <span>Total</span>
                 <span>{formatCurrency(invoice.totalAmount.toString())}</span>

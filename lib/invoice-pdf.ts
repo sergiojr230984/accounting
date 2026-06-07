@@ -12,6 +12,7 @@ export interface InvoicePDFData {
   totalAmount: string | number;
   paidAmount: string | number;
   downPayment: string | number;
+  creditCardFee?: string | number;
   notes: string | null;
   customer: {
     name: string;
@@ -26,6 +27,14 @@ export interface InvoicePDFData {
     taxRate: string | number;
     lineTotal: string | number;
   }[];
+  company?: {
+    name?: string | null;
+    logo?: string | null;
+    address?: string | null;
+    email?: string | null;
+    phone?: string | null;
+    creditCardFeeLabel?: string | null;
+  } | null;
 }
 
 export function generateInvoicePDF(invoice: InvoicePDFData): jsPDF {
@@ -37,15 +46,36 @@ export function generateInvoicePDF(invoice: InvoicePDFData): jsPDF {
   doc.setFillColor(234, 88, 12); // brand-600 (#ea580c)
   doc.rect(0, 0, pageWidth, 8, "F");
 
-  // Company / brand
+  // Company / brand — logo if uploaded, otherwise text
+  const company = invoice.company ?? null;
+  const companyName = company?.name?.trim() || "La Cuevita";
+  let brandY = 60;
+  if (company?.logo) {
+    try {
+      // Logo data URL like "data:image/png;base64,..."
+      const mime = company.logo.match(/^data:(image\/[a-z+]+);/)?.[1] ?? "image/png";
+      const fmt = mime.includes("png") ? "PNG" : mime.includes("svg") ? "SVG" : "JPEG";
+      doc.addImage(company.logo, fmt, margin, 30, 80, 40, undefined, "FAST");
+      brandY = 86; // push text below logo
+    } catch {
+      // fall through to text
+    }
+  }
   doc.setFont("helvetica", "bold");
-  doc.setFontSize(20);
+  doc.setFontSize(company?.logo ? 12 : 20);
   doc.setTextColor(124, 45, 18); // brand-900
-  doc.text("La Cuevita", margin, 60);
+  doc.text(companyName, margin, brandY);
   doc.setFont("helvetica", "normal");
-  doc.setFontSize(10);
+  doc.setFontSize(9);
   doc.setTextColor(107, 114, 128);
-  doc.text("Accounting", margin, 76);
+  let metaCursor = brandY + 14;
+  if (company?.address) {
+    const lines = doc.splitTextToSize(company.address, 220);
+    doc.text(lines, margin, metaCursor);
+    metaCursor += lines.length * 11;
+  }
+  if (company?.email) { doc.text(company.email, margin, metaCursor); metaCursor += 11; }
+  if (company?.phone) { doc.text(company.phone, margin, metaCursor); }
 
   // Invoice title (right side)
   doc.setFont("helvetica", "bold");
@@ -146,6 +176,15 @@ export function generateInvoicePDF(invoice: InvoicePDFData): jsPDF {
   doc.setTextColor(31, 41, 55);
   doc.text(formatCurrency(String(invoice.taxAmount)), valueX, totalsY, { align: "right" });
   totalsY += 16;
+
+  const ccFee = Number(invoice.creditCardFee ?? 0);
+  if (ccFee > 0) {
+    doc.setTextColor(107, 114, 128);
+    doc.text(company?.creditCardFeeLabel ?? "Card processing fee", labelX, totalsY);
+    doc.setTextColor(31, 41, 55);
+    doc.text(formatCurrency(ccFee.toFixed(2)), valueX, totalsY, { align: "right" });
+    totalsY += 16;
+  }
 
   // Separator
   doc.setDrawColor(229, 231, 235);

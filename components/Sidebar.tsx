@@ -12,6 +12,7 @@ import {
   BookOpen,
   Plus,
   ChevronDown,
+  Settings,
 } from "lucide-react";
 
 type LeafItem = { href: string; label: string; icon?: React.ComponentType<{ className?: string }> };
@@ -45,6 +46,7 @@ const navItems: NavItem[] = [
     ],
   },
   { href: "/reports", label: "Reports", icon: BarChart3 },
+  { href: "/settings", label: "Settings", icon: Settings },
 ];
 
 function isLeaf(item: NavItem): item is LeafItem {

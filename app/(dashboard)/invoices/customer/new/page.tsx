@@ -67,6 +67,10 @@ export default function NewCustomerInvoicePage() {
   const [downPayment, setDownPayment] = useState("0");
   const [notes, setNotes] = useState("");
   const [items, setItems] = useState<LineItem[]>([blankItem()]);
+  const [addCreditCardFee, setAddCreditCardFee] = useState(false);
+
+  const [taxRates, setTaxRates] = useState<{ id: string; name: string; rate: string; active: boolean }[]>([]);
+  const [ccFeeRate, setCcFeeRate] = useState("0");
 
   const [modalOpen, setModalOpen] = useState(false);
   const [modalSeedName, setModalSeedName] = useState("");
@@ -87,6 +91,18 @@ export default function NewCustomerInvoicePage() {
     fetch("/api/employees")
       .then((r) => (r.ok ? r.json() : []))
       .then((list: Employee[]) => setEmployees(list.filter((e) => e.active)))
+      .catch(() => {});
+    fetch("/api/settings/taxes")
+      .then((r) => (r.ok ? r.json() : []))
+      .then((list: { id: string; name: string; rate: string; active: boolean }[]) =>
+        setTaxRates(list.filter((t) => t.active))
+      )
+      .catch(() => {});
+    fetch("/api/settings")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((p: { creditCardFeeRate: string } | null) => {
+        if (p) setCcFeeRate(p.creditCardFeeRate);
+      })
       .catch(() => {});
     fetch("/api/invoices/customer?page=1&limit=1")
       .then((r) => r.json())
@@ -115,7 +131,15 @@ export default function NewCustomerInvoicePage() {
         // skip invalid rows
       }
     }
-    const total = subtotal.plus(taxAmount);
+    let creditCardFee = new Decimal(0);
+    if (addCreditCardFee) {
+      try {
+        creditCardFee = subtotal.plus(taxAmount).times(new Decimal(ccFeeRate || "0"));
+      } catch {
+        creditCardFee = new Decimal(0);
+      }
+    }
+    const total = subtotal.plus(taxAmount).plus(creditCardFee);
     const down = (() => {
       try { return new Decimal(downPayment || "0"); } catch { return new Decimal(0); }
     })();
@@ -123,8 +147,8 @@ export default function NewCustomerInvoicePage() {
     const commission = (() => {
       try { return total.times(new Decimal(commissionRate || "0")); } catch { return new Decimal(0); }
     })();
-    return { subtotal, taxAmount, total, downPayment: down, balance, commission };
-  }, [items, downPayment, commissionRate]);
+    return { subtotal, taxAmount, creditCardFee, total, downPayment: down, balance, commission };
+  }, [items, downPayment, commissionRate, addCreditCardFee, ccFeeRate]);
 
   function updateItem(idx: number, field: keyof LineItem, value: string) {
     setItems((prev) => {
@@ -198,6 +222,7 @@ export default function NewCustomerInvoicePage() {
           commissionRate: commissionRate || "0",
           paidAmount: "0",
           paymentStatus: "UNPAID",
+          addCreditCardFee,
         }),
       });
       if (!res.ok) {
@@ -217,6 +242,7 @@ export default function NewCustomerInvoicePage() {
       if (action === "print") {
         const customer = customers.find((c) => c.id === customerId);
         if (customer) {
+          const company = await fetch("/api/settings").then((r) => (r.ok ? r.json() : null)).catch(() => null);
           const doc = generateInvoicePDF({
             invoiceNumber,
             invoiceDate,
@@ -224,6 +250,7 @@ export default function NewCustomerInvoicePage() {
             subtotal: totals.subtotal.toFixed(2),
             taxAmount: totals.taxAmount.toFixed(2),
             totalAmount: totals.total.toFixed(2),
+            creditCardFee: totals.creditCardFee.toFixed(2),
             paidAmount: "0",
             downPayment: downPayment || "0",
             notes,
@@ -235,6 +262,7 @@ export default function NewCustomerInvoicePage() {
               taxRate: i.taxRate,
               lineTotal: new Decimal(i.quantity || "0").times(i.unitPrice || "0").toFixed(2),
             })),
+            company,
           });
           const url = doc.output("bloburl");
           window.open(url, "_blank");
@@ -413,17 +441,30 @@ export default function NewCustomerInvoicePage() {
                       />
                     </td>
                     <td className="px-2 py-1">
-                      <div className="relative">
+                      {taxRates.length > 0 ? (
+                        <select
+                          className="w-full px-2 py-1.5 border-0 focus:outline-none focus:bg-brand-50 rounded text-sm text-right bg-transparent"
+                          value={item.taxRate}
+                          onChange={(e) => updateItem(idx, "taxRate", e.target.value)}
+                        >
+                          <option value="0">No tax</option>
+                          {taxRates.map((t) => (
+                            <option key={t.id} value={t.rate}>
+                              {t.name} ({(parseFloat(t.rate) * 100).toFixed(2)}%)
+                            </option>
+                          ))}
+                        </select>
+                      ) : (
                         <input
                           type="number"
-                          step="0.01"
+                          step="0.0001"
                           min="0"
                           max="1"
-                          className="w-full px-2 py-1.5 pr-5 border-0 focus:outline-none focus:bg-brand-50 rounded text-sm text-right"
+                          className="w-full px-2 py-1.5 border-0 focus:outline-none focus:bg-brand-50 rounded text-sm text-right"
                           value={item.taxRate}
                           onChange={(e) => updateItem(idx, "taxRate", e.target.value)}
                         />
-                      </div>
+                      )}
                     </td>
                     <td className="px-3 py-1.5 text-right font-medium text-sm text-gray-700">
                       {formatCurrency(line.toFixed(2))}
@@ -480,10 +521,31 @@ export default function NewCustomerInvoicePage() {
                 <span className="text-gray-500">Tax</span>
                 <span className="font-medium">{formatCurrency(totals.taxAmount.toFixed(2))}</span>
               </div>
+              {parseFloat(ccFeeRate) > 0 && (
+                <label className="flex items-center justify-between gap-2 mt-1 cursor-pointer">
+                  <span className="flex items-center gap-2 text-gray-700">
+                    <input
+                      type="checkbox"
+                      className="w-4 h-4 rounded border-gray-300"
+                      checked={addCreditCardFee}
+                      onChange={(e) => setAddCreditCardFee(e.target.checked)}
+                    />
+                    Add {(parseFloat(ccFeeRate) * 100).toFixed(2)}% card fee
+                  </span>
+                  <span className={`font-medium ${addCreditCardFee ? "text-gray-900" : "text-gray-300"}`}>
+                    {formatCurrency(totals.creditCardFee.toFixed(2))}
+                  </span>
+                </label>
+              )}
               <div className="flex justify-between font-bold text-base border-t pt-2 mt-2">
                 <span>Total</span>
                 <span>{formatCurrency(totals.total.toFixed(2))}</span>
               </div>
+              {parseFloat(ccFeeRate) === 0 && (
+                <p className="text-[11px] text-gray-400 pt-1">
+                  Set a card processing fee in <a href="/settings" className="text-brand-600 hover:underline">Settings</a> to offer it on invoices.
+                </p>
+              )}
             </div>
           </div>
 

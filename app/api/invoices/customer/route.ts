@@ -23,6 +23,7 @@ const invoiceSchema = z.object({
   downPayment: z.string().regex(/^\d+(\.\d+)?$/).default("0"),
   employeeId: z.string().optional().nullable(),
   commissionRate: z.string().regex(/^\d+(\.\d+)?$/).default("0"),
+  addCreditCardFee: z.boolean().default(false),
 });
 
 export async function GET(request: Request) {
@@ -87,6 +88,7 @@ export async function POST(request: Request) {
     downPayment,
     employeeId,
     commissionRate,
+    addCreditCardFee,
   } = parsed.data;
 
   // Duplicate check
@@ -114,7 +116,16 @@ export async function POST(request: Request) {
     return { ...item, lineTotal: lineTotal.toFixed(2) };
   });
 
-  const totalAmount = subtotal.plus(taxAmount);
+  // Optional credit-card processing fee from company profile
+  let creditCardFee = new Decimal(0);
+  if (addCreditCardFee) {
+    const profile = await prisma.companyProfile.findUnique({ where: { id: "default" } });
+    if (profile && Number(profile.creditCardFeeRate) > 0) {
+      creditCardFee = subtotal.plus(taxAmount).times(profile.creditCardFeeRate.toString());
+    }
+  }
+
+  const totalAmount = subtotal.plus(taxAmount).plus(creditCardFee);
 
   const invoice = await prisma.customerInvoice.create({
     data: {
@@ -125,6 +136,7 @@ export async function POST(request: Request) {
       subtotal: subtotal.toFixed(2),
       taxAmount: taxAmount.toFixed(2),
       totalAmount: totalAmount.toFixed(2),
+      creditCardFee: creditCardFee.toFixed(2),
       paidAmount: paidAmount ?? "0",
       paymentStatus: paymentStatus ?? "UNPAID",
       downPayment: downPayment ?? "0",

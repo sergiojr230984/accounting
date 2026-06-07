@@ -121,6 +121,28 @@ const SCHEMA_STATEMENTS: string[] = [
   `ALTER TABLE "Supplier" ADD COLUMN IF NOT EXISTS "bankAccountNumber" TEXT;`,
   `ALTER TABLE "Supplier" ADD COLUMN IF NOT EXISTS "bankRouting" TEXT;`,
   `ALTER TABLE "Supplier" ADD COLUMN IF NOT EXISTS "paymentInstructions" TEXT;`,
+  `CREATE TABLE IF NOT EXISTS "CompanyProfile" (
+    "id" TEXT NOT NULL PRIMARY KEY DEFAULT 'default',
+    "name" TEXT,
+    "logo" TEXT,
+    "address" TEXT,
+    "email" TEXT,
+    "phone" TEXT,
+    "creditCardFeeRate" DECIMAL(5,4) NOT NULL DEFAULT 0,
+    "creditCardFeeLabel" TEXT NOT NULL DEFAULT 'Credit card processing fee',
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP
+  );`,
+  `INSERT INTO "CompanyProfile" ("id") VALUES ('default') ON CONFLICT DO NOTHING;`,
+  `CREATE TABLE IF NOT EXISTS "TaxRate" (
+    "id" TEXT NOT NULL PRIMARY KEY,
+    "name" TEXT NOT NULL,
+    "rate" DECIMAL(5,4) NOT NULL,
+    "active" BOOLEAN NOT NULL DEFAULT true,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP
+  );`,
+  `ALTER TABLE "CustomerInvoice" ADD COLUMN IF NOT EXISTS "creditCardFee" DECIMAL(15,2) NOT NULL DEFAULT 0;`,
   `ALTER TABLE "CustomerInvoice" ADD COLUMN IF NOT EXISTS "downPayment" DECIMAL(15,2) NOT NULL DEFAULT 0;`,
   `ALTER TABLE "CustomerInvoice" ADD COLUMN IF NOT EXISTS "viewToken" TEXT;`,
   `ALTER TABLE "CustomerInvoice" ADD COLUMN IF NOT EXISTS "sentAt" TIMESTAMP(3);`,

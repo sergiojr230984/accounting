@@ -45,6 +45,7 @@ interface InvoiceDetail {
   totalAmount: string;
   paidAmount: string;
   downPayment: string;
+  creditCardFee: string;
   paymentStatus: "UNPAID" | "PARTIALLY_PAID" | "PAID";
   notes: string | null;
   viewToken: string | null;
@@ -170,15 +171,27 @@ export default function CustomerInvoiceDetailPage() {
     setTimeout(() => setLinkCopied(false), 2000);
   }
 
-  function downloadPDF() {
+  async function fetchCompany() {
+    try {
+      const res = await fetch("/api/settings");
+      if (res.ok) return await res.json();
+    } catch {
+      // ignore
+    }
+    return null;
+  }
+
+  async function downloadPDF() {
     if (!invoice) return;
-    const doc = generateInvoicePDF(invoice);
+    const company = await fetchCompany();
+    const doc = generateInvoicePDF({ ...invoice, company });
     doc.save(`${invoice.invoiceNumber}.pdf`);
   }
 
-  function printPDF() {
+  async function printPDF() {
     if (!invoice) return;
-    const doc = generateInvoicePDF(invoice);
+    const company = await fetchCompany();
+    const doc = generateInvoicePDF({ ...invoice, company });
     const url = doc.output("bloburl");
     window.open(url, "_blank");
   }
