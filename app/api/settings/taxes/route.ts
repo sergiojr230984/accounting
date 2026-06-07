@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
-import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { initializeDatabase } from "@/lib/init-db";
+import { requireAuth, requireRole } from "@/lib/api";
 import { z } from "zod";
 
 const createSchema = z.object({
@@ -11,20 +11,22 @@ const createSchema = z.object({
 });
 
 export async function GET() {
-  const session = await auth();
-  if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  const guard = await requireAuth();
+  if (guard instanceof NextResponse) return guard;
   await initializeDatabase();
   try {
     const taxes = await prisma.taxRate.findMany({ orderBy: [{ active: "desc" }, { name: "asc" }] });
-    return NextResponse.json(taxes);
+    return NextResponse.json(taxes, {
+      headers: { "Cache-Control": "private, max-age=30, stale-while-revalidate=60" },
+    });
   } catch (err) {
     return NextResponse.json({ error: (err as Error).message }, { status: 500 });
   }
 }
 
 export async function POST(request: Request) {
-  const session = await auth();
-  if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  const guard = await requireRole("ADMIN");
+  if (guard instanceof NextResponse) return guard;
 
   let body: unknown;
   try { body = await request.json(); } catch { return NextResponse.json({ error: "Invalid JSON" }, { status: 400 }); }

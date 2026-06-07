@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
+import { requireRole } from "@/lib/api";
 import { z } from "zod";
 import Decimal from "decimal.js";
 
@@ -123,8 +124,8 @@ export async function DELETE(
   _request: Request,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  const session = await auth();
-  if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  const guard = await requireRole("ADMIN");
+  if (guard instanceof NextResponse) return guard;
 
   const { id } = await params;
   await prisma.customerInvoice.delete({ where: { id } });

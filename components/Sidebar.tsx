@@ -154,7 +154,9 @@ export default function Sidebar() {
       </nav>
 
       <div className="px-5 py-3 border-t border-gray-100">
-        <p className="text-gray-400 text-[10px] text-center">La Cuevita Accounting · v1.0</p>
+        <p className="text-gray-400 text-[10px] text-center">
+          La Cuevita Accounting · v{process.env.NEXT_PUBLIC_APP_VERSION ?? "1.1.0"}
+        </p>
       </div>
     </aside>
   );

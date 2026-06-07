@@ -1,9 +1,9 @@
 import { NextResponse } from "next/server";
 import { randomBytes } from "crypto";
-import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { sendEmail } from "@/lib/email";
 import { formatCurrency } from "@/lib/money";
+import { requireAuth, checkRateLimit } from "@/lib/api";
 
 function genToken() {
   return randomBytes(18).toString("base64url");
@@ -20,8 +20,11 @@ export async function POST(
   request: Request,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  const session = await auth();
-  if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  const guard = await requireAuth();
+  if (guard instanceof NextResponse) return guard;
+  // Anti-spam: cap emailing to 30 sends per minute per IP.
+  const limited = checkRateLimit(request, "invoice-send", { windowMs: 60_000, max: 30 });
+  if (limited) return limited;
 
   const { id } = await params;
 
