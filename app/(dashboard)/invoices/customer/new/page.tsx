@@ -252,11 +252,29 @@ export default function NewCustomerInvoicePage() {
     <div className="flex gap-6 max-w-7xl mx-auto">
       {/* Main column */}
       <div className="flex-1 min-w-0 space-y-5">
-        <div className="flex items-center gap-3">
-          <Link href="/invoices/customer" className="btn-secondary p-2"><ArrowLeft className="w-4 h-4" /></Link>
-          <div>
-            <h1 className="text-2xl font-bold text-gray-900">New Invoice</h1>
-            <p className="text-sm text-gray-500">Bill a customer — fill in the details below</p>
+        <div className="flex items-center justify-between gap-3 flex-wrap">
+          <div className="flex items-center gap-3">
+            <Link href="/invoices/customer" className="btn-secondary p-2"><ArrowLeft className="w-4 h-4" /></Link>
+            <h1 className="text-3xl font-bold text-gray-900">New invoice</h1>
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => save("print")}
+              disabled={saving !== "idle"}
+              className="btn-secondary"
+              title="Preview as PDF in a new tab"
+            >
+              {saving === "print" ? <Loader2 className="w-4 h-4 animate-spin" /> : <Printer className="w-4 h-4" />}
+              Preview
+            </button>
+            <button
+              onClick={() => save("save")}
+              disabled={saving !== "idle"}
+              className="btn-primary"
+            >
+              {saving === "save" ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+              Save and continue
+            </button>
           </div>
         </div>
 
