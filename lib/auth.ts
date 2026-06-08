@@ -40,9 +40,14 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
           where: { email: parsed.data.email },
         });
         if (!user) return null;
+        if (user.active === false) return null; // deactivated account
 
         const valid = await bcrypt.compare(parsed.data.password, user.password);
         if (!valid) return null;
+
+        await prisma.user
+          .update({ where: { id: user.id }, data: { lastLogin: new Date() } })
+          .catch(() => undefined);
 
         return { id: user.id, name: user.name, email: user.email, role: user.role };
       },

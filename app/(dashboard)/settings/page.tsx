@@ -14,9 +14,13 @@ import {
   Check,
   X,
   Upload,
+  UserCircle,
+  KeyRound,
+  Power,
 } from "lucide-react";
+import { format } from "date-fns";
 
-type Section = "company" | "taxes" | "fees";
+type Section = "users" | "company" | "taxes" | "fees";
 
 interface CompanyProfile {
   id: string;
@@ -37,7 +41,7 @@ interface TaxRate {
 }
 
 export default function SettingsPage() {
-  const [section, setSection] = useState<Section>("company");
+  const [section, setSection] = useState<Section>("users");
 
   return (
     <div className="max-w-7xl">
@@ -45,7 +49,20 @@ export default function SettingsPage() {
 
       <div className="grid grid-cols-12 gap-6">
         {/* Sub-nav */}
-        <nav className="col-span-12 md:col-span-3 space-y-1">
+        <nav className="col-span-12 md:col-span-3 space-y-3">
+          <div>
+            <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide px-3 py-2">User management</p>
+            <button
+              onClick={() => setSection("users")}
+              className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors text-left ${
+                section === "users" ? "bg-brand-50 text-brand-700" : "text-gray-700 hover:bg-gray-50"
+              }`}
+            >
+              <UserCircle className="w-4 h-4 flex-shrink-0" />
+              Users
+            </button>
+          </div>
+          <div>
           <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide px-3 py-2">Sales & Payments</p>
           {[
             { key: "company" as const, label: "Company profile & logo", icon: Building2 },
@@ -63,10 +80,12 @@ export default function SettingsPage() {
               {label}
             </button>
           ))}
+          </div>
         </nav>
 
         {/* Main content */}
         <div className="col-span-12 md:col-span-9">
+          {section === "users" && <UsersSection />}
           {section === "company" && <CompanySection />}
           {section === "taxes" && <TaxesSection />}
           {section === "fees" && <FeesSection />}
@@ -491,5 +510,379 @@ function FeesSection() {
         </button>
       </div>
     </div>
+  );
+}
+
+interface UserRow {
+  id: string;
+  name: string;
+  email: string;
+  role: "ADMIN" | "MANAGER";
+  active: boolean;
+  lastLogin: string | null;
+  createdAt: string;
+}
+
+function UsersSection() {
+  const [users, setUsers] = useState<UserRow[]>([]);
+  const [me, setMe] = useState<{ id: string | null; role: string | null } | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [showCreate, setShowCreate] = useState(false);
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState<string | null>(null);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [showPwId, setShowPwId] = useState<string | null>(null);
+
+  async function load() {
+    setLoading(true);
+    try {
+      const [usersRes, meRes] = await Promise.all([
+        fetch("/api/users"),
+        fetch("/api/me"),
+      ]);
+      if (usersRes.ok) setUsers(await usersRes.json());
+      if (meRes.ok) {
+        const meData = await meRes.json();
+        setMe({ id: meData.id ?? null, role: meData.role ?? null });
+      }
+    } finally {
+      setLoading(false);
+    }
+  }
+  useEffect(() => { load(); }, []);
+
+  async function updateUser(id: string, patch: Partial<{ name: string; email: string; role: "ADMIN" | "MANAGER"; active: boolean; password: string }>) {
+    setBusy(id); setError("");
+    const res = await fetch(`/api/users/${id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(patch),
+    });
+    if (!res.ok) {
+      const d = await res.json().catch(() => ({}));
+      setError(d.error?.formErrors?.[0] ?? d.error ?? "Update failed");
+    } else {
+      await load();
+      setEditingId(null);
+      setShowPwId(null);
+    }
+    setBusy(null);
+  }
+
+  async function deactivate(id: string) {
+    if (!confirm("Deactivate this user? They won't be able to log in but their history stays.")) return;
+    setBusy(id); setError("");
+    const res = await fetch(`/api/users/${id}`, { method: "DELETE" });
+    if (!res.ok) {
+      const d = await res.json().catch(() => ({}));
+      setError(d.error ?? "Delete failed");
+    } else {
+      await load();
+    }
+    setBusy(null);
+  }
+
+  return (
+    <div className="space-y-5">
+      <div className="card space-y-4">
+        <div className="flex items-start justify-between flex-wrap gap-3">
+          <div>
+            <h2 className="text-lg font-bold text-gray-900">Users</h2>
+            <p className="text-sm text-gray-500 mt-1">
+              Each person who logs in needs their own account. Admins manage settings and the team; managers enter invoices and customers.
+            </p>
+          </div>
+          {!showCreate && (
+            <button onClick={() => { setShowCreate(true); setError(""); }} className="btn-primary">
+              <Plus className="w-4 h-4" />
+              Invite user
+            </button>
+          )}
+        </div>
+
+        {showCreate && (
+          <UserCreateForm
+            onCancel={() => { setShowCreate(false); setError(""); }}
+            onCreated={() => { setShowCreate(false); load(); }}
+            onError={setError}
+          />
+        )}
+
+        {error && (
+          <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg text-sm">{error}</div>
+        )}
+
+        <div className="border border-gray-100 rounded-xl overflow-hidden">
+          <table className="w-full text-sm">
+            <thead className="bg-gray-50 border-b border-gray-100">
+              <tr>
+                <th className="text-left px-4 py-2.5 text-xs font-semibold text-gray-600 uppercase">Name</th>
+                <th className="text-left px-4 py-2.5 text-xs font-semibold text-gray-600 uppercase">Email</th>
+                <th className="text-center px-4 py-2.5 text-xs font-semibold text-gray-600 uppercase">Role</th>
+                <th className="text-left px-4 py-2.5 text-xs font-semibold text-gray-600 uppercase">Last login</th>
+                <th className="text-center px-4 py-2.5 text-xs font-semibold text-gray-600 uppercase">Status</th>
+                <th className="px-4 py-2.5" />
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-gray-50">
+              {loading ? (
+                <tr><td colSpan={6} className="px-4 py-6 text-center text-gray-400"><Loader2 className="w-4 h-4 animate-spin inline" /></td></tr>
+              ) : users.length === 0 ? (
+                <tr><td colSpan={6} className="px-4 py-8 text-center text-gray-400">No users yet — invite your first one above.</td></tr>
+              ) : (
+                users.map((u) => {
+                  const isSelf = me?.id === u.id;
+                  const editing = editingId === u.id;
+                  return (
+                    <UserRowDisplay
+                      key={u.id}
+                      user={u}
+                      isSelf={isSelf}
+                      editing={editing}
+                      busy={busy === u.id}
+                      showingPw={showPwId === u.id}
+                      onStartEdit={() => setEditingId(u.id)}
+                      onCancelEdit={() => setEditingId(null)}
+                      onPatch={(patch) => updateUser(u.id, patch)}
+                      onTogglePwForm={() => setShowPwId((cur) => (cur === u.id ? null : u.id))}
+                      onDeactivate={() => deactivate(u.id)}
+                    />
+                  );
+                })
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function UserCreateForm({
+  onCancel,
+  onCreated,
+  onError,
+}: {
+  onCancel: () => void;
+  onCreated: () => void;
+  onError: (msg: string) => void;
+}) {
+  const [name, setName] = useState("");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [role, setRole] = useState<"ADMIN" | "MANAGER">("MANAGER");
+  const [saving, setSaving] = useState(false);
+
+  function generatePw() {
+    const alpha = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789";
+    let out = "";
+    const arr = new Uint32Array(14);
+    crypto.getRandomValues(arr);
+    for (const n of arr) out += alpha[n % alpha.length];
+    setPassword(out);
+  }
+
+  async function submit() {
+    onError("");
+    if (!name.trim() || !email.trim() || !password) {
+      onError("Name, email, and password are required.");
+      return;
+    }
+    if (password.length < 8) {
+      onError("Password must be at least 8 characters.");
+      return;
+    }
+    setSaving(true);
+    const res = await fetch("/api/users", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name, email, password, role }),
+    });
+    if (!res.ok) {
+      const d = await res.json().catch(() => ({}));
+      onError(d.error?.formErrors?.[0] ?? d.error ?? "Create failed");
+    } else {
+      onCreated();
+    }
+    setSaving(false);
+  }
+
+  return (
+    <div className="bg-brand-50 border border-brand-100 rounded-xl p-4 space-y-3">
+      <h3 className="font-semibold text-gray-800 text-sm">Invite a new user</h3>
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        <div>
+          <label className="label">Full name</label>
+          <input className="input" placeholder="Maria Lopez" value={name} onChange={(e) => setName(e.target.value)} />
+        </div>
+        <div>
+          <label className="label">Email (used to sign in)</label>
+          <input className="input" type="email" placeholder="maria@lacuevita.com" value={email} onChange={(e) => setEmail(e.target.value)} />
+        </div>
+        <div>
+          <label className="label">Initial password</label>
+          <div className="flex gap-2">
+            <input className="input flex-1" type="text" placeholder="At least 8 characters" value={password} onChange={(e) => setPassword(e.target.value)} />
+            <button type="button" onClick={generatePw} className="btn-secondary text-xs whitespace-nowrap">Generate</button>
+          </div>
+          <p className="text-xs text-gray-500 mt-1">Share securely. They can change it after their first login.</p>
+        </div>
+        <div>
+          <label className="label">Role</label>
+          <select className="input" value={role} onChange={(e) => setRole(e.target.value as "ADMIN" | "MANAGER")}>
+            <option value="MANAGER">Manager — invoices, customers, suppliers</option>
+            <option value="ADMIN">Admin — full access including settings</option>
+          </select>
+        </div>
+      </div>
+      <div className="flex items-center justify-end gap-2 pt-2 border-t border-brand-100">
+        <button onClick={onCancel} className="btn-secondary">
+          <X className="w-4 h-4" />Cancel
+        </button>
+        <button onClick={submit} disabled={saving} className="btn-primary">
+          {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Check className="w-4 h-4" />}
+          Create user
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function UserRowDisplay({
+  user,
+  isSelf,
+  editing,
+  busy,
+  showingPw,
+  onStartEdit,
+  onCancelEdit,
+  onPatch,
+  onTogglePwForm,
+  onDeactivate,
+}: {
+  user: UserRow;
+  isSelf: boolean;
+  editing: boolean;
+  busy: boolean;
+  showingPw: boolean;
+  onStartEdit: () => void;
+  onCancelEdit: () => void;
+  onPatch: (patch: Partial<{ name: string; email: string; role: "ADMIN" | "MANAGER"; active: boolean; password: string }>) => void;
+  onTogglePwForm: () => void;
+  onDeactivate: () => void;
+}) {
+  const [name, setName] = useState(user.name);
+  const [email, setEmail] = useState(user.email);
+  const [role, setRole] = useState<"ADMIN" | "MANAGER">(user.role);
+  const [newPassword, setNewPassword] = useState("");
+
+  useEffect(() => { setName(user.name); setEmail(user.email); setRole(user.role); }, [user]);
+
+  if (editing) {
+    return (
+      <tr className="bg-brand-50/40">
+        <td className="px-4 py-2"><input className="input" value={name} onChange={(e) => setName(e.target.value)} /></td>
+        <td className="px-4 py-2"><input className="input" type="email" value={email} onChange={(e) => setEmail(e.target.value)} /></td>
+        <td className="px-4 py-2 text-center">
+          <select className="input w-28" value={role} onChange={(e) => setRole(e.target.value as "ADMIN" | "MANAGER")} disabled={isSelf}>
+            <option value="ADMIN">Admin</option>
+            <option value="MANAGER">Manager</option>
+          </select>
+        </td>
+        <td className="px-4 py-2 text-gray-400">—</td>
+        <td className="px-4 py-2" />
+        <td className="px-4 py-2 text-right whitespace-nowrap">
+          <button
+            onClick={() => onPatch({ name, email, role })}
+            disabled={busy}
+            className="text-brand-700 hover:text-brand-800 mr-3"
+            title="Save"
+          >
+            {busy ? <Loader2 className="w-4 h-4 animate-spin" /> : <Check className="w-4 h-4" />}
+          </button>
+          <button onClick={onCancelEdit} className="text-gray-400 hover:text-gray-600"><X className="w-4 h-4" /></button>
+        </td>
+      </tr>
+    );
+  }
+
+  return (
+    <>
+      <tr className="hover:bg-gray-50">
+        <td className="px-4 py-3 font-medium text-gray-900">
+          {user.name}
+          {isSelf && <span className="ml-2 text-[10px] uppercase font-bold text-brand-700 bg-brand-50 px-1.5 py-0.5 rounded">you</span>}
+        </td>
+        <td className="px-4 py-3 text-gray-700">{user.email}</td>
+        <td className="px-4 py-3 text-center">
+          <span className={`inline-flex px-2 py-0.5 text-xs font-medium rounded-full ${
+            user.role === "ADMIN" ? "bg-purple-100 text-purple-800" : "bg-blue-100 text-blue-800"
+          }`}>
+            {user.role}
+          </span>
+        </td>
+        <td className="px-4 py-3 text-gray-500 text-xs">
+          {user.lastLogin ? format(new Date(user.lastLogin), "MMM d, yyyy h:mm a") : "Never"}
+        </td>
+        <td className="px-4 py-3 text-center">
+          {user.active ? (
+            <span className="text-xs font-medium text-green-700 bg-green-100 px-2 py-0.5 rounded-full">Active</span>
+          ) : (
+            <span className="text-xs font-medium text-gray-600 bg-gray-100 px-2 py-0.5 rounded-full">Inactive</span>
+          )}
+        </td>
+        <td className="px-4 py-3 text-right whitespace-nowrap">
+          <button onClick={onStartEdit} title="Edit name/email/role" className="text-gray-400 hover:text-brand-600 mr-2"><Pencil className="w-4 h-4" /></button>
+          <button onClick={onTogglePwForm} title="Reset password" className="text-gray-400 hover:text-brand-600 mr-2"><KeyRound className="w-4 h-4" /></button>
+          {user.active ? (
+            <button
+              onClick={onDeactivate}
+              disabled={busy || isSelf}
+              title={isSelf ? "Can't deactivate yourself" : "Deactivate"}
+              className="text-gray-400 hover:text-red-600 disabled:opacity-30 disabled:hover:text-gray-400"
+            >
+              {busy ? <Loader2 className="w-4 h-4 animate-spin" /> : <Power className="w-4 h-4" />}
+            </button>
+          ) : (
+            <button
+              onClick={() => onPatch({ active: true })}
+              disabled={busy}
+              title="Reactivate"
+              className="text-gray-400 hover:text-green-600"
+            >
+              {busy ? <Loader2 className="w-4 h-4 animate-spin" /> : <Power className="w-4 h-4" />}
+            </button>
+          )}
+        </td>
+      </tr>
+      {showingPw && (
+        <tr className="bg-gray-50">
+          <td colSpan={6} className="px-4 py-3">
+            <div className="flex items-end gap-2 flex-wrap">
+              <div className="flex-1 min-w-48">
+                <label className="label">Reset password for {user.email}</label>
+                <input
+                  className="input"
+                  type="text"
+                  placeholder="Min 8 characters"
+                  value={newPassword}
+                  onChange={(e) => setNewPassword(e.target.value)}
+                />
+              </div>
+              <button onClick={onTogglePwForm} className="btn-secondary"><X className="w-4 h-4" />Cancel</button>
+              <button
+                onClick={() => { onPatch({ password: newPassword }); setNewPassword(""); }}
+                disabled={busy || newPassword.length < 8}
+                className="btn-primary"
+              >
+                {busy ? <Loader2 className="w-4 h-4 animate-spin" /> : <Check className="w-4 h-4" />}
+                Set password
+              </button>
+            </div>
+            <p className="text-xs text-gray-500 mt-2">After resetting, share the new password with the user securely.</p>
+          </td>
+        </tr>
+      )}
+    </>
   );
 }

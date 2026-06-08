@@ -121,6 +121,8 @@ const SCHEMA_STATEMENTS: string[] = [
   `ALTER TABLE "Supplier" ADD COLUMN IF NOT EXISTS "bankAccountNumber" TEXT;`,
   `ALTER TABLE "Supplier" ADD COLUMN IF NOT EXISTS "bankRouting" TEXT;`,
   `ALTER TABLE "Supplier" ADD COLUMN IF NOT EXISTS "paymentInstructions" TEXT;`,
+  `ALTER TABLE "User" ADD COLUMN IF NOT EXISTS "active" BOOLEAN NOT NULL DEFAULT true;`,
+  `ALTER TABLE "User" ADD COLUMN IF NOT EXISTS "lastLogin" TIMESTAMP(3);`,
   `CREATE TABLE IF NOT EXISTS "CompanyProfile" (
     "id" TEXT NOT NULL PRIMARY KEY DEFAULT 'default',
     "name" TEXT,
