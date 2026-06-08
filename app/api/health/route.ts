@@ -22,11 +22,32 @@ export async function GET() {
   } catch {
     dbOk = false;
   }
+  const integrations = {
+    sentryServer: Boolean(process.env.SENTRY_DSN),
+    sentryBrowser: Boolean(process.env.NEXT_PUBLIC_SENTRY_DSN),
+    email: Boolean(process.env.RESEND_API_KEY),
+    aiExtraction: Boolean(process.env.ANTHROPIC_API_KEY),
+    appUrl: Boolean(process.env.APP_URL),
+  };
+
+  // Identify which DB role is being used so you can verify the least-privilege
+  // grant switch landed. Returns null if the DB is unreachable.
+  let dbRole: string | null = null;
+  if (dbOk) {
+    try {
+      const rows = (await prisma.$queryRaw<{ current_user: string }[]>`SELECT current_user`);
+      dbRole = rows[0]?.current_user ?? null;
+    } catch {
+      dbRole = null;
+    }
+  }
+
   const body = {
     status: dbOk ? "ok" : "degraded",
     version: pkg.version,
     uptimeSeconds: Math.round(process.uptime()),
-    db: { ok: dbOk, latencyMs: dbLatencyMs },
+    db: { ok: dbOk, latencyMs: dbLatencyMs, role: dbRole },
+    integrations,
     timestamp: new Date().toISOString(),
     checkLatencyMs: Date.now() - startedAt,
   };
