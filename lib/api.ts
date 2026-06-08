@@ -29,7 +29,12 @@ export async function requireAuth(): Promise<AuthedSession | NextResponse> {
   } catch (e) {
     authError = (e as Error).message;
   }
-  if (!session?.user) {
+  // A valid auth means: NextAuth gave us a session AND we know who the user
+  // is (at minimum an id). session.user may be empty if the JWT callback ran
+  // before the user object had any fields — accept that as long as we have
+  // an id we can trust from the token.
+  const userId = session?.user?.id ?? null;
+  if (!session || !userId) {
     return NextResponse.json(
       {
         error: "Your session has expired or wasn't recognized. Sign out and sign back in.",
@@ -37,6 +42,7 @@ export async function requireAuth(): Promise<AuthedSession | NextResponse> {
         debug: {
           hasSession: Boolean(session),
           hasUser: Boolean(session?.user),
+          userKeys: session?.user ? Object.keys(session.user) : [],
           authError,
         },
       },
