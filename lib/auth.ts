@@ -23,20 +23,18 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
       return token;
     },
     async session({ session, token }) {
-      // Force-rebuild session.user from the JWT every call. Earlier versions
-      // of the callback assumed session.user was always pre-populated by
-      // NextAuth, but in some v5-beta paths it can come back as undefined or
-      // as an empty object, leaving requireAuth() without an id or role.
-      if (token) {
-        const rebuilt = {
-          id: (token.id as string) ?? (token.sub as string) ?? "",
-          name: (token.name as string | null | undefined) ?? null,
-          email: (token.email as string | null | undefined) ?? null,
-          role: (token.role as string) ?? "MANAGER",
-        };
-        (session as unknown as { user: typeof rebuilt }).user = rebuilt;
-      }
-      return session;
+      // Force-rebuild session.user from the JWT every call. NextAuth v5-beta
+      // sometimes hands back a session without (or with an immutable empty)
+      // user object, so we return a brand-new object rather than mutating.
+      if (!token) return session;
+      const user = {
+        id: (token.id as string) ?? (token.sub as string) ?? "",
+        name: (token.name as string | null | undefined) ?? null,
+        email: (token.email as string | null | undefined) ?? null,
+        image: null,
+        role: (token.role as string) ?? "MANAGER",
+      };
+      return { ...session, user } as unknown as typeof session;
     },
   },
   providers: [

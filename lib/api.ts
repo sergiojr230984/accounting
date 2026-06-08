@@ -1,5 +1,7 @@
 import { NextResponse } from "next/server";
 import type { Session } from "next-auth";
+import { cookies } from "next/headers";
+import { decode } from "@auth/core/jwt";
 import { auth } from "./auth";
 import { rateLimit, type RateLimitOptions } from "./rate-limit";
 
@@ -15,12 +17,45 @@ export interface AuthedSession extends Session {
 }
 
 /**
- * Authentication guard. Returns NextResponse on failure, or the session on success.
- * Usage:
- *   const guard = await requireAuth();
- *   if (guard instanceof NextResponse) return guard;
- *   const session = guard;
+ * Direct JWT-cookie fallback for cases where `auth()` returns a session but
+ * NextAuth v5-beta strips session.user. We decode the cookie with the same
+ * AUTH_SECRET and reconstruct the user from the raw token claims.
  */
+async function readJwtUser(): Promise<{ id: string; role: Role; name?: string | null; email?: string | null } | null> {
+  const secret = process.env.AUTH_SECRET;
+  if (!secret) return null;
+  try {
+    const store = await cookies();
+    // NextAuth picks the cookie name based on protocol — try both.
+    const cookieValue =
+      store.get("__Secure-authjs.session-token")?.value ??
+      store.get("authjs.session-token")?.value ??
+      store.get("__Secure-next-auth.session-token")?.value ??
+      store.get("next-auth.session-token")?.value;
+    if (!cookieValue) return null;
+    const token = await decode({
+      token: cookieValue,
+      secret,
+      salt:
+        store.get("__Secure-authjs.session-token") !== undefined
+          ? "__Secure-authjs.session-token"
+          : "authjs.session-token",
+    });
+    if (!token) return null;
+    const id = (token.id as string) ?? (token.sub as string) ?? "";
+    const role = ((token.role as string) ?? "MANAGER") as Role;
+    if (!id) return null;
+    return {
+      id,
+      role,
+      name: (token.name as string | null | undefined) ?? null,
+      email: (token.email as string | null | undefined) ?? null,
+    };
+  } catch {
+    return null;
+  }
+}
+
 export async function requireAuth(): Promise<AuthedSession | NextResponse> {
   let session: AuthedSession | null = null;
   let authError: string | null = null;
@@ -29,27 +64,39 @@ export async function requireAuth(): Promise<AuthedSession | NextResponse> {
   } catch (e) {
     authError = (e as Error).message;
   }
-  // A valid auth means: NextAuth gave us a session AND we know who the user
-  // is (at minimum an id). session.user may be empty if the JWT callback ran
-  // before the user object had any fields — accept that as long as we have
-  // an id we can trust from the token.
-  const userId = session?.user?.id ?? null;
-  if (!session || !userId) {
-    return NextResponse.json(
-      {
-        error: "Your session has expired or wasn't recognized. Sign out and sign back in.",
-        code: "auth_required",
-        debug: {
-          hasSession: Boolean(session),
-          hasUser: Boolean(session?.user),
-          userKeys: session?.user ? Object.keys(session.user) : [],
-          authError,
-        },
+  // If auth() gave us a session with a real user id, use it directly.
+  if (session?.user?.id) return session;
+
+  // Fallback: read the JWT cookie ourselves. Works around a v5-beta path
+  // that returns a session whose .user is empty.
+  const fallback = await readJwtUser();
+  if (fallback) {
+    return {
+      ...(session ?? {}),
+      expires: session?.expires ?? new Date(Date.now() + 86400_000).toISOString(),
+      user: {
+        id: fallback.id,
+        name: fallback.name,
+        email: fallback.email,
+        role: fallback.role,
       },
-      { status: 401 }
-    );
+    } as AuthedSession;
   }
-  return session;
+
+  return NextResponse.json(
+    {
+      error: "Your session has expired or wasn't recognized. Sign out and sign back in.",
+      code: "auth_required",
+      debug: {
+        hasSession: Boolean(session),
+        hasUser: Boolean(session?.user),
+        userKeys: session?.user ? Object.keys(session.user) : [],
+        fallbackUsed: false,
+        authError,
+      },
+    },
+    { status: 401 }
+  );
 }
 
 /**
