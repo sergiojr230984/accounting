@@ -111,6 +111,60 @@ function useProfile() {
   return { profile, setProfile, loading, reload: load };
 }
 
+/**
+ * Read an image File and return a downscaled PNG data URL.
+ *
+ * - PNG is preferred so logos with transparency render cleanly on the
+ *   invoice header (white tile in the brand corner).
+ * - SVG inputs are passed through as-is because they're vector + tiny.
+ * - Anything bigger than `maxDim` on either side gets proportionally
+ *   shrunk so the resulting base64 payload stays well under any
+ *   reasonable request-body cap.
+ */
+async function fileToShrunkDataUrl(file: File, maxDim = 400, _quality = 0.9): Promise<string> {
+  if (file.type === "image/svg+xml") {
+    return new Promise((resolve, reject) => {
+      const r = new FileReader();
+      r.onload = () => resolve(String(r.result));
+      r.onerror = () => reject(new Error("Could not read SVG"));
+      r.readAsDataURL(file);
+    });
+  }
+
+  const dataUrl = await new Promise<string>((resolve, reject) => {
+    const r = new FileReader();
+    r.onload = () => resolve(String(r.result));
+    r.onerror = () => reject(new Error("Could not read file"));
+    r.readAsDataURL(file);
+  });
+
+  const img = await new Promise<HTMLImageElement>((resolve, reject) => {
+    const el = new Image();
+    el.onload = () => resolve(el);
+    el.onerror = () => reject(new Error("Could not decode image"));
+    el.src = dataUrl;
+  });
+
+  let { width, height } = img;
+  if (width > maxDim || height > maxDim) {
+    if (width >= height) {
+      height = Math.round((height / width) * maxDim);
+      width = maxDim;
+    } else {
+      width = Math.round((width / height) * maxDim);
+      height = maxDim;
+    }
+  }
+
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) throw new Error("Canvas is not supported in this browser");
+  ctx.drawImage(img, 0, 0, width, height);
+  return canvas.toDataURL("image/png");
+}
+
 function CompanySection() {
   const { profile, setProfile, loading } = useProfile();
   const [saving, setSaving] = useState(false);
@@ -143,11 +197,20 @@ function CompanySection() {
         }),
       });
       if (!res.ok) {
-        const d = await res.json().catch(() => ({}));
-        setError(d.error?.formErrors?.[0] ?? d.error ?? "Save failed");
+        const text = await res.text();
+        let parsed: { error?: unknown } = {};
+        try { parsed = JSON.parse(text); } catch { /* not JSON */ }
+        const msg =
+          (parsed.error && typeof parsed.error === "object" && "formErrors" in parsed.error
+            ? (parsed.error as { formErrors?: string[] }).formErrors?.[0]
+            : typeof parsed.error === "string" ? parsed.error : null) ??
+          (text.slice(0, 200) || `HTTP ${res.status}`);
+        setError(`Save failed (${res.status}): ${msg}`);
         return;
       }
       setSavedAt(new Date());
+    } catch (e) {
+      setError(`Network error: ${(e as Error).message}`);
     } finally {
       setSaving(false);
     }
@@ -156,17 +219,21 @@ function CompanySection() {
   async function onPickFile(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
     if (!file) return;
-    if (file.size > 800 * 1024) {
-      setError("Logo too large — max 800 KB. Compress and try again.");
+    setError("");
+    if (file.size > 4 * 1024 * 1024) {
+      setError("Logo file too large — max 4 MB. We'll auto-shrink it for the invoice.");
       return;
     }
-    if (!["image/png", "image/jpeg", "image/svg+xml"].includes(file.type)) {
-      setError("Logo must be a PNG, JPG, or SVG file.");
+    if (!["image/png", "image/jpeg", "image/svg+xml", "image/webp"].includes(file.type)) {
+      setError("Logo must be a PNG, JPG, SVG, or WebP file.");
       return;
     }
-    const reader = new FileReader();
-    reader.onload = () => update("logo", String(reader.result));
-    reader.readAsDataURL(file);
+    try {
+      const dataUrl = await fileToShrunkDataUrl(file, 400, 0.9);
+      update("logo", dataUrl);
+    } catch (err) {
+      setError(`Could not process the image: ${(err as Error).message}`);
+    }
   }
 
   return (
@@ -199,7 +266,7 @@ function CompanySection() {
                   Remove logo
                 </button>
               )}
-              <p className="text-xs text-gray-400">PNG, JPG, or SVG · max 800 KB</p>
+              <p className="text-xs text-gray-400">PNG, JPG, SVG, or WebP. Auto-resized to 400 px for the invoice header.</p>
             </div>
           </div>
         </div>
