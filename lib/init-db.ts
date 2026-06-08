@@ -186,9 +186,18 @@ export async function initializeDatabase() {
     if (legacyAdmin) {
       await prisma.user.update({
         where: { id: legacyAdmin.id },
-        data: { email: "admin@lacuevita.com" },
+        data: { email: "admin@lacuevita.com", role: "ADMIN" },
       });
-      console.log("[init-db] Migrated admin email bizledger -> lacuevita");
+      console.log("[init-db] Migrated admin email bizledger -> lacuevita (role=ADMIN)");
+    }
+
+    // Self-heal: always make sure admin@lacuevita.com is ADMIN. If a previous
+    // migration or manual change demoted them, this restores access to
+    // Settings, taxes, employee CRUD, and invoice delete.
+    const lcAdmin = await prisma.user.findUnique({ where: { email: "admin@lacuevita.com" } });
+    if (lcAdmin && lcAdmin.role !== "ADMIN") {
+      await prisma.user.update({ where: { id: lcAdmin.id }, data: { role: "ADMIN" } });
+      console.log("[init-db] Restored admin@lacuevita.com role -> ADMIN");
     }
 
     const adminCount = await prisma.user.count({ where: { role: "ADMIN" } });

@@ -42,8 +42,14 @@ export async function requireRole(
   if (guard instanceof NextResponse) return guard;
   const role = guard.user.role;
   if (!role || !roles.includes(role)) {
+    const have = role ?? "none (sign out and back in to refresh)";
     return NextResponse.json(
-      { error: "Forbidden — insufficient role", code: "forbidden", requiredRoles: roles },
+      {
+        error: `Forbidden — your role "${have}" cannot do this. Required: ${roles.join(" or ")}.`,
+        code: "forbidden",
+        currentRole: role ?? null,
+        requiredRoles: roles,
+      },
       { status: 403 }
     );
   }
