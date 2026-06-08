@@ -22,10 +22,24 @@ export interface AuthedSession extends Session {
  *   const session = guard;
  */
 export async function requireAuth(): Promise<AuthedSession | NextResponse> {
-  const session = (await auth()) as AuthedSession | null;
+  let session: AuthedSession | null = null;
+  let authError: string | null = null;
+  try {
+    session = (await auth()) as AuthedSession | null;
+  } catch (e) {
+    authError = (e as Error).message;
+  }
   if (!session?.user) {
     return NextResponse.json(
-      { error: "Unauthorized", code: "auth_required" },
+      {
+        error: "Your session has expired or wasn't recognized. Sign out and sign back in.",
+        code: "auth_required",
+        debug: {
+          hasSession: Boolean(session),
+          hasUser: Boolean(session?.user),
+          authError,
+        },
+      },
       { status: 401 }
     );
   }

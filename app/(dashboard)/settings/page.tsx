@@ -602,12 +602,18 @@ function UsersSection() {
 
   async function load() {
     setLoading(true);
+    setError("");
     try {
       const [usersRes, meRes] = await Promise.all([
         fetch("/api/users"),
         fetch("/api/me"),
       ]);
-      if (usersRes.ok) setUsers(await usersRes.json());
+      if (usersRes.ok) {
+        setUsers(await usersRes.json());
+      } else {
+        const d = await usersRes.json().catch(() => ({}));
+        setError(`Could not load users (${usersRes.status}): ${d.error ?? "unknown"}`);
+      }
       if (meRes.ok) {
         const meData = await meRes.json();
         setMe({ id: meData.id ?? null, role: meData.role ?? null });
@@ -760,18 +766,32 @@ function UserCreateForm({
       return;
     }
     setSaving(true);
-    const res = await fetch("/api/users", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name, email, password, role }),
-    });
-    if (!res.ok) {
-      const d = await res.json().catch(() => ({}));
-      onError(d.error?.formErrors?.[0] ?? d.error ?? "Create failed");
-    } else {
-      onCreated();
+    try {
+      const res = await fetch("/api/users", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ name, email, password, role }),
+      });
+      if (!res.ok) {
+        const text = await res.text();
+        let parsed: { error?: unknown; debug?: unknown } = {};
+        try { parsed = JSON.parse(text); } catch { /* not JSON */ }
+        const baseMsg =
+          (parsed.error && typeof parsed.error === "object" && "formErrors" in parsed.error
+            ? (parsed.error as { formErrors?: string[] }).formErrors?.[0]
+            : typeof parsed.error === "string" ? parsed.error : null) ??
+          (text.slice(0, 200) || `HTTP ${res.status}`);
+        const dbg = parsed.debug ? ` — debug: ${JSON.stringify(parsed.debug)}` : "";
+        onError(`Create failed (${res.status}): ${baseMsg}${dbg}`);
+      } else {
+        onCreated();
+      }
+    } catch (e) {
+      onError(`Network error: ${(e as Error).message}`);
+    } finally {
+      setSaving(false);
     }
-    setSaving(false);
   }
 
   return (

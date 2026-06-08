@@ -23,9 +23,17 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
       return token;
     },
     async session({ session, token }) {
-      if (token) {
-        session.user.id = token.id as string;
-        (session.user as { role?: string }).role = token.role as string;
+      if (token && session.user) {
+        session.user.id = (token.id as string) ?? "";
+        (session.user as { role?: string }).role = (token.role as string) ?? undefined;
+      } else if (token && !session.user) {
+        // Defensive: rebuild user from the JWT if NextAuth somehow stripped it.
+        (session as { user?: unknown }).user = {
+          id: token.id as string,
+          name: token.name as string,
+          email: token.email as string,
+          role: token.role as string,
+        };
       }
       return session;
     },
