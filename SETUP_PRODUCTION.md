@@ -1,7 +1,7 @@
 # Production setup — three steps to live
 
 Three things only you can do (account creation / dashboard access). After
-each step, hit `https://accounting-production-e704.up.railway.app/api/health`
+each step, hit `https://lacuevitafurniture.com/api/health`
 and the matching boolean under `integrations` flips from `false` to `true`,
 so you'll know instantly when it worked.
 
@@ -34,7 +34,7 @@ so you'll know instantly when it worked.
 1. Sign up at <https://betterstack.com/better-uptime> (free tier, 10 monitors).
 2. **Monitors → Create monitor**.
 3. Fill in:
-   - **URL to monitor**: `https://accounting-production-e704.up.railway.app/api/health`
+   - **URL to monitor**: `https://lacuevitafurniture.com/api/health`
    - **Check frequency**: every 1 minute
    - **Expected status code**: 200
    - **Alert when down**: your email + (optional) phone number
