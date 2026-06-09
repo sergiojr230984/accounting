@@ -10,6 +10,11 @@ const loginSchema = z.object({
 });
 
 export const { handlers, auth, signIn, signOut } = NextAuth({
+  // Always trust the incoming request's Host header. Without this, NextAuth
+  // falls back to NEXTAUTH_URL / AUTH_URL — if those are still set to
+  // localhost from a copied .env, signOut redirects there and the browser
+  // hits "Hmm… can't reach this page".
+  trustHost: true,
   session: { strategy: "jwt" },
   pages: {
     signIn: "/login",
