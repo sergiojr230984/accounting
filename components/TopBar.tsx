@@ -1,6 +1,5 @@
 "use client";
 
-import { signOut } from "next-auth/react";
 import { ChevronDown, LogOut } from "lucide-react";
 import { useState, useRef, useEffect } from "react";
 
@@ -62,13 +61,13 @@ export default function TopBar({ user }: TopBarProps) {
             </div>
             <button
               onClick={async () => {
-                // Skip NextAuth's built-in redirect (it uses NEXTAUTH_URL /
-                // AUTH_URL which may still be localhost in the deploy env)
-                // and force a same-origin hard navigation to /login.
+                // Hit our own /api/sign-out (NOT NextAuth's signOut) so a
+                // baked-in NEXTAUTH_URL pointing at localhost can't make the
+                // request silently fail. Then hard-navigate same-origin.
                 try {
-                  await signOut({ redirect: false });
+                  await fetch("/api/sign-out", { method: "POST" });
                 } catch {
-                  // ignore — we'll still navigate.
+                  // ignore — we'll still navigate
                 }
                 if (typeof window !== "undefined") {
                   window.location.href = `${window.location.origin}/login`;
