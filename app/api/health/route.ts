@@ -1,22 +1,58 @@
 import { NextResponse } from "next/server";
+import { prisma } from "@/lib/prisma";
+import pkg from "../../../package.json";
 
 export const dynamic = "force-dynamic";
 
 /**
- * Bulletproof Railway healthcheck. No imports beyond NextResponse, no DB
- * queries, no awaits, no module side-effects. The only way this fails is
- * if the HTTP server itself isn't listening — which is exactly what
- * Railway's healthcheck is supposed to detect.
+ * Liveness + readiness probe. Returns 200 only if the database is reachable.
+ * Wire this URL into Better Uptime (or any HTTP monitor) as your health check.
  *
- * Detailed health (DB latency, integration status, etc.) lives at
- * /api/health/full and is what Better Uptime / status pages should hit.
+ * Cache-Control: no-store — we never want a stale "OK" answer.
  */
-export function GET() {
-  return new NextResponse(JSON.stringify({ ok: true, ts: Date.now() }), {
-    status: 200,
-    headers: {
-      "Content-Type": "application/json",
-      "Cache-Control": "no-store",
-    },
+export async function GET() {
+  const startedAt = Date.now();
+  let dbOk = false;
+  let dbLatencyMs: number | null = null;
+  try {
+    const t0 = Date.now();
+    await prisma.$queryRaw`SELECT 1`;
+    dbLatencyMs = Date.now() - t0;
+    dbOk = true;
+  } catch {
+    dbOk = false;
+  }
+  const integrations = {
+    sentryServer: Boolean(process.env.SENTRY_DSN),
+    sentryBrowser: Boolean(process.env.NEXT_PUBLIC_SENTRY_DSN),
+    email: Boolean(process.env.RESEND_API_KEY),
+    aiExtraction: Boolean(process.env.ANTHROPIC_API_KEY),
+    appUrl: Boolean(process.env.APP_URL),
+  };
+
+  // Identify which DB role is being used so you can verify the least-privilege
+  // grant switch landed. Returns null if the DB is unreachable.
+  let dbRole: string | null = null;
+  if (dbOk) {
+    try {
+      const rows = (await prisma.$queryRaw<{ current_user: string }[]>`SELECT current_user`);
+      dbRole = rows[0]?.current_user ?? null;
+    } catch {
+      dbRole = null;
+    }
+  }
+
+  const body = {
+    status: dbOk ? "ok" : "degraded",
+    version: pkg.version,
+    uptimeSeconds: Math.round(process.uptime()),
+    db: { ok: dbOk, latencyMs: dbLatencyMs, role: dbRole },
+    integrations,
+    timestamp: new Date().toISOString(),
+    checkLatencyMs: Date.now() - startedAt,
+  };
+  return NextResponse.json(body, {
+    status: dbOk ? 200 : 503,
+    headers: { "Cache-Control": "no-store" },
   });
 }
