@@ -7,7 +7,7 @@
     "buildCommand": "npm ci && npm run build",
     "preDeployCommand": "",
     "startCommand": "npm start",
-    "healthcheckPath": "/",
+    "healthcheckPath": "/api/health",
     "restartPolicyType": "ON_FAILURE"
   }
 }
