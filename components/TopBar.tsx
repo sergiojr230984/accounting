@@ -61,7 +61,19 @@ export default function TopBar({ user }: TopBarProps) {
               <p className="text-xs text-gray-500 truncate">{user.email}</p>
             </div>
             <button
-              onClick={() => signOut({ callbackUrl: "/login" })}
+              onClick={async () => {
+                // Skip NextAuth's built-in redirect (it uses NEXTAUTH_URL /
+                // AUTH_URL which may still be localhost in the deploy env)
+                // and force a same-origin hard navigation to /login.
+                try {
+                  await signOut({ redirect: false });
+                } catch {
+                  // ignore — we'll still navigate.
+                }
+                if (typeof window !== "undefined") {
+                  window.location.href = `${window.location.origin}/login`;
+                }
+              }}
               className="w-full flex items-center gap-2 px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 transition-colors"
             >
               <LogOut className="w-4 h-4" />
