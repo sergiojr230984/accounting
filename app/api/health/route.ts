@@ -5,23 +5,45 @@ import pkg from "../../../package.json";
 export const dynamic = "force-dynamic";
 
 /**
- * Liveness + readiness probe. Returns 200 only if the database is reachable.
- * Wire this URL into Better Uptime (or any HTTP monitor) as your health check.
+ * Liveness probe for Railway / Better Uptime.
  *
- * Cache-Control: no-store — we never want a stale "OK" answer.
+ * Always returns 200 once the server is up — we never want Railway killing
+ * a healthy container just because Postgres is briefly slow during a
+ * rolling deploy. The `status` field in the body still reports degraded
+ * if the DB ping fails, so monitors that care can alert on the body.
+ *
+ * The DB ping is wrapped in a 2-second timeout so this endpoint can't
+ * hang indefinitely behind a slow connection.
  */
 export async function GET() {
   const startedAt = Date.now();
-  let dbOk = false;
-  let dbLatencyMs: number | null = null;
-  try {
+
+  const dbProbe = (async () => {
     const t0 = Date.now();
     await prisma.$queryRaw`SELECT 1`;
-    dbLatencyMs = Date.now() - t0;
-    dbOk = true;
-  } catch {
-    dbOk = false;
+    return Date.now() - t0;
+  })();
+
+  const dbLatencyMs = await Promise.race([
+    dbProbe.catch(() => null),
+    new Promise<null>((resolve) => setTimeout(() => resolve(null), 2000)),
+  ]);
+  const dbOk = dbLatencyMs !== null;
+
+  let dbRole: string | null = null;
+  if (dbOk) {
+    try {
+      const rolePromise = prisma.$queryRaw<{ current_user: string }[]>`SELECT current_user`;
+      const rows = await Promise.race([
+        rolePromise.catch(() => [] as { current_user: string }[]),
+        new Promise<{ current_user: string }[]>((resolve) => setTimeout(() => resolve([]), 1000)),
+      ]);
+      dbRole = rows[0]?.current_user ?? null;
+    } catch {
+      dbRole = null;
+    }
   }
+
   const integrations = {
     sentryServer: Boolean(process.env.SENTRY_DSN),
     sentryBrowser: Boolean(process.env.NEXT_PUBLIC_SENTRY_DSN),
@@ -29,18 +51,6 @@ export async function GET() {
     aiExtraction: Boolean(process.env.ANTHROPIC_API_KEY),
     appUrl: Boolean(process.env.APP_URL),
   };
-
-  // Identify which DB role is being used so you can verify the least-privilege
-  // grant switch landed. Returns null if the DB is unreachable.
-  let dbRole: string | null = null;
-  if (dbOk) {
-    try {
-      const rows = (await prisma.$queryRaw<{ current_user: string }[]>`SELECT current_user`);
-      dbRole = rows[0]?.current_user ?? null;
-    } catch {
-      dbRole = null;
-    }
-  }
 
   const body = {
     status: dbOk ? "ok" : "degraded",
@@ -51,8 +61,12 @@ export async function GET() {
     timestamp: new Date().toISOString(),
     checkLatencyMs: Date.now() - startedAt,
   };
+
+  // Always 200 — Railway should not kill a freshly-started container while
+  // the DB connection is still warming up. External monitors that care
+  // about DB health can check body.status === "degraded".
   return NextResponse.json(body, {
-    status: dbOk ? 200 : 503,
+    status: 200,
     headers: { "Cache-Control": "no-store" },
   });
 }
