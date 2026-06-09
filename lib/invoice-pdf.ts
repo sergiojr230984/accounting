@@ -41,43 +41,67 @@ export function generateInvoicePDF(invoice: InvoicePDFData): jsPDF {
   const doc = new jsPDF({ unit: "pt", format: "letter" });
   const pageWidth = doc.internal.pageSize.getWidth();
   const margin = 48;
+  const columnGap = 24;
+  const leftColWidth = (pageWidth - margin * 2 - columnGap) / 2;
 
   // Brand header (orange band)
   doc.setFillColor(234, 88, 12); // brand-600 (#ea580c)
   doc.rect(0, 0, pageWidth, 8, "F");
 
-  // Company / brand — logo if uploaded, otherwise text
+  // ─── LEFT COLUMN ──────────────────────────────────────────────
+  // Logo (aspect-ratio preserved, max 160×80) + company name + address.
   const company = invoice.company ?? null;
+  const hasLogo = Boolean(company?.logo);
   const companyName = company?.name?.trim() || "La Cuevita";
-  let brandY = 60;
-  if (company?.logo) {
+
+  let leftY = 30;
+
+  if (hasLogo && company?.logo) {
     try {
-      // Logo data URL like "data:image/png;base64,..."
       const mime = company.logo.match(/^data:(image\/[a-z+]+);/)?.[1] ?? "image/png";
       const fmt = mime.includes("png") ? "PNG" : mime.includes("svg") ? "SVG" : "JPEG";
-      doc.addImage(company.logo, fmt, margin, 30, 80, 40, undefined, "FAST");
-      brandY = 86; // push text below logo
+      const maxW = 160;
+      const maxH = 80;
+      let drawW = maxW;
+      let drawH = maxH;
+      try {
+        const props = doc.getImageProperties(company.logo);
+        if (props.width && props.height) {
+          const ratio = Math.min(maxW / props.width, maxH / props.height);
+          drawW = props.width * ratio;
+          drawH = props.height * ratio;
+        }
+      } catch {
+        // SVG / probe failure — fall back to fixed box.
+      }
+      doc.addImage(company.logo, fmt, margin, leftY, drawW, drawH, undefined, "FAST");
+      leftY += drawH + 16;
     } catch {
-      // fall through to text
+      // fall through to text-only header
     }
   }
+
+  // Company name — smaller when we have a logo (the logo carries the brand).
   doc.setFont("helvetica", "bold");
-  doc.setFontSize(company?.logo ? 12 : 20);
+  doc.setFontSize(hasLogo ? 12 : 18);
   doc.setTextColor(124, 45, 18); // brand-900
-  doc.text(companyName, margin, brandY);
+  doc.text(companyName, margin, leftY);
+  leftY += hasLogo ? 14 : 22;
+
   doc.setFont("helvetica", "normal");
   doc.setFontSize(9);
   doc.setTextColor(107, 114, 128);
-  let metaCursor = brandY + 14;
   if (company?.address) {
-    const lines = doc.splitTextToSize(company.address, 220);
-    doc.text(lines, margin, metaCursor);
-    metaCursor += lines.length * 11;
+    const lines = doc.splitTextToSize(company.address, leftColWidth);
+    doc.text(lines, margin, leftY);
+    leftY += lines.length * 11;
   }
-  if (company?.email) { doc.text(company.email, margin, metaCursor); metaCursor += 11; }
-  if (company?.phone) { doc.text(company.phone, margin, metaCursor); }
+  if (company?.email) { doc.text(company.email, margin, leftY); leftY += 11; }
+  if (company?.phone) { doc.text(company.phone, margin, leftY); leftY += 11; }
+  const leftColumnEnd = leftY;
 
-  // Invoice title (right side)
+  // ─── RIGHT COLUMN ─────────────────────────────────────────────
+  // INVOICE title + invoice number + dates, right-aligned.
   doc.setFont("helvetica", "bold");
   doc.setFontSize(28);
   doc.setTextColor(31, 41, 55);
@@ -86,9 +110,8 @@ export function generateInvoicePDF(invoice: InvoicePDFData): jsPDF {
   doc.setFont("helvetica", "normal");
   doc.setFontSize(10);
   doc.setTextColor(107, 114, 128);
-  doc.text(`# ${invoice.invoiceNumber}`, pageWidth - margin, 74, { align: "right" });
+  doc.text(`# ${invoice.invoiceNumber}`, pageWidth - margin, 76, { align: "right" });
 
-  // Meta block (dates)
   const metaY = 110;
   doc.setFontSize(9);
   doc.setTextColor(156, 163, 175);
@@ -98,15 +121,19 @@ export function generateInvoicePDF(invoice: InvoicePDFData): jsPDF {
   doc.setFont("helvetica", "bold");
   doc.text(format(new Date(invoice.invoiceDate), "MMM d, yyyy"), pageWidth - margin - 140, metaY + 14);
   doc.text(format(new Date(invoice.dueDate), "MMM d, yyyy"), pageWidth - margin, metaY + 14, { align: "right" });
+  const rightColumnEnd = metaY + 14;
 
-  // Bill To
-  let cursorY = metaY;
+  // ─── BILL TO ───────────────────────────────────────────────────
+  // Always sits below the lower of left/right columns, with a clear gap so
+  // the customer name never collides with the company / dates blocks above.
+  const billToY = Math.max(leftColumnEnd, rightColumnEnd) + 36;
+
   doc.setFont("helvetica", "normal");
   doc.setFontSize(9);
   doc.setTextColor(156, 163, 175);
-  doc.text("BILL TO", margin, cursorY);
-  cursorY += 14;
-  doc.setFontSize(11);
+  doc.text("BILL TO", margin, billToY);
+  let cursorY = billToY + 14;
+  doc.setFontSize(12);
   doc.setFont("helvetica", "bold");
   doc.setTextColor(31, 41, 55);
   doc.text(invoice.customer.name, margin, cursorY);
@@ -123,13 +150,13 @@ export function generateInvoicePDF(invoice: InvoicePDFData): jsPDF {
     cursorY += 12;
   }
   if (invoice.customer.address) {
-    const lines = doc.splitTextToSize(invoice.customer.address, 220);
+    const lines = doc.splitTextToSize(invoice.customer.address, leftColWidth + 60);
     doc.text(lines, margin, cursorY);
     cursorY += lines.length * 12;
   }
 
   // Items table
-  const tableStartY = Math.max(cursorY, 180) + 16;
+  const tableStartY = cursorY + 24;
   autoTable(doc, {
     startY: tableStartY,
     head: [["Description", "Qty", "Unit price", "Tax", "Amount"]],
