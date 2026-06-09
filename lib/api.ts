@@ -16,43 +16,69 @@ export interface AuthedSession extends Session {
   };
 }
 
+const COOKIE_CANDIDATES = [
+  "__Secure-authjs.session-token",
+  "authjs.session-token",
+  "__Secure-next-auth.session-token",
+  "next-auth.session-token",
+];
+
+type JwtFallback =
+  | { ok: true; user: { id: string; role: Role; name: string | null; email: string | null } }
+  | { ok: false; error: string; cookiesPresent: string[] };
+
 /**
  * Direct JWT-cookie fallback for cases where `auth()` returns a session but
  * NextAuth v5-beta strips session.user. We decode the cookie with the same
- * AUTH_SECRET and reconstruct the user from the raw token claims.
+ * AUTH_SECRET and reconstruct the user from the raw token claims. Handles
+ * chunked cookies (NextAuth splits JWTs > 4KB into `name.0`, `name.1`...).
  */
-async function readJwtUser(): Promise<{ id: string; role: Role; name?: string | null; email?: string | null } | null> {
+async function readJwtUser(): Promise<JwtFallback> {
   const secret = process.env.AUTH_SECRET;
-  if (!secret) return null;
+  if (!secret) return { ok: false, error: "no AUTH_SECRET", cookiesPresent: [] };
   try {
     const store = await cookies();
-    // NextAuth picks the cookie name based on protocol — try both.
-    const cookieValue =
-      store.get("__Secure-authjs.session-token")?.value ??
-      store.get("authjs.session-token")?.value ??
-      store.get("__Secure-next-auth.session-token")?.value ??
-      store.get("next-auth.session-token")?.value;
-    if (!cookieValue) return null;
-    const token = await decode({
-      token: cookieValue,
-      secret,
-      salt:
-        store.get("__Secure-authjs.session-token") !== undefined
-          ? "__Secure-authjs.session-token"
-          : "authjs.session-token",
-    });
-    if (!token) return null;
-    const id = (token.id as string) ?? (token.sub as string) ?? "";
-    const role = ((token.role as string) ?? "MANAGER") as Role;
-    if (!id) return null;
+    const cookiesPresent = store.getAll().map((c) => c.name);
+    let lastDecodeError: string | null = null;
+    for (const name of COOKIE_CANDIDATES) {
+      let value = store.get(name)?.value;
+      if (!value) {
+        // Try chunked variant.
+        const chunks: string[] = [];
+        for (let i = 0; i < 20; i++) {
+          const chunk = store.get(`${name}.${i}`)?.value;
+          if (!chunk) break;
+          chunks.push(chunk);
+        }
+        if (chunks.length > 0) value = chunks.join("");
+      }
+      if (!value) continue;
+      try {
+        const token = await decode({ token: value, secret, salt: name });
+        if (!token) continue;
+        const id = (token.id as string) ?? (token.sub as string) ?? "";
+        if (!id) continue;
+        const role = ((token.role as string) ?? "MANAGER") as Role;
+        return {
+          ok: true,
+          user: {
+            id,
+            role,
+            name: (token.name as string | null | undefined) ?? null,
+            email: (token.email as string | null | undefined) ?? null,
+          },
+        };
+      } catch (e) {
+        lastDecodeError = (e as Error).message;
+      }
+    }
     return {
-      id,
-      role,
-      name: (token.name as string | null | undefined) ?? null,
-      email: (token.email as string | null | undefined) ?? null,
+      ok: false,
+      error: lastDecodeError ?? "no matching session cookie found",
+      cookiesPresent,
     };
-  } catch {
-    return null;
+  } catch (e) {
+    return { ok: false, error: (e as Error).message, cookiesPresent: [] };
   }
 }
 
@@ -67,18 +93,17 @@ export async function requireAuth(): Promise<AuthedSession | NextResponse> {
   // If auth() gave us a session with a real user id, use it directly.
   if (session?.user?.id) return session;
 
-  // Fallback: read the JWT cookie ourselves. Works around a v5-beta path
-  // that returns a session whose .user is empty.
+  // Fallback: read the JWT cookie ourselves.
   const fallback = await readJwtUser();
-  if (fallback) {
+  if (fallback.ok) {
     return {
       ...(session ?? {}),
       expires: session?.expires ?? new Date(Date.now() + 86400_000).toISOString(),
       user: {
-        id: fallback.id,
-        name: fallback.name,
-        email: fallback.email,
-        role: fallback.role,
+        id: fallback.user.id,
+        name: fallback.user.name,
+        email: fallback.user.email,
+        role: fallback.user.role,
       },
     } as AuthedSession;
   }
@@ -92,6 +117,8 @@ export async function requireAuth(): Promise<AuthedSession | NextResponse> {
         hasUser: Boolean(session?.user),
         userKeys: session?.user ? Object.keys(session.user) : [],
         fallbackUsed: false,
+        fallbackError: fallback.error,
+        cookiesPresent: fallback.cookiesPresent,
         authError,
       },
     },
