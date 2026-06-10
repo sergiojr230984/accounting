@@ -33,6 +33,10 @@ function buildResponse(): Response {
   headers.set("Content-Type", "text/html; charset=utf-8");
   headers.set("Cache-Control", "no-store, no-cache, must-revalidate");
   headers.set("Refresh", "0; url=/login");
+  // Nuclear option: tells the browser to wipe every cookie + storage + cache
+  // entry for this origin, regardless of Domain / Path / HttpOnly attributes.
+  // Combined with explicit Set-Cookie deletes below for older browsers.
+  headers.set("Clear-Site-Data", '"cookies", "storage", "cache"');
 
   for (const base of cookieNames) {
     for (const suffix of ["", ".0", ".1", ".2", ".3", ".4"]) {
