@@ -1,19 +1,19 @@
+export const dynamic = "force-dynamic";
+
 /**
- * Plain sign-out endpoint. Bypasses NextAuth's client library entirely so
- * a baked-in NEXTAUTH_URL / AUTH_URL pointing at localhost can't break it.
+ * Sign-out endpoint. Returns an HTML page (not an HTTP redirect) with:
+ * - Set-Cookie headers that wipe every NextAuth cookie variant
+ * - A meta-refresh tag pointing at /login
+ * - A JS window.location.replace fallback
  *
- * Two design points keep this robust behind a reverse proxy (Railway):
- * 1. The Location header is a RELATIVE path (/login). Browsers resolve it
- *    against the URL they actually hit in the address bar, not the
- *    internal URL the container sees in request.url. So the redirect
- *    stays on the user's domain whether they're on the Railway subdomain,
- *    a custom domain, or localhost in dev.
- * 2. Cookies are cleared for every NextAuth session-cookie name variant
- *    we've ever used, including chunked .0/.1/.2/.3/.4 suffixes for >4KB
- *    JWTs and the __Secure-/__Host- prefixed variants.
+ * Why HTML instead of a 303? Because every redirect-based attempt has
+ * been intercepted or rewritten somewhere in the stack (Sentry wrapper,
+ * Railway proxy, etc.). An HTML response can't be "redirected" — the
+ * browser gets it, applies the Set-Cookie headers, then the meta tag
+ * triggers a fresh GET to /login.
  *
- * GET is aliased to POST so users can also visit /api/sign-out directly
- * in their browser as a manual escape hatch.
+ * The Location-style redirect path is ALSO emitted as a 'Refresh' header
+ * for paranoid double-coverage.
  */
 function buildResponse(): Response {
   const cookieNames = [
@@ -30,8 +30,9 @@ function buildResponse(): Response {
   const epoch = "Thu, 01 Jan 1970 00:00:00 GMT";
 
   const headers = new Headers();
-  headers.set("Location", "/login");
-  headers.set("Cache-Control", "no-store");
+  headers.set("Content-Type", "text/html; charset=utf-8");
+  headers.set("Cache-Control", "no-store, no-cache, must-revalidate");
+  headers.set("Refresh", "0; url=/login");
 
   for (const base of cookieNames) {
     for (const suffix of ["", ".0", ".1", ".2", ".3", ".4"]) {
@@ -50,7 +51,27 @@ function buildResponse(): Response {
     }
   }
 
-  return new Response(null, { status: 303, headers });
+  const html = `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Signing out…</title>
+<meta http-equiv="refresh" content="0; url=/login">
+<style>
+  body { font-family: system-ui, sans-serif; display:flex; align-items:center; justify-content:center; height:100vh; margin:0; background:#fff7ed; color:#7c2d12 }
+  a { color:#ea580c }
+</style>
+</head>
+<body>
+<p>Signing you out… <a href="/login">click here if not redirected.</a></p>
+<script>
+  // Belt-and-suspenders: navigate via JS in case meta-refresh is blocked.
+  window.location.replace("/login");
+</script>
+</body>
+</html>`;
+
+  return new Response(html, { status: 200, headers });
 }
 
 export async function POST() {
