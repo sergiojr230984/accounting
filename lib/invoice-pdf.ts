@@ -1,7 +1,24 @@
 import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
 import { format } from "date-fns";
-import { formatCurrency } from "./money";
+/**
+ * ASCII-only currency formatter for jsPDF text. Intl.NumberFormat can emit
+ * non-breaking spaces or other non-ASCII characters that helvetica's
+ * Win-ANSI encoding doesn't have glyphs for — they render as garbage like
+ * '&&$&5&0&0&.&0&'. Roll our own with $ + comma thousands + period decimal.
+ */
+function pdfCurrency(value: string | number): string {
+  const n = typeof value === "number" ? value : parseFloat(value);
+  if (!isFinite(n)) return "$0.00";
+  const sign = n < 0 ? "-" : "";
+  const abs = Math.abs(n);
+  const whole = Math.floor(abs);
+  const cents = Math.round((abs - whole) * 100)
+    .toString()
+    .padStart(2, "0");
+  const wholeStr = whole.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+  return `${sign}$${wholeStr}.${cents}`;
+}
 
 export interface InvoicePDFData {
   invoiceNumber: string;
@@ -163,9 +180,9 @@ export function generateInvoicePDF(invoice: InvoicePDFData): jsPDF {
     body: invoice.items.map((i) => [
       i.description,
       String(i.quantity),
-      formatCurrency(String(i.unitPrice)),
+      pdfCurrency(String(i.unitPrice)),
       `${(Number(i.taxRate) * 100).toFixed(0)}%`,
-      formatCurrency(String(i.lineTotal)),
+      pdfCurrency(String(i.lineTotal)),
     ]),
     margin: { left: margin, right: margin },
     styles: { font: "helvetica", fontSize: 9, cellPadding: 7 },
@@ -195,13 +212,13 @@ export function generateInvoicePDF(invoice: InvoicePDFData): jsPDF {
   doc.setTextColor(107, 114, 128);
   doc.text("Subtotal", labelX, totalsY);
   doc.setTextColor(31, 41, 55);
-  doc.text(formatCurrency(String(invoice.subtotal)), valueX, totalsY, { align: "right" });
+  doc.text(pdfCurrency(String(invoice.subtotal)), valueX, totalsY, { align: "right" });
   totalsY += 16;
 
   doc.setTextColor(107, 114, 128);
   doc.text("Tax", labelX, totalsY);
   doc.setTextColor(31, 41, 55);
-  doc.text(formatCurrency(String(invoice.taxAmount)), valueX, totalsY, { align: "right" });
+  doc.text(pdfCurrency(String(invoice.taxAmount)), valueX, totalsY, { align: "right" });
   totalsY += 16;
 
   const ccFee = Number(invoice.creditCardFee ?? 0);
@@ -209,7 +226,7 @@ export function generateInvoicePDF(invoice: InvoicePDFData): jsPDF {
     doc.setTextColor(107, 114, 128);
     doc.text(company?.creditCardFeeLabel ?? "Card processing fee", labelX, totalsY);
     doc.setTextColor(31, 41, 55);
-    doc.text(formatCurrency(ccFee.toFixed(2)), valueX, totalsY, { align: "right" });
+    doc.text(pdfCurrency(ccFee.toFixed(2)), valueX, totalsY, { align: "right" });
     totalsY += 16;
   }
 
@@ -221,7 +238,7 @@ export function generateInvoicePDF(invoice: InvoicePDFData): jsPDF {
   doc.setFontSize(11);
   doc.setTextColor(31, 41, 55);
   doc.text("Total", labelX, totalsY);
-  doc.text(formatCurrency(String(invoice.totalAmount)), valueX, totalsY, { align: "right" });
+  doc.text(pdfCurrency(String(invoice.totalAmount)), valueX, totalsY, { align: "right" });
   totalsY += 16;
 
   doc.setFont("helvetica", "normal");
@@ -229,13 +246,13 @@ export function generateInvoicePDF(invoice: InvoicePDFData): jsPDF {
   if (down > 0) {
     doc.setTextColor(21, 128, 61);
     doc.text("Down payment", labelX, totalsY);
-    doc.text(`−${formatCurrency(down.toFixed(2))}`, valueX, totalsY, { align: "right" });
+    doc.text(`-${pdfCurrency(down.toFixed(2))}`, valueX, totalsY, { align: "right" });
     totalsY += 16;
   }
   if (paid > 0) {
     doc.setTextColor(21, 128, 61);
     doc.text("Paid", labelX, totalsY);
-    doc.text(`−${formatCurrency(paid.toFixed(2))}`, valueX, totalsY, { align: "right" });
+    doc.text(`-${pdfCurrency(paid.toFixed(2))}`, valueX, totalsY, { align: "right" });
     totalsY += 16;
   }
   doc.setDrawColor(229, 231, 235);
@@ -245,7 +262,7 @@ export function generateInvoicePDF(invoice: InvoicePDFData): jsPDF {
   doc.setFontSize(13);
   doc.setTextColor(194, 65, 12); // brand-700
   doc.text("Balance due", labelX, totalsY);
-  doc.text(formatCurrency(balance.toFixed(2)), valueX, totalsY, { align: "right" });
+  doc.text(pdfCurrency(balance.toFixed(2)), valueX, totalsY, { align: "right" });
   totalsY += 24;
 
   // Notes
