@@ -272,6 +272,25 @@ export default function CustomerInvoiceDetailPage() {
         <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg text-sm">{error}</div>
       )}
 
+      {editing && Object.keys(errors).length > 0 && (
+        <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg text-sm space-y-1">
+          <p className="font-semibold">Please fix the highlighted fields before saving:</p>
+          <ul className="list-disc list-inside">
+            {errors.invoiceNumber && <li>Invoice number is required</li>}
+            {errors.invoiceDate && <li>Invoice date is required</li>}
+            {errors.dueDate && <li>Due date is required</li>}
+            {errors.paidAmount && <li>Amount paid must be a number</li>}
+            {errors.downPayment && <li>Down payment must be a number</li>}
+            {errors.items && (
+              <li>
+                One or more line items are missing a description, quantity, or price.
+                Open the Line Items section and fill in every row, or remove empty rows.
+              </li>
+            )}
+          </ul>
+        </div>
+      )}
+
       {sendMessage && (
         <div
           className={`px-4 py-3 rounded-lg text-sm border ${
@@ -344,7 +363,7 @@ export default function CustomerInvoiceDetailPage() {
             </div>
           </div>
           <div className="card">
-            <InvoiceItemsEditor control={control} type="customer" />
+            <InvoiceItemsEditor control={control} register={register} type="customer" />
           </div>
         </form>
       ) : (

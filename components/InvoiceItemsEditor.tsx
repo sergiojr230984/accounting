@@ -1,6 +1,13 @@
 "use client";
 
-import { useFieldArray, useWatch } from "react-hook-form";
+import {
+  useFieldArray,
+  useWatch,
+  type Control,
+  type UseFormRegister,
+  type FieldValues,
+  type Path,
+} from "react-hook-form";
 import { Plus, Trash2 } from "lucide-react";
 import Decimal from "decimal.js";
 
@@ -12,9 +19,11 @@ interface ItemRow {
   taxRate: string;
 }
 
-interface InvoiceItemsEditorProps {
+interface InvoiceItemsEditorProps<T extends FieldValues> {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  control: any;
+  control: Control<T> | any;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  register: UseFormRegister<T> | any;
   fieldName?: string;
   type: "customer" | "supplier";
 }
@@ -37,13 +46,15 @@ function LinePreview({ quantity, price, taxRate }: { quantity: string; price: st
   }
 }
 
-export default function InvoiceItemsEditor({
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export default function InvoiceItemsEditor<T extends FieldValues = any>({
   control,
+  register,
   fieldName = "items",
   type,
-}: InvoiceItemsEditorProps) {
-  const { fields, append, remove } = useFieldArray({ control, name: fieldName });
-  const items = useWatch({ control, name: fieldName }) as ItemRow[];
+}: InvoiceItemsEditorProps<T>) {
+  const { fields, append, remove } = useFieldArray({ control, name: fieldName as Path<T> as never });
+  const items = useWatch({ control, name: fieldName as Path<T> as never }) as unknown as ItemRow[];
 
   const priceField = type === "customer" ? "unitPrice" : "unitCost";
   const priceLabel = type === "customer" ? "Unit Price" : "Unit Cost";
@@ -55,7 +66,12 @@ export default function InvoiceItemsEditor({
         <button
           type="button"
           onClick={() =>
-            append({ description: "", quantity: "1", [priceField]: "0", taxRate: "0" })
+            append({
+              description: "",
+              quantity: "1",
+              [priceField]: "0",
+              taxRate: "0",
+            } as never)
           }
           className="btn-secondary text-xs py-1.5"
         >
@@ -71,7 +87,7 @@ export default function InvoiceItemsEditor({
               <input
                 className="input text-sm"
                 placeholder="Description"
-                {...control.register(`${fieldName}.${index}.description`)}
+                {...register(`${fieldName}.${index}.description` as Path<T>)}
               />
             </div>
             <div className="col-span-2">
@@ -81,7 +97,7 @@ export default function InvoiceItemsEditor({
                 type="number"
                 step="0.0001"
                 min="0"
-                {...control.register(`${fieldName}.${index}.quantity`)}
+                {...register(`${fieldName}.${index}.quantity` as Path<T>)}
               />
             </div>
             <div className="col-span-2">
@@ -91,7 +107,7 @@ export default function InvoiceItemsEditor({
                 type="number"
                 step="0.01"
                 min="0"
-                {...control.register(`${fieldName}.${index}.${priceField}`)}
+                {...register(`${fieldName}.${index}.${priceField}` as Path<T>)}
               />
             </div>
             <div className="col-span-2">
@@ -102,7 +118,7 @@ export default function InvoiceItemsEditor({
                 step="0.001"
                 min="0"
                 max="1"
-                {...control.register(`${fieldName}.${index}.taxRate`)}
+                {...register(`${fieldName}.${index}.taxRate` as Path<T>)}
               />
             </div>
             <div className="col-span-1 text-right">

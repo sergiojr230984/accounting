@@ -216,7 +216,7 @@ export default function SupplierInvoiceDetailPage() {
             </div>
           </div>
           <div className="card">
-            <InvoiceItemsEditor control={control} type="supplier" />
+            <InvoiceItemsEditor control={control} register={register} type="supplier" />
           </div>
         </form>
       ) : (
