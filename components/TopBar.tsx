@@ -59,25 +59,15 @@ export default function TopBar({ user }: TopBarProps) {
               <p className="font-medium text-sm text-gray-900 truncate">{user.name}</p>
               <p className="text-xs text-gray-500 truncate">{user.email}</p>
             </div>
-            <button
-              onClick={async () => {
-                // Hit our own /api/sign-out (NOT NextAuth's signOut) so a
-                // baked-in NEXTAUTH_URL pointing at localhost can't make the
-                // request silently fail. Then hard-navigate same-origin.
-                try {
-                  await fetch("/api/sign-out", { method: "POST" });
-                } catch {
-                  // ignore — we'll still navigate
-                }
-                if (typeof window !== "undefined") {
-                  window.location.href = `${window.location.origin}/login`;
-                }
-              }}
-              className="w-full flex items-center gap-2 px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 transition-colors"
-            >
-              <LogOut className="w-4 h-4" />
-              Sign out
-            </button>
+            <form action="/api/sign-out" method="POST" className="w-full">
+              <button
+                type="submit"
+                className="w-full flex items-center gap-2 px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 transition-colors text-left"
+              >
+                <LogOut className="w-4 h-4" />
+                Sign out
+              </button>
+            </form>
           </div>
         )}
       </div>

@@ -1,14 +1,22 @@
 import { NextResponse } from "next/server";
 
 /**
- * Plain sign-out endpoint. Bypasses NextAuth's client library entirely so
- * a baked-in NEXTAUTH_URL / AUTH_URL pointing at localhost can't break it.
+ * Plain sign-out endpoint. Bypasses NextAuth's client library entirely so a
+ * baked-in NEXTAUTH_URL / AUTH_URL pointing at localhost can't break it.
  *
- * Clears every NextAuth session-cookie name variant we've ever used,
- * including chunked variants (NextAuth splits large JWTs into `.0`, `.1`...).
+ * Designed to be called as a form POST (no JavaScript). The response is a
+ * 303 redirect to /login with Set-Cookie headers that clear every NextAuth
+ * session-cookie name variant we've ever used (including chunked .0 .1 .2
+ * .3 .4 suffixes for >4KB JWTs).
+ *
+ * GET is aliased to POST so the user can also visit /api/sign-out directly
+ * in their browser as a manual escape hatch.
  */
-export async function POST() {
-  const epoch = new Date(0);
+function buildClearAndRedirect(request: Request): NextResponse {
+  const url = new URL(request.url);
+  const loginUrl = new URL("/login", `${url.protocol}//${url.host}`);
+  const res = NextResponse.redirect(loginUrl, 303);
+
   const names = [
     "__Secure-authjs.session-token",
     "authjs.session-token",
@@ -17,16 +25,17 @@ export async function POST() {
     "__Secure-authjs.csrf-token",
     "authjs.csrf-token",
     "__Host-authjs.csrf-token",
+    "authjs.callback-url",
+    "__Secure-authjs.callback-url",
   ];
 
-  const res = NextResponse.json({ ok: true });
   for (const base of names) {
     for (const suffix of ["", ".0", ".1", ".2", ".3", ".4"]) {
       const name = base + suffix;
       res.cookies.set({
         name,
         value: "",
-        expires: epoch,
+        expires: new Date(0),
         path: "/",
         httpOnly: true,
         sameSite: "lax",
@@ -37,6 +46,10 @@ export async function POST() {
   return res;
 }
 
-// Allow GET too so the user could hit it directly in the browser as a
-// last-resort manual sign-out (returns the same clear-cookie response).
-export const GET = POST;
+export async function POST(request: Request) {
+  return buildClearAndRedirect(request);
+}
+
+export async function GET(request: Request) {
+  return buildClearAndRedirect(request);
+}
