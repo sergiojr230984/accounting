@@ -2,6 +2,7 @@
 
 import { ChevronDown, LogOut } from "lucide-react";
 import { useState, useRef, useEffect } from "react";
+import { signOutAction } from "@/app/actions/sign-out";
 
 interface TopBarProps {
   user: { name?: string | null; email?: string | null };
@@ -59,13 +60,15 @@ export default function TopBar({ user }: TopBarProps) {
               <p className="font-medium text-sm text-gray-900 truncate">{user.name}</p>
               <p className="text-xs text-gray-500 truncate">{user.email}</p>
             </div>
-            <a
-              href="/api/sign-out"
-              className="w-full flex items-center gap-2 px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 transition-colors text-left"
-            >
-              <LogOut className="w-4 h-4" />
-              Sign out
-            </a>
+            <form action={signOutAction} className="w-full">
+              <button
+                type="submit"
+                className="w-full flex items-center gap-2 px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 transition-colors text-left"
+              >
+                <LogOut className="w-4 h-4" />
+                Sign out
+              </button>
+            </form>
           </div>
         )}
       </div>
