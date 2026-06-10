@@ -13,8 +13,16 @@ import { NextResponse } from "next/server";
  * in their browser as a manual escape hatch.
  */
 function buildClearAndRedirect(request: Request): NextResponse {
+  // request.url inside the container is the INTERNAL URL (something like
+  // http://localhost:8080/api/sign-out behind Railway's reverse proxy).
+  // The user-visible host lives in X-Forwarded-Host. Fall back to the
+  // request URL only if those headers aren't set (e.g. local dev).
+  const forwardedHost = request.headers.get("x-forwarded-host");
+  const forwardedProto = request.headers.get("x-forwarded-proto");
   const url = new URL(request.url);
-  const loginUrl = new URL("/login", `${url.protocol}//${url.host}`);
+  const host = forwardedHost ?? url.host;
+  const proto = forwardedProto ?? url.protocol.replace(/:$/, "");
+  const loginUrl = new URL("/login", `${proto}://${host}`);
   const res = NextResponse.redirect(loginUrl, 303);
 
   const names = [
