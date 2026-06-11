@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from "react";
 import { X, Loader2 } from "lucide-react";
+import AddressAutocomplete from "@/components/AddressAutocomplete";
 
 interface Props {
   open: boolean;
@@ -80,7 +81,7 @@ export default function CustomerCreateModal({ open, initialName = "", onClose, o
           </div>
           <div>
             <label className="label">Address</label>
-            <textarea className="input" rows={2} value={address} onChange={(e) => setAddress(e.target.value)} />
+            <AddressAutocomplete value={address} onChange={setAddress} />
           </div>
           {error && <div className="bg-red-50 border border-red-200 text-red-700 px-3 py-2 rounded-lg text-sm">{error}</div>}
         </div>

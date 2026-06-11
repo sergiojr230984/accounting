@@ -1,11 +1,12 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { useForm } from "react-hook-form";
+import { useForm, Controller } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import { Plus, Users, Loader2, Search, Pencil, Trash2, X, Check } from "lucide-react";
 import Link from "next/link";
+import AddressAutocomplete from "@/components/AddressAutocomplete";
 
 const schema = z.object({
   name: z.string().min(1, "Name is required"),
@@ -41,6 +42,7 @@ function CustomerForm({
   const {
     register,
     handleSubmit,
+    control,
     formState: { errors },
   } = useForm<FormData>({
     resolver: zodResolver(schema),
@@ -78,7 +80,13 @@ function CustomerForm({
         </div>
         <div>
           <label className="label">Address</label>
-          <input className="input" placeholder="123 Main St, City, State" {...register("address")} />
+          <Controller
+            control={control}
+            name="address"
+            render={({ field }) => (
+              <AddressAutocomplete value={field.value ?? ""} onChange={field.onChange} />
+            )}
+          />
         </div>
       </div>
 
