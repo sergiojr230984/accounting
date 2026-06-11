@@ -76,7 +76,10 @@ export async function PATCH(
   if (data.paymentStatus) updateData.paymentStatus = data.paymentStatus;
   if (data.paidAmount !== undefined) updateData.paidAmount = data.paidAmount;
 
-  if (data.items) {
+  // Only touch line items if the client actually sent some. Empty array is
+  // treated as 'leave them alone' — see the customer-invoice route for the
+  // full history.
+  if (data.items && data.items.length > 0) {
     let subtotal = new Decimal(0);
     let taxAmount = new Decimal(0);
 

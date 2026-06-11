@@ -81,7 +81,12 @@ export async function PATCH(
   if (data.employeeId !== undefined) updateData.employeeId = data.employeeId;
   if (data.commissionRate !== undefined) updateData.commissionRate = data.commissionRate;
 
-  if (data.items) {
+  // Only touch line items if the client actually sent some. An empty array
+  // (which happens when the form's items field array desyncs and the user
+  // only meant to change status / paidAmount / etc.) used to wipe every
+  // line item AND zero out the totals — leaving "PAID" invoices with no
+  // items to print. Treat empty/undefined items as "leave them alone".
+  if (data.items && data.items.length > 0) {
     let subtotal = new Decimal(0);
     let taxAmount = new Decimal(0);
 
