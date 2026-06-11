@@ -354,22 +354,34 @@ export default function NewCustomerInvoicePage() {
                     onFocus={() => setCustomerOpen(true)}
                   />
                   {customerOpen && (customerQuery.trim() !== "" || filteredCustomers.length > 0) && (
-                    <div className="absolute z-10 mt-1 left-0 right-0 bg-white border border-gray-200 rounded-lg shadow-lg max-h-64 overflow-y-auto">
-                      {filteredCustomers.slice(0, 8).map((c) => (
-                        <button
-                          key={c.id}
-                          type="button"
-                          onClick={() => { setCustomerId(c.id); setCustomerOpen(false); setCustomerQuery(""); }}
-                          className="block w-full text-left px-3 py-2 hover:bg-gray-50 text-sm"
-                        >
-                          <p className="font-medium">{c.name}</p>
-                          {c.email && <p className="text-xs text-gray-500">{c.email}</p>}
-                        </button>
-                      ))}
+                    <div className="absolute z-10 mt-1 left-0 right-0 bg-white border border-gray-200 rounded-lg shadow-lg overflow-hidden">
+                      {/* Scrollable suggestion list — only the existing
+                          customers live here, capped by max-h. */}
+                      {filteredCustomers.length > 0 && (
+                        <div className="max-h-64 overflow-y-auto">
+                          {filteredCustomers.slice(0, 8).map((c) => (
+                            <button
+                              key={c.id}
+                              type="button"
+                              onClick={() => { setCustomerId(c.id); setCustomerOpen(false); setCustomerQuery(""); }}
+                              className="block w-full text-left px-3 py-2 hover:bg-gray-50 text-sm"
+                            >
+                              <p className="font-medium">{c.name}</p>
+                              {c.email && <p className="text-xs text-gray-500">{c.email}</p>}
+                            </button>
+                          ))}
+                        </div>
+                      )}
+
+                      {/* Create-new sits BELOW the scroll list with a clear
+                          divider, so it's always visible and never hidden
+                          mid-scroll. */}
                       <button
                         type="button"
                         onClick={() => { setModalSeedName(customerQuery); setModalOpen(true); setCustomerOpen(false); }}
-                        className="block w-full text-left px-3 py-2 hover:bg-brand-50 text-sm text-brand-700 border-t font-medium"
+                        className={`block w-full text-left px-3 py-2.5 text-sm text-brand-700 font-medium bg-gray-50 hover:bg-brand-50 ${
+                          filteredCustomers.length > 0 ? "border-t-2 border-gray-200" : ""
+                        }`}
                       >
                         <Plus className="w-3.5 h-3.5 inline mr-1" />
                         Create new customer{customerQuery.trim() && `: "${customerQuery.trim()}"`}

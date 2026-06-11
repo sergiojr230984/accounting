@@ -19,7 +19,9 @@ type LeafItem = { href: string; label: string; icon?: React.ComponentType<{ clas
 type GroupItem = { label: string; icon: React.ComponentType<{ className?: string }>; children: LeafItem[] };
 type NavItem = LeafItem | GroupItem;
 
-const navItems: NavItem[] = [
+type NavItemWithRole = NavItem & { adminOnly?: boolean };
+
+const navItems: NavItemWithRole[] = [
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
   {
     label: "Sales & Payments",
@@ -46,18 +48,21 @@ const navItems: NavItem[] = [
     ],
   },
   { href: "/reports", label: "Reports", icon: BarChart3 },
-  { href: "/settings", label: "Settings", icon: Settings },
+  { href: "/settings", label: "Settings", icon: Settings, adminOnly: true },
 ];
 
 function isLeaf(item: NavItem): item is LeafItem {
   return (item as LeafItem).href !== undefined;
 }
 
-export default function Sidebar() {
+export default function Sidebar({ role }: { role?: string }) {
   const pathname = usePathname();
+  // Admin-only items disappear from the sidebar entirely for managers; they
+  // can't even see Settings exists.
+  const visibleNav = navItems.filter((item) => !item.adminOnly || role === "ADMIN");
   const [openGroups, setOpenGroups] = useState<Record<string, boolean>>(() => {
     const initial: Record<string, boolean> = {};
-    for (const item of navItems) {
+    for (const item of visibleNav) {
       if (!isLeaf(item)) {
         initial[item.label] = item.children.some((c) => pathname.startsWith(c.href));
       }
@@ -93,7 +98,7 @@ export default function Sidebar() {
 
       {/* Nav */}
       <nav className="flex-1 px-3 py-4 space-y-0.5 overflow-y-auto">
-        {navItems.map((item) => {
+        {visibleNav.map((item) => {
           if (isLeaf(item)) {
             const Icon = item.icon!;
             const active = pathname === item.href || (item.href !== "/dashboard" && pathname.startsWith(item.href));
