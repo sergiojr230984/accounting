@@ -23,14 +23,16 @@ function pdfCurrency(value: string | number): string {
 export interface InvoicePDFData {
   invoiceNumber: string;
   invoiceDate: string | Date;
-  dueDate: string | Date;
+  dueDate: string | Date | null;
   subtotal: string | number;
   taxAmount: string | number;
   totalAmount: string | number;
   paidAmount: string | number;
-  downPayment: string | number;
+  downPayment?: string | number;
   creditCardFee?: string | number;
   notes: string | null;
+  // For customer invoices this is the customer (Bill To). For supplier
+  // bills / purchase orders this is the supplier (Vendor).
   customer: {
     name: string;
     email: string | null;
@@ -40,7 +42,9 @@ export interface InvoicePDFData {
   items: {
     description: string;
     quantity: string | number;
-    unitPrice: string | number;
+    // unitPrice for customer invoices, unitCost for supplier bills.
+    unitPrice?: string | number;
+    unitCost?: string | number;
     taxRate: string | number;
     lineTotal: string | number;
   }[];
@@ -52,6 +56,9 @@ export interface InvoicePDFData {
     phone?: string | null;
     creditCardFeeLabel?: string | null;
   } | null;
+  // 'customer' (default) prints INVOICE + BILL TO + Unit price.
+  // 'supplier' prints PURCHASE ORDER + VENDOR + Unit cost.
+  kind?: "customer" | "supplier";
 }
 
 export function generateInvoicePDF(invoice: InvoicePDFData): jsPDF {
@@ -122,7 +129,9 @@ export function generateInvoicePDF(invoice: InvoicePDFData): jsPDF {
   doc.setFont("helvetica", "bold");
   doc.setFontSize(28);
   doc.setTextColor(31, 41, 55);
-  doc.text("INVOICE", pageWidth - margin, 56, { align: "right" });
+  const titleText = invoice.kind === "supplier" ? "PURCHASE ORDER" : "INVOICE";
+  doc.setFontSize(invoice.kind === "supplier" ? 22 : 28);
+  doc.text(titleText, pageWidth - margin, 56, { align: "right" });
 
   doc.setFont("helvetica", "normal");
   doc.setFontSize(10);
@@ -137,7 +146,12 @@ export function generateInvoicePDF(invoice: InvoicePDFData): jsPDF {
   doc.setTextColor(31, 41, 55);
   doc.setFont("helvetica", "bold");
   doc.text(format(new Date(invoice.invoiceDate), "MMM d, yyyy"), pageWidth - margin - 140, metaY + 14);
-  doc.text(format(new Date(invoice.dueDate), "MMM d, yyyy"), pageWidth - margin, metaY + 14, { align: "right" });
+  doc.text(
+    invoice.dueDate ? format(new Date(invoice.dueDate), "MMM d, yyyy") : "On receipt",
+    pageWidth - margin,
+    metaY + 14,
+    { align: "right" }
+  );
   const rightColumnEnd = metaY + 14;
 
   // ─── BILL TO ───────────────────────────────────────────────────
@@ -148,7 +162,7 @@ export function generateInvoicePDF(invoice: InvoicePDFData): jsPDF {
   doc.setFont("helvetica", "normal");
   doc.setFontSize(9);
   doc.setTextColor(156, 163, 175);
-  doc.text("BILL TO", margin, billToY);
+  doc.text(invoice.kind === "supplier" ? "VENDOR" : "BILL TO", margin, billToY);
   let cursorY = billToY + 14;
   doc.setFontSize(12);
   doc.setFont("helvetica", "bold");
@@ -174,13 +188,14 @@ export function generateInvoicePDF(invoice: InvoicePDFData): jsPDF {
 
   // Items table
   const tableStartY = cursorY + 24;
+  const priceHeader = invoice.kind === "supplier" ? "Unit cost" : "Unit price";
   autoTable(doc, {
     startY: tableStartY,
-    head: [["Description", "Qty", "Unit price", "Tax", "Amount"]],
+    head: [["Description", "Qty", priceHeader, "Tax", "Amount"]],
     body: invoice.items.map((i) => [
       i.description,
       String(i.quantity),
-      pdfCurrency(String(i.unitPrice)),
+      pdfCurrency(String(i.unitPrice ?? i.unitCost ?? 0)),
       `${(Number(i.taxRate) * 100).toFixed(0)}%`,
       pdfCurrency(String(i.lineTotal)),
     ]),

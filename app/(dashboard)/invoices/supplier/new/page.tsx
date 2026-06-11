@@ -57,7 +57,26 @@ export default function NewSupplierInvoicePage() {
     return list as Supplier[];
   }
 
-  useEffect(() => { loadSuppliers(); }, []);
+  useEffect(() => {
+    loadSuppliers();
+    // Pre-fill the bill / PO number from the company-profile settings.
+    fetch("/api/settings")
+      .then((r) => (r.ok ? r.json() : null))
+      .then(
+        (
+          p: {
+            supplierInvoicePrefix?: string;
+            supplierInvoiceNextSeq?: number;
+          } | null
+        ) => {
+          if (!p) return;
+          const prefix = p.supplierInvoicePrefix ?? "PO-2026-";
+          const seq = p.supplierInvoiceNextSeq ?? 1001;
+          setValue("invoiceNumber", `${prefix}${String(seq).padStart(4, "0")}`);
+        }
+      )
+      .catch(() => {});
+  }, [setValue]);
 
   async function handleExtracted(data: {
     invoiceNumber?: string | null;

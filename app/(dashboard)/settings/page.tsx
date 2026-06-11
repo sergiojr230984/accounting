@@ -17,10 +17,11 @@ import {
   UserCircle,
   KeyRound,
   Power,
+  Hash,
 } from "lucide-react";
 import { format } from "date-fns";
 
-type Section = "users" | "company" | "taxes" | "fees";
+type Section = "users" | "company" | "taxes" | "fees" | "numbering";
 
 interface CompanyProfile {
   id: string;
@@ -31,6 +32,10 @@ interface CompanyProfile {
   phone: string | null;
   creditCardFeeRate: string;
   creditCardFeeLabel: string;
+  customerInvoicePrefix: string;
+  customerInvoiceNextSeq: number;
+  supplierInvoicePrefix: string;
+  supplierInvoiceNextSeq: number;
 }
 
 interface TaxRate {
@@ -66,6 +71,7 @@ export default function SettingsPage() {
           <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide px-3 py-2">Sales & Payments</p>
           {[
             { key: "company" as const, label: "Company profile & logo", icon: Building2 },
+            { key: "numbering" as const, label: "Invoice numbering", icon: Hash },
             { key: "taxes" as const, label: "Sales taxes", icon: Receipt },
             { key: "fees" as const, label: "Credit card fee", icon: CreditCard },
           ].map(({ key, label, icon: Icon }) => (
@@ -87,6 +93,7 @@ export default function SettingsPage() {
         <div className="col-span-12 md:col-span-9">
           {section === "users" && <UsersSection />}
           {section === "company" && <CompanySection />}
+          {section === "numbering" && <NumberingSection />}
           {section === "taxes" && <TaxesSection />}
           {section === "fees" && <FeesSection />}
         </div>
@@ -971,5 +978,127 @@ function UserRowDisplay({
         </tr>
       )}
     </>
+  );
+}
+
+function NumberingSection() {
+  const { profile, setProfile, loading } = useProfile();
+  const [saving, setSaving] = useState(false);
+  const [savedAt, setSavedAt] = useState<Date | null>(null);
+  const [error, setError] = useState("");
+
+  if (loading || !profile) return <div className="card animate-pulse h-48 bg-gray-50" />;
+
+  function update<K extends keyof CompanyProfile>(key: K, value: CompanyProfile[K]) {
+    setProfile((p) => (p ? { ...p, [key]: value } : p));
+  }
+
+  async function save() {
+    if (!profile) return;
+    setError("");
+    setSaving(true);
+    try {
+      const res = await fetch("/api/settings", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          customerInvoicePrefix: profile.customerInvoicePrefix,
+          customerInvoiceNextSeq: Number(profile.customerInvoiceNextSeq) || 1,
+          supplierInvoicePrefix: profile.supplierInvoicePrefix,
+          supplierInvoiceNextSeq: Number(profile.supplierInvoiceNextSeq) || 1,
+        }),
+      });
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}));
+        setError(d.error?.formErrors?.[0] ?? d.error ?? "Save failed");
+        return;
+      }
+      setSavedAt(new Date());
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  const customerPreview = `${profile.customerInvoicePrefix ?? ""}${String(profile.customerInvoiceNextSeq ?? 0).padStart(4, "0")}`;
+  const supplierPreview = `${profile.supplierInvoicePrefix ?? ""}${String(profile.supplierInvoiceNextSeq ?? 0).padStart(4, "0")}`;
+
+  return (
+    <div className="card space-y-6">
+      <div>
+        <h2 className="text-lg font-bold text-gray-900">Invoice numbering</h2>
+        <p className="text-sm text-gray-500 mt-1">
+          Set the prefix and the next sequence number for each invoice type.
+          Every time you save a new invoice or bill, the counter advances by
+          one automatically. The sequence number is zero-padded to 4 digits.
+        </p>
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        {/* Customer invoices */}
+        <div className="space-y-3 p-4 border border-gray-100 rounded-xl">
+          <h3 className="font-semibold text-gray-900">Customer invoices</h3>
+          <div>
+            <label className="label">Prefix</label>
+            <input
+              className="input"
+              placeholder="INV-2026-"
+              value={profile.customerInvoicePrefix ?? ""}
+              onChange={(e) => update("customerInvoicePrefix", e.target.value)}
+            />
+            <p className="text-xs text-gray-400 mt-1">Goes before the number. Include the year if you want it (e.g. INV-2026-).</p>
+          </div>
+          <div>
+            <label className="label">Next number</label>
+            <input
+              type="number"
+              min="1"
+              className="input"
+              value={profile.customerInvoiceNextSeq ?? 1001}
+              onChange={(e) => update("customerInvoiceNextSeq", Number(e.target.value) || 1)}
+            />
+          </div>
+          <div className="text-xs text-gray-500 pt-1 border-t">
+            Next invoice will be: <span className="font-mono font-semibold text-brand-700">{customerPreview}</span>
+          </div>
+        </div>
+
+        {/* Supplier bills / POs */}
+        <div className="space-y-3 p-4 border border-gray-100 rounded-xl">
+          <h3 className="font-semibold text-gray-900">Supplier bills / purchase orders</h3>
+          <div>
+            <label className="label">Prefix</label>
+            <input
+              className="input"
+              placeholder="PO-2026-"
+              value={profile.supplierInvoicePrefix ?? ""}
+              onChange={(e) => update("supplierInvoicePrefix", e.target.value)}
+            />
+          </div>
+          <div>
+            <label className="label">Next number</label>
+            <input
+              type="number"
+              min="1"
+              className="input"
+              value={profile.supplierInvoiceNextSeq ?? 1001}
+              onChange={(e) => update("supplierInvoiceNextSeq", Number(e.target.value) || 1)}
+            />
+          </div>
+          <div className="text-xs text-gray-500 pt-1 border-t">
+            Next bill will be: <span className="font-mono font-semibold text-brand-700">{supplierPreview}</span>
+          </div>
+        </div>
+      </div>
+
+      {error && <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg text-sm">{error}</div>}
+
+      <div className="flex items-center justify-end gap-3 pt-2 border-t">
+        {savedAt && <span className="text-xs text-green-600">Saved {savedAt.toLocaleTimeString()}</span>}
+        <button onClick={save} disabled={saving} className="btn-primary">
+          {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+          Save changes
+        </button>
+      </div>
+    </div>
   );
 }

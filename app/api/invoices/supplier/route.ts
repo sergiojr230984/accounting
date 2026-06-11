@@ -129,5 +129,14 @@ export async function POST(request: Request) {
     include: { supplier: true, items: true },
   });
 
+  // Bump the supplier-invoice counter so the next /invoices/supplier/new
+  // pre-fills the next sequence number.
+  await prisma.companyProfile
+    .update({
+      where: { id: "default" },
+      data: { supplierInvoiceNextSeq: { increment: 1 } },
+    })
+    .catch(() => undefined);
+
   return NextResponse.json(invoice, { status: 201 });
 }

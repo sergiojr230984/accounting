@@ -12,6 +12,10 @@ const updateSchema = z.object({
   phone: z.string().optional().nullable(),
   creditCardFeeRate: z.string().regex(/^\d+(\.\d+)?$/).optional(),
   creditCardFeeLabel: z.string().optional(),
+  customerInvoicePrefix: z.string().optional(),
+  customerInvoiceNextSeq: z.number().int().min(0).optional(),
+  supplierInvoicePrefix: z.string().optional(),
+  supplierInvoiceNextSeq: z.number().int().min(0).optional(),
 });
 
 async function getOrCreateProfile() {
@@ -64,6 +68,10 @@ export async function PATCH(request: Request) {
   if (parsed.data.phone !== undefined) data.phone = parsed.data.phone || null;
   if (parsed.data.creditCardFeeRate !== undefined) data.creditCardFeeRate = parsed.data.creditCardFeeRate;
   if (parsed.data.creditCardFeeLabel !== undefined) data.creditCardFeeLabel = parsed.data.creditCardFeeLabel || "Credit card processing fee";
+  if (parsed.data.customerInvoicePrefix !== undefined) data.customerInvoicePrefix = parsed.data.customerInvoicePrefix;
+  if (parsed.data.customerInvoiceNextSeq !== undefined) data.customerInvoiceNextSeq = parsed.data.customerInvoiceNextSeq;
+  if (parsed.data.supplierInvoicePrefix !== undefined) data.supplierInvoicePrefix = parsed.data.supplierInvoicePrefix;
+  if (parsed.data.supplierInvoiceNextSeq !== undefined) data.supplierInvoiceNextSeq = parsed.data.supplierInvoiceNextSeq;
 
   const profile = await prisma.companyProfile.update({ where: { id: "default" }, data });
   return NextResponse.json(profile);

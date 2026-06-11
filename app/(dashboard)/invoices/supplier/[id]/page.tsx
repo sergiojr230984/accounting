@@ -6,13 +6,14 @@ import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import Link from "next/link";
-import { ArrowLeft, Edit2, Save, X, Trash2, Loader2 } from "lucide-react";
+import { ArrowLeft, Edit2, Save, X, Trash2, Loader2, Printer } from "lucide-react";
 import { format } from "date-fns";
 import PaymentBadge from "@/components/PaymentBadge";
 import CategoryBadge from "@/components/CategoryBadge";
 import FileUpload from "@/components/FileUpload";
 import InvoiceItemsEditor from "@/components/InvoiceItemsEditor";
 import { formatCurrency } from "@/lib/money";
+import { generateInvoicePDF } from "@/lib/invoice-pdf";
 
 const editSchema = z.object({
   invoiceNumber: z.string().min(1),
@@ -116,6 +117,60 @@ export default function SupplierInvoiceDetailPage() {
     router.push("/invoices/supplier");
   }
 
+  async function fetchCompany() {
+    try {
+      const res = await fetch("/api/settings");
+      if (res.ok) return await res.json();
+    } catch {
+      // ignore
+    }
+    return null;
+  }
+
+  async function buildPdf() {
+    if (!invoice) return null;
+    const company = await fetchCompany();
+    return generateInvoicePDF({
+      invoiceNumber: invoice.invoiceNumber,
+      invoiceDate: invoice.invoiceDate,
+      dueDate: invoice.dueDate,
+      subtotal: invoice.subtotal,
+      taxAmount: invoice.taxAmount,
+      totalAmount: invoice.totalAmount,
+      paidAmount: invoice.paidAmount,
+      notes: invoice.notes,
+      customer: {
+        name: invoice.supplier.name,
+        email: invoice.supplier.email,
+        phone: invoice.supplier.phone,
+        address: null,
+      },
+      items: invoice.items.map((i) => ({
+        description: i.description,
+        quantity: i.quantity,
+        unitCost: i.unitCost,
+        taxRate: i.taxRate,
+        lineTotal: i.lineTotal,
+      })),
+      company,
+      kind: "supplier",
+    });
+  }
+
+  async function printPDF() {
+    const doc = await buildPdf();
+    if (!doc) return;
+    const url = doc.output("bloburl");
+    window.open(url, "_blank");
+  }
+
+  async function downloadPDF() {
+    if (!invoice) return;
+    const doc = await buildPdf();
+    if (!doc) return;
+    doc.save(`${invoice.invoiceNumber}.pdf`);
+  }
+
   if (!invoice) {
     return <div className="flex items-center justify-center h-48"><Loader2 className="w-6 h-6 animate-spin text-brand-500" /></div>;
   }
@@ -137,6 +192,14 @@ export default function SupplierInvoiceDetailPage() {
         <div className="flex items-center gap-2">
           {!editing ? (
             <>
+              <button onClick={printPDF} className="btn-primary" title="Print or save as PDF">
+                <Printer className="w-4 h-4" />
+                Print
+              </button>
+              <button onClick={downloadPDF} className="btn-secondary" title="Download PDF">
+                <Save className="w-4 h-4" />
+                PDF
+              </button>
               <button onClick={() => setEditing(true)} className="btn-secondary">
                 <Edit2 className="w-4 h-4" /> Edit
               </button>

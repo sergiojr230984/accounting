@@ -156,5 +156,15 @@ export async function POST(request: Request) {
     include: { customer: true, items: true },
   });
 
+  // Advance the auto-numbering counter so the next /invoices/customer/new
+  // pre-fills the next sequence. We always bump (even if the user typed a
+  // custom invoice number) so the counter never goes backwards.
+  await prisma.companyProfile
+    .update({
+      where: { id: "default" },
+      data: { customerInvoiceNextSeq: { increment: 1 } },
+    })
+    .catch(() => undefined);
+
   return NextResponse.json(invoice, { status: 201 });
 }

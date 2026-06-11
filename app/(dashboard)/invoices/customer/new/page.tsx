@@ -100,16 +100,23 @@ export default function NewCustomerInvoicePage() {
       .catch(() => {});
     fetch("/api/settings")
       .then((r) => (r.ok ? r.json() : null))
-      .then((p: { creditCardFeeRate: string } | null) => {
-        if (p) setCcFeeRate(p.creditCardFeeRate);
-      })
-      .catch(() => {});
-    fetch("/api/invoices/customer?page=1&limit=1")
-      .then((r) => r.json())
-      .then(({ total }: { total: number }) => {
-        const next = String(1001 + total).padStart(4, "0");
-        setInvoiceNumber(`INV-${new Date().getFullYear()}-${next}`);
-      })
+      .then(
+        (
+          p: {
+            creditCardFeeRate: string;
+            customerInvoicePrefix?: string;
+            customerInvoiceNextSeq?: number;
+          } | null
+        ) => {
+          if (!p) return;
+          setCcFeeRate(p.creditCardFeeRate);
+          // Pre-fill the next sequence number from settings. User can still
+          // override it manually before saving.
+          const prefix = p.customerInvoicePrefix ?? "INV-2026-";
+          const seq = p.customerInvoiceNextSeq ?? 1001;
+          setInvoiceNumber(`${prefix}${String(seq).padStart(4, "0")}`);
+        }
+      )
       .catch(() => {});
   }, []);
 

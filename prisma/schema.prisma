@@ -165,6 +165,10 @@ model CompanyProfile {
   phone              String?
   creditCardFeeRate  Decimal  @db.Decimal(5, 4) @default(0)
   creditCardFeeLabel String   @default("Credit card processing fee")
+  customerInvoicePrefix   String  @default("INV-2026-")
+  customerInvoiceNextSeq  Int     @default(1001)
+  supplierInvoicePrefix   String  @default("PO-2026-")
+  supplierInvoiceNextSeq  Int     @default(1001)
   createdAt          DateTime @default(now())
   updatedAt          DateTime @updatedAt
 }
