@@ -32,19 +32,18 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
       // demotions take effect immediately, without needing the user to sign
       // out and back in. Cheap query, small table, internal tool — the
       // ~1ms overhead is fine. Falls back to the token's cached role if
-      // the lookup fails for any reason.
+      // the lookup fails for any reason. We deliberately do NOT enforce the
+      // `active` flag here: authorize() already rejects deactivated users
+      // at sign-in, and the boolean has produced false-negatives that strip
+      // session.user from legitimately-active accounts.
       let role = (token.role as string) ?? "MANAGER";
       const id = (token.id as string) ?? (token.sub as string) ?? "";
       if (id) {
         try {
           const u = await prisma.user.findUnique({
             where: { id },
-            select: { role: true, active: true },
+            select: { role: true },
           });
-          if (u?.active === false) {
-            // Deactivated mid-session — strip everything so requireAuth fails.
-            return { ...session, user: undefined } as unknown as typeof session;
-          }
           if (u?.role) role = u.role;
         } catch {
           // keep token role on transient DB failure
