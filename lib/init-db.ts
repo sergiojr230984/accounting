@@ -206,6 +206,28 @@ export async function initializeDatabase() {
       console.log("[init-db] Restored admin@lacuevita.com role -> ADMIN");
     }
 
+    // Permanent admin list — these emails are always promoted to ADMIN on
+    // boot. Add new admins by setting the ADMIN_EMAILS env var to a
+    // comma-separated list (e.g. ADMIN_EMAILS="ana@example.com,jose@example.com").
+    // Hard-coded entries below cover the real production admins so new
+    // deployments don't need the env var to work out of the box.
+    const builtInAdmins = [
+      "admin@lacuevita.com",
+      "sales@lacuevitafurniture.com",
+    ];
+    const envAdmins = (process.env.ADMIN_EMAILS ?? "")
+      .split(",")
+      .map((s) => s.trim().toLowerCase())
+      .filter(Boolean);
+    const adminEmails = Array.from(new Set([...builtInAdmins, ...envAdmins]));
+    for (const email of adminEmails) {
+      const u = await prisma.user.findUnique({ where: { email } });
+      if (u && u.role !== "ADMIN") {
+        await prisma.user.update({ where: { id: u.id }, data: { role: "ADMIN" } });
+        console.log(`[init-db] Promoted ${email} -> ADMIN`);
+      }
+    }
+
     const adminCount = await prisma.user.count({ where: { role: "ADMIN" } });
     if (adminCount === 0) {
       const hash = await bcrypt.hash("admin123", 12);
