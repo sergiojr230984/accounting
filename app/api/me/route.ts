@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
+import { prisma } from "@/lib/prisma";
 
 export const dynamic = "force-dynamic";
 
@@ -21,13 +22,40 @@ export async function GET() {
     email?: string | null;
     role?: string;
   };
+
+  // Look up the DB row directly so we can compare what NextAuth sees vs
+  // what's actually persisted. Helps diagnose why a built-in admin is
+  // still showing as MANAGER in the sidebar.
+  let dbById: { id: string; email: string; role: string } | null = null;
+  let dbByEmail: { id: string; email: string; role: string } | null = null;
+  try {
+    if (u.id) {
+      dbById = await prisma.user.findUnique({
+        where: { id: u.id },
+        select: { id: true, email: true, role: true },
+      });
+    }
+    if (u.email) {
+      dbByEmail = await prisma.user.findFirst({
+        where: { email: { equals: u.email, mode: "insensitive" } },
+        select: { id: true, email: true, role: true },
+      });
+    }
+  } catch {
+    // ignore — diagnostic only
+  }
+
   return NextResponse.json(
     {
       authenticated: true,
-      id: u.id ?? null,
-      name: u.name ?? null,
-      email: u.email ?? null,
-      role: u.role ?? null,
+      session: {
+        id: u.id ?? null,
+        name: u.name ?? null,
+        email: u.email ?? null,
+        role: u.role ?? null,
+      },
+      dbLookupById: dbById,
+      dbLookupByEmail: dbByEmail,
       hint:
         u.role === "ADMIN"
           ? "You are an admin. Settings, taxes, employees, and invoice delete will all work."

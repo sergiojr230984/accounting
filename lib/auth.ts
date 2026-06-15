@@ -38,32 +38,44 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
       // session.user from legitimately-active accounts.
       let role = (token.role as string) ?? "MANAGER";
       const id = (token.id as string) ?? (token.sub as string) ?? "";
-      if (id) {
-        try {
-          const u = await prisma.user.findUnique({
-            where: { id },
-            select: { role: true, email: true },
-          });
-          if (u?.role) role = u.role;
+      const tokenEmail = ((token.email as string) ?? "").toLowerCase().trim();
 
-          // Safety net: auto-promote built-in admins on every session
-          // resolution. Catches accounts that init-db missed (e.g., due to
-          // email casing) and means the promotion takes effect on the next
-          // request without needing a server restart.
-          const builtInAdmins = [
-            "admin@lacuevita.com",
-            "sales@lacuevitafurniture.com",
-          ];
-          const userEmail = (u?.email ?? (token.email as string) ?? "").toLowerCase();
-          if (role !== "ADMIN" && builtInAdmins.includes(userEmail)) {
-            await prisma.user
-              .update({ where: { id }, data: { role: "ADMIN" } })
-              .catch(() => undefined);
-            role = "ADMIN";
-          }
-        } catch {
-          // keep token role on transient DB failure
+      const BUILT_IN_ADMINS = new Set([
+        "admin@lacuevita.com",
+        "sales@lacuevitafurniture.com",
+      ]);
+
+      try {
+        // Try id first, fall back to case-insensitive email lookup so we
+        // find the row even when the JWT id is stale or the DB email has
+        // unexpected casing.
+        let dbUser: { id: string; role: string; email: string } | null = null;
+        if (id) {
+          dbUser = await prisma.user.findUnique({
+            where: { id },
+            select: { id: true, role: true, email: true },
+          });
         }
+        if (!dbUser && tokenEmail) {
+          dbUser = await prisma.user.findFirst({
+            where: { email: { equals: tokenEmail, mode: "insensitive" } },
+            select: { id: true, role: true, email: true },
+          });
+        }
+        if (dbUser?.role) role = dbUser.role;
+
+        // Safety net: auto-promote built-in admins on every session
+        // resolution. Catches accounts that init-db missed and takes
+        // effect on the user's next request — no server restart needed.
+        const dbEmail = (dbUser?.email ?? tokenEmail).toLowerCase().trim();
+        if (dbUser && role !== "ADMIN" && BUILT_IN_ADMINS.has(dbEmail)) {
+          await prisma.user
+            .update({ where: { id: dbUser.id }, data: { role: "ADMIN" } })
+            .catch((e) => console.error("[auth] admin promote failed:", e));
+          role = "ADMIN";
+        }
+      } catch (e) {
+        console.error("[auth] session role lookup failed:", e);
       }
 
       const user = {
