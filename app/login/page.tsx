@@ -31,24 +31,31 @@ export default function LoginPage() {
   } = useForm<FormData>({ resolver: zodResolver(schema) });
 
   async function onSubmit(data: FormData) {
+    console.log("[login] onSubmit fired", { email: data.email, hasPassword: !!data.password });
     setError("");
     const origin = typeof window !== "undefined" ? window.location.origin : "";
-    const result = await signIn("credentials", {
-      email: data.email,
-      password: data.password,
-      redirect: false,
-      callbackUrl: `${origin}/dashboard`,
-    });
-    if (result?.error) {
-      setError("Invalid email or password");
-      return;
-    }
-    // Force same-origin navigation — never let a stale NEXTAUTH_URL env var
-    // send the browser to localhost or any other host.
-    if (typeof window !== "undefined") {
-      window.location.href = `${window.location.origin}/dashboard`;
-    } else {
-      router.push("/dashboard");
+    try {
+      const result = await signIn("credentials", {
+        email: data.email,
+        password: data.password,
+        redirect: false,
+        callbackUrl: `${origin}/dashboard`,
+      });
+      console.log("[login] signIn result", result);
+      if (result?.error) {
+        setError(`Sign-in failed: ${result.error}`);
+        return;
+      }
+      // Force same-origin navigation — never let a stale NEXTAUTH_URL env var
+      // send the browser to localhost or any other host.
+      if (typeof window !== "undefined") {
+        window.location.href = `${window.location.origin}/dashboard`;
+      } else {
+        router.push("/dashboard");
+      }
+    } catch (e) {
+      console.error("[login] signIn threw", e);
+      setError(`Sign-in error: ${e instanceof Error ? e.message : String(e)}`);
     }
   }
 
@@ -117,7 +124,17 @@ export default function LoginPage() {
             </p>
           </div>
 
-          <form onSubmit={handleSubmit(onSubmit)} className="space-y-4" noValidate>
+          <form
+            onSubmit={(e) => {
+              console.log("[login] form submit event fired", {
+                hasErrors: Object.keys(errors).length,
+                errors,
+              });
+              return handleSubmit(onSubmit)(e);
+            }}
+            className="space-y-4"
+            noValidate
+          >
             <div>
               <label className="label" htmlFor="email">Email</label>
               <input
