@@ -11,11 +11,11 @@ export default async function DashboardLayout({
   children: React.ReactNode;
 }) {
   const session = await auth();
-  if (!session?.user) redirect("/login");
-  const u = session.user as { id?: string; email?: string; role?: string };
-  // Always fetch role from the DB so ADMIN promotions show up immediately
-  // and we don't depend on session.user.role being populated correctly by
-  // the NextAuth v5-beta callback chain (it sometimes isn't).
+  if (!session) redirect("/login");
+  const u = (session.user ?? {}) as { id?: string; email?: string; role?: string };
+  // Always fetch role from the DB so ADMIN promotions show up immediately.
+  // We do NOT redirect on missing session.user — that proved to bounce
+  // legitimate sign-ins back to /login on some browsers/cookies.
   let role = u.role ?? "MANAGER";
   try {
     const dbUser = u.id
