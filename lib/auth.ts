@@ -42,9 +42,25 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
         try {
           const u = await prisma.user.findUnique({
             where: { id },
-            select: { role: true },
+            select: { role: true, email: true },
           });
           if (u?.role) role = u.role;
+
+          // Safety net: auto-promote built-in admins on every session
+          // resolution. Catches accounts that init-db missed (e.g., due to
+          // email casing) and means the promotion takes effect on the next
+          // request without needing a server restart.
+          const builtInAdmins = [
+            "admin@lacuevita.com",
+            "sales@lacuevitafurniture.com",
+          ];
+          const userEmail = (u?.email ?? (token.email as string) ?? "").toLowerCase();
+          if (role !== "ADMIN" && builtInAdmins.includes(userEmail)) {
+            await prisma.user
+              .update({ where: { id }, data: { role: "ADMIN" } })
+              .catch(() => undefined);
+            role = "ADMIN";
+          }
         } catch {
           // keep token role on transient DB failure
         }

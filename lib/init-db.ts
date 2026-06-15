@@ -221,10 +221,15 @@ export async function initializeDatabase() {
       .filter(Boolean);
     const adminEmails = Array.from(new Set([...builtInAdmins, ...envAdmins]));
     for (const email of adminEmails) {
-      const u = await prisma.user.findUnique({ where: { email } });
+      // Case-insensitive lookup — Postgres is case-sensitive on unique
+      // columns, so an account stored as "Sales@..." would be missed by
+      // a literal findUnique on "sales@...".
+      const u = await prisma.user.findFirst({
+        where: { email: { equals: email, mode: "insensitive" } },
+      });
       if (u && u.role !== "ADMIN") {
         await prisma.user.update({ where: { id: u.id }, data: { role: "ADMIN" } });
-        console.log(`[init-db] Promoted ${email} -> ADMIN`);
+        console.log(`[init-db] Promoted ${u.email} -> ADMIN`);
       }
     }
 
