@@ -3,6 +3,7 @@ import { redirect } from "next/navigation";
 import Sidebar from "@/components/Sidebar";
 import TopBar from "@/components/TopBar";
 import Providers from "@/components/Providers";
+import { prisma } from "@/lib/prisma";
 
 export default async function DashboardLayout({
   children,
@@ -10,8 +11,22 @@ export default async function DashboardLayout({
   children: React.ReactNode;
 }) {
   const session = await auth();
-  if (!session) redirect("/login");
-  const role = ((session.user as { role?: string }) ?? {}).role ?? "MANAGER";
+  if (!session?.user) redirect("/login");
+  const u = session.user as { id?: string; email?: string; role?: string };
+  // Always fetch role from the DB so ADMIN promotions show up immediately
+  // and we don't depend on session.user.role being populated correctly by
+  // the NextAuth v5-beta callback chain (it sometimes isn't).
+  let role = u.role ?? "MANAGER";
+  try {
+    const dbUser = u.id
+      ? await prisma.user.findUnique({ where: { id: u.id }, select: { role: true } })
+      : u.email
+        ? await prisma.user.findUnique({ where: { email: u.email }, select: { role: true } })
+        : null;
+    if (dbUser?.role) role = dbUser.role;
+  } catch {
+    // keep session role on transient DB failure
+  }
 
   return (
     <Providers>
