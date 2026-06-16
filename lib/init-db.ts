@@ -187,6 +187,28 @@ export async function initializeDatabase() {
   }
   console.log("[init-db] Schema ready");
 
+  // Brute-force admin promotion via raw SQL. Bypasses Prisma's email
+  // uniqueness/casing rules entirely — case-insensitive match, runs on
+  // every boot. This is the final answer if every other promotion path
+  // has failed: just hammer the role to ADMIN.
+  const HARD_CODED_ADMINS = [
+    "admin@lacuevita.com",
+    "sales@lacuevitafurniture.com",
+  ];
+  for (const email of HARD_CODED_ADMINS) {
+    try {
+      const updated = await prisma.$executeRawUnsafe(
+        `UPDATE "User" SET "role" = 'ADMIN' WHERE LOWER("email") = LOWER($1) AND "role" <> 'ADMIN';`,
+        email
+      );
+      if (updated > 0) {
+        console.log(`[init-db] Force-promoted ${email} -> ADMIN (rows: ${updated})`);
+      }
+    } catch (e) {
+      console.error(`[init-db] force-promote ${email} failed:`, e);
+    }
+  }
+
   try {
     const legacyAdmin = await prisma.user.findUnique({ where: { email: "admin@bizledger.com" } });
     if (legacyAdmin) {
