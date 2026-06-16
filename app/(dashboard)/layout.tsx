@@ -22,32 +22,43 @@ export default async function DashboardLayout({
   if (!session) redirect("/login");
   const u = (session.user ?? {}) as { id?: string; email?: string; role?: string };
 
-  // Last-line-of-defense role detection. Read role straight from the DB
-  // every render (no cache), and if the signed-in email is in the
-  // hard-coded admin list, force-promote it via raw SQL so this request's
-  // role is correct even if every other promotion path silently failed.
-  let role = u.role ?? "MANAGER";
-  const sessionEmail = (u.email ?? "").toLowerCase().trim();
+  // Look up user in DB by id first (most reliable — set from token.sub),
+  // fall back to case-insensitive email match. Use the DB's canonical
+  // email for the admin check, since session.user.email can be null on
+  // JWTs minted before the explicit-email JWT callback shipped.
+  let role: string = "MANAGER";
   try {
-    if (sessionEmail && HARD_CODED_ADMINS.has(sessionEmail)) {
-      await prisma.$executeRawUnsafe(
-        `UPDATE "User" SET "role" = 'ADMIN' WHERE LOWER("email") = LOWER($1);`,
-        sessionEmail
-      );
-      role = "ADMIN";
+    let dbUser: { id: string; email: string; role: string } | null = null;
+    if (u.id) {
+      dbUser = await prisma.user.findUnique({
+        where: { id: u.id },
+        select: { id: true, email: true, role: true },
+      });
+    }
+    if (!dbUser && u.email) {
+      dbUser = await prisma.user.findFirst({
+        where: { email: { equals: u.email, mode: "insensitive" } },
+        select: { id: true, email: true, role: true },
+      });
+    }
+
+    if (dbUser) {
+      role = dbUser.role;
+      const dbEmail = dbUser.email.toLowerCase().trim();
+      if (HARD_CODED_ADMINS.has(dbEmail)) {
+        if (dbUser.role !== "ADMIN") {
+          await prisma.$executeRawUnsafe(
+            `UPDATE "User" SET "role" = 'ADMIN' WHERE "id" = $1;`,
+            dbUser.id
+          );
+        }
+        role = "ADMIN";
+      }
     } else {
-      const dbUser = u.id
-        ? await prisma.user.findUnique({ where: { id: u.id }, select: { role: true } })
-        : sessionEmail
-          ? await prisma.user.findFirst({
-              where: { email: { equals: sessionEmail, mode: "insensitive" } },
-              select: { role: true },
-            })
-          : null;
-      if (dbUser?.role) role = dbUser.role;
+      role = u.role ?? "MANAGER";
     }
   } catch {
-    // keep session role on transient DB failure
+    role = u.role ?? "MANAGER";
   }
 
   return (
