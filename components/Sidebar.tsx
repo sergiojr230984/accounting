@@ -48,7 +48,7 @@ const navItems: NavItemWithRole[] = [
     ],
   },
   { href: "/reports", label: "Reports", icon: BarChart3 },
-  { href: "/settings", label: "Settings", icon: Settings, adminOnly: true },
+  { href: "/settings", label: "Settings", icon: Settings },
 ];
 
 function isLeaf(item: NavItem): item is LeafItem {
@@ -160,7 +160,7 @@ export default function Sidebar({ role }: { role?: string }) {
 
       <div className="px-5 py-3 border-t border-gray-100">
         <p className="text-gray-400 text-[10px] text-center">
-          La Cuevita Accounting · v1.1.9 · role: {role ?? "none"}
+          La Cuevita Accounting · v1.2.0 · role: {role ?? "none"}
         </p>
       </div>
     </aside>
