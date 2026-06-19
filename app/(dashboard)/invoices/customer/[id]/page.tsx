@@ -52,6 +52,7 @@ interface InvoiceDetail {
   sentAt: string | null;
   employeeId: string | null;
   commissionRate: string;
+  employee: { id: string; name: string } | null;
   customer: { id: string; name: string; email: string | null; phone: string | null; address: string | null };
   items: { id: string; description: string; quantity: string; unitPrice: string; taxRate: string; lineTotal: string }[];
   payments: { id: string; amount: string; paymentDate: string; notes: string | null }[];

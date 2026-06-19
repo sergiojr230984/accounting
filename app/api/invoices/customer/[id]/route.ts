@@ -44,6 +44,7 @@ export async function GET(
       items: true,
       payments: { orderBy: { paymentDate: "desc" } },
       files: true,
+      employee: { select: { id: true, name: true } },
     },
   });
 
