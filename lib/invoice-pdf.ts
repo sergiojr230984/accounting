@@ -274,7 +274,7 @@ export function generateInvoicePDF(invoice: InvoicePDFData): jsPDF {
   // ─── TOTALS (lower-right) ──────────────────────────────────────
   const afterTableY =
     (doc as unknown as { lastAutoTable: { finalY: number } }).lastAutoTable.finalY + 20;
-  const labelX = pageWidth - margin - 180;
+  const labelX = pageWidth - margin - 220;
   const valueX = pageWidth - margin;
 
   let totalsY = afterTableY;
@@ -319,9 +319,9 @@ export function generateInvoicePDF(invoice: InvoicePDFData): jsPDF {
   doc.line(labelX, totalsY - 8, valueX, totalsY - 8);
   totalsY += 4;
   doc.setFont("helvetica", "bold");
-  doc.setFontSize(14);
+  doc.setFontSize(13);
   doc.setTextColor(...BRAND_DARK);
-  doc.text("Remaining Balance Due", labelX, totalsY);
+  doc.text("Balance Due", labelX, totalsY);
   doc.text(pdfCurrency(balance.toFixed(2)), valueX, totalsY, { align: "right" });
   totalsY += 30;
 
