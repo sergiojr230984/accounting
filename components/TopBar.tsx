@@ -11,6 +11,7 @@ interface TopBarProps {
 export default function TopBar({ user }: TopBarProps) {
   const [open, setOpen] = useState(false);
   const [companyName, setCompanyName] = useState("La Cuevita Furniture");
+  const [companyLogo, setCompanyLogo] = useState<string | null>(null);
   const ref = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -24,8 +25,9 @@ export default function TopBar({ user }: TopBarProps) {
   useEffect(() => {
     fetch("/api/settings")
       .then((r) => (r.ok ? r.json() : null))
-      .then((p: { name?: string | null } | null) => {
+      .then((p: { name?: string | null; logo?: string | null } | null) => {
         if (p?.name && p.name.trim()) setCompanyName(p.name);
+        if (p?.logo) setCompanyLogo(p.logo);
       })
       .catch(() => {});
   }, []);
@@ -39,6 +41,14 @@ export default function TopBar({ user }: TopBarProps) {
 
   return (
     <header className="h-14 bg-white border-b border-gray-200 flex items-center justify-end px-6 flex-shrink-0 gap-4">
+      {companyLogo && (
+        // eslint-disable-next-line @next/next/no-img-element
+        <img
+          src={companyLogo}
+          alt={companyName}
+          className="h-9 w-9 rounded-md object-contain"
+        />
+      )}
       <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg border border-gray-200 text-sm">
         <span className="font-semibold text-gray-800 uppercase text-xs tracking-wide">{companyName}</span>
         <span className="bg-brand-100 text-brand-700 text-[10px] font-bold uppercase px-1.5 py-0.5 rounded">Starter</span>

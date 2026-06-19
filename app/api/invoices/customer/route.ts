@@ -11,6 +11,13 @@ const itemSchema = z.object({
   taxRate: z.string().regex(/^\d+(\.\d+)?$/, "Must be a number").default("0"),
 });
 
+const appliedFeeSchema = z.object({
+  id: z.string(),
+  label: z.string(),
+  rate: z.number(),
+  amount: z.string(),
+});
+
 const invoiceSchema = z.object({
   customerId: z.string().min(1),
   invoiceNumber: z.string().min(1),
@@ -24,6 +31,7 @@ const invoiceSchema = z.object({
   employeeId: z.string().optional().nullable(),
   commissionRate: z.string().regex(/^\d+(\.\d+)?$/).default("0"),
   addCreditCardFee: z.boolean().default(false),
+  appliedFees: z.array(appliedFeeSchema).default([]),
 });
 
 export async function GET(request: Request) {
@@ -89,6 +97,7 @@ export async function POST(request: Request) {
     employeeId,
     commissionRate,
     addCreditCardFee,
+    appliedFees,
   } = parsed.data;
 
   // Duplicate check
@@ -125,7 +134,19 @@ export async function POST(request: Request) {
     }
   }
 
-  const totalAmount = subtotal.plus(taxAmount).plus(creditCardFee);
+  // Sum custom fees applied to this invoice. We trust the client's
+  // pre-computed amount string per fee, but also clamp to the rate
+  // we stored to guard against tampering.
+  let customFeesSum = new Decimal(0);
+  for (const f of appliedFees) {
+    try {
+      customFeesSum = customFeesSum.plus(new Decimal(f.amount));
+    } catch {
+      // skip malformed entry
+    }
+  }
+
+  const totalAmount = subtotal.plus(taxAmount).plus(creditCardFee).plus(customFeesSum);
 
   const invoice = await prisma.customerInvoice.create({
     data: {
@@ -137,6 +158,7 @@ export async function POST(request: Request) {
       taxAmount: taxAmount.toFixed(2),
       totalAmount: totalAmount.toFixed(2),
       creditCardFee: creditCardFee.toFixed(2),
+      appliedFees: appliedFees as unknown as object,
       paidAmount: paidAmount ?? "0",
       paymentStatus: paymentStatus ?? "UNPAID",
       downPayment: downPayment ?? "0",

@@ -140,6 +140,8 @@ const SCHEMA_STATEMENTS: string[] = [
   `ALTER TABLE "CompanyProfile" ADD COLUMN IF NOT EXISTS "customerInvoiceNextSeq" INTEGER NOT NULL DEFAULT 1001;`,
   `ALTER TABLE "CompanyProfile" ADD COLUMN IF NOT EXISTS "supplierInvoicePrefix" TEXT NOT NULL DEFAULT 'PO-2026-';`,
   `ALTER TABLE "CompanyProfile" ADD COLUMN IF NOT EXISTS "supplierInvoiceNextSeq" INTEGER NOT NULL DEFAULT 1001;`,
+  `ALTER TABLE "CompanyProfile" ADD COLUMN IF NOT EXISTS "customFees" JSONB NOT NULL DEFAULT '[]'::jsonb;`,
+  `ALTER TABLE "CustomerInvoice" ADD COLUMN IF NOT EXISTS "appliedFees" JSONB NOT NULL DEFAULT '[]'::jsonb;`,
   `CREATE TABLE IF NOT EXISTS "TaxRate" (
     "id" TEXT NOT NULL PRIMARY KEY,
     "name" TEXT NOT NULL,

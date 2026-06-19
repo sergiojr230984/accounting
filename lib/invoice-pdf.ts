@@ -41,6 +41,9 @@ export interface InvoicePDFData {
   paidAmount: string | number;
   downPayment?: string | number;
   creditCardFee?: string | number;
+  // Additional fees applied to this invoice (from Settings → Additional fees).
+  // Rendered one line each in the totals block, after Tax / Card fee.
+  appliedFees?: { label: string; amount: string | number }[];
   notes: string | null;
   // For customer invoices this is the customer (Bill To). For supplier
   // bills / purchase orders this is the supplier (Vendor).
@@ -299,6 +302,13 @@ export function generateInvoicePDF(invoice: InvoicePDFData): jsPDF {
     writeRow(company?.creditCardFeeLabel ?? "Card processing fee", pdfCurrency(ccFee.toFixed(2)), {
       muted: true,
     });
+  }
+
+  // Additional fees from Settings → Additional fees (one line per fee).
+  for (const fee of invoice.appliedFees ?? []) {
+    const amt = Number(fee.amount);
+    if (!isFinite(amt) || amt <= 0) continue;
+    writeRow(fee.label, pdfCurrency(amt.toFixed(2)), { muted: true });
   }
 
   // Divider before Total

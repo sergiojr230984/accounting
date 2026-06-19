@@ -21,7 +21,13 @@ import {
 } from "lucide-react";
 import { format } from "date-fns";
 
-type Section = "users" | "company" | "taxes" | "fees" | "numbering";
+type Section = "users" | "company" | "taxes" | "fees" | "customFees" | "numbering";
+
+interface CustomFee {
+  id: string;
+  label: string;
+  rate: number; // decimal — 0.05 = 5%
+}
 
 interface CompanyProfile {
   id: string;
@@ -32,6 +38,7 @@ interface CompanyProfile {
   phone: string | null;
   creditCardFeeRate: string;
   creditCardFeeLabel: string;
+  customFees: CustomFee[];
   customerInvoicePrefix: string;
   customerInvoiceNextSeq: number;
   supplierInvoicePrefix: string;
@@ -74,6 +81,7 @@ export default function SettingsPage() {
             { key: "numbering" as const, label: "Invoice numbering", icon: Hash },
             { key: "taxes" as const, label: "Sales taxes", icon: Receipt },
             { key: "fees" as const, label: "Credit card fee", icon: CreditCard },
+            { key: "customFees" as const, label: "Additional fees", icon: Plus },
           ].map(({ key, label, icon: Icon }) => (
             <button
               key={key}
@@ -96,6 +104,7 @@ export default function SettingsPage() {
           {section === "numbering" && <NumberingSection />}
           {section === "taxes" && <TaxesSection />}
           {section === "fees" && <FeesSection />}
+          {section === "customFees" && <CustomFeesSection />}
         </div>
       </div>
     </div>
@@ -578,6 +587,154 @@ function FeesSection() {
 
       <div className="flex items-center justify-end gap-3 pt-2 border-t">
         {savedAt && <span className="text-xs text-green-600">Saved {savedAt.toLocaleTimeString()}</span>}
+        <button onClick={save} disabled={saving} className="btn-primary">
+          {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+          Save changes
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function CustomFeesSection() {
+  const { profile, setProfile, loading, reload } = useProfile();
+  const [saving, setSaving] = useState(false);
+  const [savedAt, setSavedAt] = useState<Date | null>(null);
+  const [error, setError] = useState("");
+  // Local draft list — applied to profile on Save.
+  const [draft, setDraft] = useState<CustomFee[]>([]);
+
+  useEffect(() => {
+    if (profile) setDraft(profile.customFees ?? []);
+  }, [profile]);
+
+  if (loading || !profile) return <div className="card animate-pulse h-48 bg-gray-50" />;
+
+  function addRow() {
+    setDraft((prev) => [
+      ...prev,
+      { id: Math.random().toString(36).slice(2, 9), label: "", rate: 0 },
+    ]);
+  }
+  function updateRow(id: string, patch: Partial<CustomFee>) {
+    setDraft((prev) => prev.map((f) => (f.id === id ? { ...f, ...patch } : f)));
+  }
+  function removeRow(id: string) {
+    setDraft((prev) => prev.filter((f) => f.id !== id));
+  }
+
+  async function save() {
+    setError("");
+    // Validate
+    for (const f of draft) {
+      if (!f.label.trim()) {
+        setError("Every fee needs a label.");
+        return;
+      }
+      if (!isFinite(f.rate) || f.rate < 0 || f.rate > 1) {
+        setError(`Rate for "${f.label}" must be between 0 and 100%.`);
+        return;
+      }
+    }
+    setSaving(true);
+    try {
+      const res = await fetch("/api/settings", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ customFees: draft }),
+      });
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}));
+        setError(d.error?.formErrors?.[0] ?? d.error ?? "Save failed");
+        return;
+      }
+      setProfile(await res.json());
+      setSavedAt(new Date());
+      reload();
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="card space-y-5">
+      <div>
+        <h2 className="text-lg font-bold text-gray-900">Additional fees</h2>
+        <p className="text-sm text-gray-500 mt-1">
+          Define extra fees (e.g., delivery, service charge, financing) as a
+          percentage of the invoice subtotal. Each fee defined here will be
+          available as a toggle when creating an invoice and will appear as a
+          separate line on the PDF.
+        </p>
+      </div>
+
+      <div className="space-y-3">
+        {draft.length === 0 && (
+          <p className="text-sm text-gray-400 italic">No additional fees yet.</p>
+        )}
+        {draft.map((fee) => (
+          <div
+            key={fee.id}
+            className="grid grid-cols-12 gap-3 items-center bg-gray-50 rounded-lg p-3"
+          >
+            <div className="col-span-7">
+              <label className="label text-xs">Label</label>
+              <input
+                className="input"
+                placeholder="e.g., Delivery fee"
+                value={fee.label}
+                onChange={(e) => updateRow(fee.id, { label: e.target.value })}
+              />
+            </div>
+            <div className="col-span-4">
+              <label className="label text-xs">Rate (%)</label>
+              <input
+                className="input"
+                type="number"
+                min="0"
+                max="100"
+                step="0.01"
+                placeholder="3.5"
+                value={fee.rate === 0 ? "" : (fee.rate * 100).toString()}
+                onChange={(e) => {
+                  const pct = parseFloat(e.target.value);
+                  updateRow(fee.id, {
+                    rate: isFinite(pct) ? pct / 100 : 0,
+                  });
+                }}
+              />
+            </div>
+            <div className="col-span-1 flex justify-end pt-5">
+              <button
+                onClick={() => removeRow(fee.id)}
+                className="text-red-500 hover:text-red-700 p-2 rounded-md hover:bg-red-50"
+                title="Delete fee"
+              >
+                <Trash2 className="w-4 h-4" />
+              </button>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      <button
+        onClick={addRow}
+        className="btn-secondary text-sm"
+      >
+        <Plus className="w-4 h-4" />
+        Add a fee
+      </button>
+
+      {error && (
+        <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg text-sm">
+          {error}
+        </div>
+      )}
+
+      <div className="flex items-center justify-end gap-3 pt-2 border-t">
+        {savedAt && (
+          <span className="text-xs text-green-600">Saved {savedAt.toLocaleTimeString()}</span>
+        )}
         <button onClick={save} disabled={saving} className="btn-primary">
           {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
           Save changes

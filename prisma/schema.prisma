@@ -78,6 +78,7 @@ model CustomerInvoice {
   paidAmount    Decimal               @db.Decimal(15, 2) @default(0)
   downPayment   Decimal               @db.Decimal(15, 2) @default(0)
   creditCardFee Decimal               @db.Decimal(15, 2) @default(0)
+  appliedFees   Json                  @default("[]")
   paymentStatus PaymentStatus         @default(UNPAID)
   notes         String?
   viewToken     String?               @unique
@@ -165,6 +166,7 @@ model CompanyProfile {
   phone              String?
   creditCardFeeRate  Decimal  @db.Decimal(5, 4) @default(0)
   creditCardFeeLabel String   @default("Credit card processing fee")
+  customFees         Json     @default("[]")
   customerInvoicePrefix   String  @default("INV-2026-")
   customerInvoiceNextSeq  Int     @default(1001)
   supplierInvoicePrefix   String  @default("PO-2026-")

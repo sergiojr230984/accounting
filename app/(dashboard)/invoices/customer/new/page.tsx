@@ -71,6 +71,9 @@ export default function NewCustomerInvoicePage() {
 
   const [taxRates, setTaxRates] = useState<{ id: string; name: string; rate: string; active: boolean }[]>([]);
   const [ccFeeRate, setCcFeeRate] = useState("0");
+  const [customFees, setCustomFees] = useState<{ id: string; label: string; rate: number }[]>([]);
+  // Map of feeId -> enabled. Empty means none selected.
+  const [feeSelections, setFeeSelections] = useState<Record<string, boolean>>({});
 
   const [modalOpen, setModalOpen] = useState(false);
   const [modalSeedName, setModalSeedName] = useState("");
@@ -106,10 +109,12 @@ export default function NewCustomerInvoicePage() {
             creditCardFeeRate: string;
             customerInvoicePrefix?: string;
             customerInvoiceNextSeq?: number;
+            customFees?: { id: string; label: string; rate: number }[];
           } | null
         ) => {
           if (!p) return;
           setCcFeeRate(p.creditCardFeeRate);
+          if (Array.isArray(p.customFees)) setCustomFees(p.customFees);
           // Pre-fill the next sequence number from settings. User can still
           // override it manually before saving.
           const prefix = p.customerInvoicePrefix ?? "INV-2026-";
@@ -146,7 +151,21 @@ export default function NewCustomerInvoicePage() {
         creditCardFee = new Decimal(0);
       }
     }
-    const total = subtotal.plus(taxAmount).plus(creditCardFee);
+    // Custom fees: each applies as (subtotal + tax) * rate, only when
+    // the user has toggled it on for this invoice.
+    const appliedFees: { id: string; label: string; rate: number; amount: string }[] = [];
+    let customFeesSum = new Decimal(0);
+    for (const f of customFees) {
+      if (!feeSelections[f.id]) continue;
+      try {
+        const amt = subtotal.plus(taxAmount).times(new Decimal(f.rate));
+        appliedFees.push({ id: f.id, label: f.label, rate: f.rate, amount: amt.toFixed(2) });
+        customFeesSum = customFeesSum.plus(amt);
+      } catch {
+        // ignore bad rate
+      }
+    }
+    const total = subtotal.plus(taxAmount).plus(creditCardFee).plus(customFeesSum);
     const down = (() => {
       try { return new Decimal(downPayment || "0"); } catch { return new Decimal(0); }
     })();
@@ -154,8 +173,8 @@ export default function NewCustomerInvoicePage() {
     const commission = (() => {
       try { return total.times(new Decimal(commissionRate || "0")); } catch { return new Decimal(0); }
     })();
-    return { subtotal, taxAmount, creditCardFee, total, downPayment: down, balance, commission };
-  }, [items, downPayment, commissionRate, addCreditCardFee, ccFeeRate]);
+    return { subtotal, taxAmount, creditCardFee, appliedFees, total, downPayment: down, balance, commission };
+  }, [items, downPayment, commissionRate, addCreditCardFee, ccFeeRate, customFees, feeSelections]);
 
   function updateItem(idx: number, field: keyof LineItem, value: string) {
     setItems((prev) => {
@@ -230,6 +249,7 @@ export default function NewCustomerInvoicePage() {
           paidAmount: "0",
           paymentStatus: "UNPAID",
           addCreditCardFee,
+          appliedFees: totals.appliedFees,
         }),
       });
       if (!res.ok) {
@@ -258,6 +278,7 @@ export default function NewCustomerInvoicePage() {
             taxAmount: totals.taxAmount.toFixed(2),
             totalAmount: totals.total.toFixed(2),
             creditCardFee: totals.creditCardFee.toFixed(2),
+            appliedFees: totals.appliedFees.map((f) => ({ label: f.label, amount: f.amount })),
             paidAmount: "0",
             downPayment: downPayment || "0",
             notes,
@@ -556,6 +577,34 @@ export default function NewCustomerInvoicePage() {
                   </span>
                 </label>
               )}
+              {customFees.map((fee) => {
+                const selected = !!feeSelections[fee.id];
+                const applied = totals.appliedFees.find((a) => a.id === fee.id);
+                return (
+                  <label
+                    key={fee.id}
+                    className="flex items-center justify-between gap-2 mt-1 cursor-pointer"
+                  >
+                    <span className="flex items-center gap-2 text-gray-700">
+                      <input
+                        type="checkbox"
+                        className="w-4 h-4 rounded border-gray-300"
+                        checked={selected}
+                        onChange={(e) =>
+                          setFeeSelections((prev) => ({
+                            ...prev,
+                            [fee.id]: e.target.checked,
+                          }))
+                        }
+                      />
+                      Add {(fee.rate * 100).toFixed(2)}% {fee.label}
+                    </span>
+                    <span className={`font-medium ${selected ? "text-gray-900" : "text-gray-300"}`}>
+                      {formatCurrency(applied?.amount ?? "0.00")}
+                    </span>
+                  </label>
+                );
+              })}
               <div className="flex justify-between font-bold text-base border-t pt-2 mt-2">
                 <span>Total</span>
                 <span>{formatCurrency(totals.total.toFixed(2))}</span>

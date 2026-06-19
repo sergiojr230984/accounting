@@ -4,6 +4,12 @@ import { initializeDatabase } from "@/lib/init-db";
 import { requireAuth, requireRole } from "@/lib/api";
 import { z } from "zod";
 
+const customFeeSchema = z.object({
+  id: z.string(),
+  label: z.string().min(1),
+  rate: z.number().min(0).max(1), // decimal — 0.05 = 5%
+});
+
 const updateSchema = z.object({
   name: z.string().optional().nullable(),
   logo: z.string().optional().nullable(),
@@ -12,6 +18,7 @@ const updateSchema = z.object({
   phone: z.string().optional().nullable(),
   creditCardFeeRate: z.string().regex(/^\d+(\.\d+)?$/).optional(),
   creditCardFeeLabel: z.string().optional(),
+  customFees: z.array(customFeeSchema).optional(),
   customerInvoicePrefix: z.string().optional(),
   customerInvoiceNextSeq: z.number().int().min(0).optional(),
   supplierInvoicePrefix: z.string().optional(),
@@ -68,6 +75,7 @@ export async function PATCH(request: Request) {
   if (parsed.data.phone !== undefined) data.phone = parsed.data.phone || null;
   if (parsed.data.creditCardFeeRate !== undefined) data.creditCardFeeRate = parsed.data.creditCardFeeRate;
   if (parsed.data.creditCardFeeLabel !== undefined) data.creditCardFeeLabel = parsed.data.creditCardFeeLabel || "Credit card processing fee";
+  if (parsed.data.customFees !== undefined) data.customFees = parsed.data.customFees;
   if (parsed.data.customerInvoicePrefix !== undefined) data.customerInvoicePrefix = parsed.data.customerInvoicePrefix;
   if (parsed.data.customerInvoiceNextSeq !== undefined) data.customerInvoiceNextSeq = parsed.data.customerInvoiceNextSeq;
   if (parsed.data.supplierInvoicePrefix !== undefined) data.supplierInvoicePrefix = parsed.data.supplierInvoicePrefix;
