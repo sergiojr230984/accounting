@@ -305,7 +305,7 @@ export default function NewCustomerInvoicePage() {
   }
 
   return (
-    <div className="flex gap-6 max-w-7xl mx-auto">
+    <div className="flex flex-col lg:flex-row gap-6 max-w-7xl mx-auto">
       {/* Main column */}
       <div className="flex-1 min-w-0 space-y-5">
         <div className="flex items-center justify-between gap-3 flex-wrap">
@@ -548,8 +548,8 @@ export default function NewCustomerInvoicePage() {
       </div>
 
       {/* Sticky totals panel */}
-      <aside className="w-80 shrink-0 hidden lg:block">
-        <div className="sticky top-6 space-y-4">
+      <aside className="lg:w-80 lg:shrink-0 w-full">
+        <div className="lg:sticky lg:top-6 space-y-4">
           <div className="card space-y-3">
             <h3 className="font-semibold text-gray-800 text-sm uppercase tracking-wide">Summary</h3>
             <div className="space-y-1.5 text-sm">

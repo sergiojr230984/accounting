@@ -1,14 +1,15 @@
 "use client";
 
-import { ChevronDown, LogOut } from "lucide-react";
+import { ChevronDown, LogOut, Menu } from "lucide-react";
 import { useState, useRef, useEffect } from "react";
 import { signOutAction } from "@/app/actions/sign-out";
 
 interface TopBarProps {
   user: { name?: string | null; email?: string | null };
+  onMenuClick?: () => void;
 }
 
-export default function TopBar({ user }: TopBarProps) {
+export default function TopBar({ user, onMenuClick }: TopBarProps) {
   const [open, setOpen] = useState(false);
   const [companyName, setCompanyName] = useState("La Cuevita Furniture");
   const [companyLogo, setCompanyLogo] = useState<string | null>(null);
@@ -40,47 +41,59 @@ export default function TopBar({ user }: TopBarProps) {
     .toUpperCase();
 
   return (
-    <header className="h-14 bg-white border-b border-gray-200 flex items-center justify-end px-6 flex-shrink-0 gap-4">
-      {companyLogo && (
-        // eslint-disable-next-line @next/next/no-img-element
-        <img
-          src={companyLogo}
-          alt={companyName}
-          className="h-9 w-9 rounded-md object-contain"
-        />
-      )}
-      <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg border border-gray-200 text-sm">
-        <span className="font-semibold text-gray-800 uppercase text-xs tracking-wide">{companyName}</span>
-        <span className="bg-brand-100 text-brand-700 text-[10px] font-bold uppercase px-1.5 py-0.5 rounded">Starter</span>
-      </div>
+    <header className="h-14 bg-white border-b border-gray-200 flex items-center justify-between md:justify-end px-3 md:px-6 flex-shrink-0 gap-2 md:gap-4">
+      {/* Mobile hamburger — hidden on md+ where the sidebar is always visible. */}
+      <button
+        onClick={onMenuClick}
+        className="md:hidden p-2 -ml-1 rounded-lg hover:bg-gray-100 transition-colors"
+        aria-label="Open navigation menu"
+      >
+        <Menu className="w-5 h-5 text-gray-700" />
+      </button>
 
-      <div className="relative" ref={ref}>
-        <button
-          onClick={() => setOpen((v) => !v)}
-          className="flex items-center gap-2 px-2 py-1 rounded-lg hover:bg-gray-50 transition-colors"
-        >
-          <div className="w-8 h-8 bg-brand-100 text-brand-700 rounded-full flex items-center justify-center text-xs font-semibold">
-            {initials}
-          </div>
-          <ChevronDown className="w-4 h-4 text-gray-400" />
-        </button>
-        {open && (
-          <div className="absolute right-0 top-12 w-56 bg-white border border-gray-200 rounded-lg shadow-lg py-1 z-50">
-            <div className="px-4 py-2.5 border-b border-gray-100">
-              <p className="font-medium text-sm text-gray-900 truncate">{user.name}</p>
-              <p className="text-xs text-gray-500 truncate">{user.email}</p>
-            </div>
-            <form action={signOutAction} className="w-full">
-              <button
-                type="submit"
-                className="w-full flex items-center gap-2 px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 transition-colors text-left"
-              >
-                <LogOut className="w-4 h-4" />
-                Sign out
-              </button>
-            </form>
-          </div>
+      <div className="flex items-center gap-2 md:gap-4">
+        {companyLogo && (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img
+            src={companyLogo}
+            alt={companyName}
+            className="h-9 w-9 rounded-md object-contain"
+          />
         )}
+        {/* Brand badge — hide the name on the smallest screens to save room. */}
+        <div className="hidden sm:flex items-center gap-2 px-3 py-1.5 rounded-lg border border-gray-200 text-sm">
+          <span className="font-semibold text-gray-800 uppercase text-xs tracking-wide">{companyName}</span>
+          <span className="bg-brand-100 text-brand-700 text-[10px] font-bold uppercase px-1.5 py-0.5 rounded">Starter</span>
+        </div>
+
+        <div className="relative" ref={ref}>
+          <button
+            onClick={() => setOpen((v) => !v)}
+            className="flex items-center gap-2 px-2 py-1 rounded-lg hover:bg-gray-50 transition-colors"
+          >
+            <div className="w-8 h-8 bg-brand-100 text-brand-700 rounded-full flex items-center justify-center text-xs font-semibold">
+              {initials}
+            </div>
+            <ChevronDown className="w-4 h-4 text-gray-400 hidden sm:block" />
+          </button>
+          {open && (
+            <div className="absolute right-0 top-12 w-56 bg-white border border-gray-200 rounded-lg shadow-lg py-1 z-50">
+              <div className="px-4 py-2.5 border-b border-gray-100">
+                <p className="font-medium text-sm text-gray-900 truncate">{user.name}</p>
+                <p className="text-xs text-gray-500 truncate">{user.email}</p>
+              </div>
+              <form action={signOutAction} className="w-full">
+                <button
+                  type="submit"
+                  className="w-full flex items-center gap-2 px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 transition-colors text-left"
+                >
+                  <LogOut className="w-4 h-4" />
+                  Sign out
+                </button>
+              </form>
+            </div>
+          )}
+        </div>
       </div>
     </header>
   );

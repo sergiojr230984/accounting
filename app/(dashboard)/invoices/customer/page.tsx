@@ -219,8 +219,8 @@ export default function CustomerInvoicesPage() {
       </div>
 
       {/* Table */}
-      <div className="bg-white border border-gray-200 rounded-2xl overflow-hidden">
-        <table className="w-full text-sm">
+      <div className="bg-white border border-gray-200 rounded-2xl overflow-x-auto">
+        <table className="w-full text-sm min-w-[760px]">
           <thead className="bg-gray-50 border-b border-gray-100">
             <tr>
               <th className="text-left px-5 py-3 text-xs font-semibold text-gray-600 uppercase">Status</th>
