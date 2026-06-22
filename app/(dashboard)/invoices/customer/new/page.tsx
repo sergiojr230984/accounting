@@ -577,34 +577,62 @@ export default function NewCustomerInvoicePage() {
                   </span>
                 </label>
               )}
-              {customFees.map((fee) => {
-                const selected = !!feeSelections[fee.id];
-                const applied = totals.appliedFees.find((a) => a.id === fee.id);
-                return (
-                  <label
-                    key={fee.id}
-                    className="flex items-center justify-between gap-2 mt-1 cursor-pointer"
+              {customFees.length > 0 && (
+                <div className="mt-2 space-y-1.5">
+                  {/* Dropdown to add a fee. Only fees not already applied
+                      appear in the options; selecting one toggles it on
+                      and the picker resets to the placeholder. */}
+                  <select
+                    className="input text-sm"
+                    value=""
+                    onChange={(e) => {
+                      const id = e.target.value;
+                      if (!id) return;
+                      setFeeSelections((prev) => ({ ...prev, [id]: true }));
+                    }}
                   >
-                    <span className="flex items-center gap-2 text-gray-700">
-                      <input
-                        type="checkbox"
-                        className="w-4 h-4 rounded border-gray-300"
-                        checked={selected}
-                        onChange={(e) =>
-                          setFeeSelections((prev) => ({
-                            ...prev,
-                            [fee.id]: e.target.checked,
-                          }))
-                        }
-                      />
-                      Add {(fee.rate * 100).toFixed(2)}% {fee.label}
-                    </span>
-                    <span className={`font-medium ${selected ? "text-gray-900" : "text-gray-300"}`}>
-                      {formatCurrency(applied?.amount ?? "0.00")}
-                    </span>
-                  </label>
-                );
-              })}
+                    <option value="">+ Add a fee…</option>
+                    {customFees
+                      .filter((f) => !feeSelections[f.id])
+                      .map((f) => (
+                        <option key={f.id} value={f.id}>
+                          {f.label} ({(f.rate * 100).toFixed(2)}%)
+                        </option>
+                      ))}
+                  </select>
+
+                  {/* Applied fees — one row each with a remove button. */}
+                  {totals.appliedFees.map((a) => (
+                    <div
+                      key={a.id}
+                      className="flex items-center justify-between gap-2 bg-brand-50 border border-brand-100 rounded px-2 py-1.5"
+                    >
+                      <span className="text-xs text-gray-700 truncate">
+                        {a.label} ({(a.rate * 100).toFixed(2)}%)
+                      </span>
+                      <div className="flex items-center gap-2">
+                        <span className="text-sm font-medium text-gray-900">
+                          {formatCurrency(a.amount)}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setFeeSelections((prev) => {
+                              const next = { ...prev };
+                              delete next[a.id];
+                              return next;
+                            })
+                          }
+                          className="text-gray-400 hover:text-red-500"
+                          aria-label={`Remove ${a.label}`}
+                        >
+                          <X className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
               <div className="flex justify-between font-bold text-base border-t pt-2 mt-2">
                 <span>Total</span>
                 <span>{formatCurrency(totals.total.toFixed(2))}</span>
