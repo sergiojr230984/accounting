@@ -21,16 +21,6 @@ function pdfCurrency(value: string | number): string {
   return `${sign}$${wholeStr}.${cents}`;
 }
 
-/** First letter of each word, uppercased. "John Paul Smith" -> "JPS". */
-function initialsOf(name: string | null | undefined): string {
-  if (!name) return "";
-  return name
-    .trim()
-    .split(/\s+/)
-    .map((w) => w[0]?.toUpperCase() ?? "")
-    .join("");
-}
-
 export interface InvoicePDFData {
   invoiceNumber: string;
   invoiceDate: string | Date;
@@ -73,8 +63,8 @@ export interface InvoicePDFData {
     phone?: string | null;
     creditCardFeeLabel?: string | null;
   } | null;
-  // Sales rep assigned to the invoice. We render the initials in the
-  // right-column meta block.
+  // Sales rep assigned to the invoice. The name is shown next to the
+  // "Sales Rep" label in the right-column meta block.
   employee?: { id: string; name: string } | null;
   // 'customer' (default) prints INVOICE + BILL TO + Unit price.
   // 'supplier' prints PURCHASE ORDER + VENDOR + Unit cost.
@@ -219,7 +209,7 @@ export function generateInvoicePDF(invoice: InvoicePDFData): jsPDF {
   const down = Number(invoice.downPayment);
   const balance = Math.max(total - paid - down, 0);
 
-  const rep = initialsOf(invoice.employee?.name) || "—";
+  const rep = invoice.employee?.name?.trim() || "—";
   const rows: { label: string; value: string }[] = [
     { label: isPO ? "PO Number" : "Invoice Number", value: invoice.invoiceNumber },
     { label: "Sales Rep", value: rep },
