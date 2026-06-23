@@ -13,6 +13,8 @@ const schema = z.object({
   email: z.string().email("Must be a valid email").optional().or(z.literal("")),
   phone: z.string().optional(),
   address: z.string().optional(),
+  emergencyContactName: z.string().optional(),
+  emergencyContactPhone: z.string().optional(),
 });
 type FormData = z.infer<typeof schema>;
 
@@ -22,6 +24,8 @@ interface Customer {
   email: string | null;
   phone: string | null;
   address: string | null;
+  emergencyContactName: string | null;
+  emergencyContactPhone: string | null;
   _count: { invoices: number };
 }
 
@@ -87,6 +91,14 @@ function CustomerForm({
               <AddressAutocomplete value={field.value ?? ""} onChange={field.onChange} />
             )}
           />
+        </div>
+        <div>
+          <label className="label">Emergency contact name</label>
+          <input className="input" placeholder="Spouse, family member, etc." {...register("emergencyContactName")} />
+        </div>
+        <div>
+          <label className="label">Emergency contact phone</label>
+          <input className="input" placeholder="+1-555-0199" {...register("emergencyContactPhone")} />
         </div>
       </div>
 
@@ -192,7 +204,9 @@ export default function CustomersPage() {
     (c) =>
       c.name.toLowerCase().includes(search.toLowerCase()) ||
       (c.email ?? "").toLowerCase().includes(search.toLowerCase()) ||
-      (c.phone ?? "").includes(search)
+      (c.phone ?? "").includes(search) ||
+      (c.emergencyContactName ?? "").toLowerCase().includes(search.toLowerCase()) ||
+      (c.emergencyContactPhone ?? "").includes(search)
   );
 
   return (
@@ -318,6 +332,8 @@ export default function CustomersPage() {
                             email: c.email ?? "",
                             phone: c.phone ?? "",
                             address: c.address ?? "",
+                            emergencyContactName: c.emergencyContactName ?? "",
+                            emergencyContactPhone: c.emergencyContactPhone ?? "",
                           }}
                           submitLabel="Save Changes"
                           onSave={(data) => handleEdit(c.id, data)}
