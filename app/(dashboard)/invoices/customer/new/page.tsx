@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import {
@@ -38,9 +38,19 @@ interface LineItem {
   quantity: string;
   unitPrice: string;
   taxRate: string;
+  // Per-line custom fees. Each slot stores a customFee id, or null for an
+  // empty (unselected) slot. The last slot stays null so the user can
+  // always add another fee — Wave style.
+  fees: (string | null)[];
 }
 
-const blankItem = (): LineItem => ({ description: "", quantity: "1", unitPrice: "0", taxRate: "0" });
+const blankItem = (): LineItem => ({
+  description: "",
+  quantity: "1",
+  unitPrice: "0",
+  taxRate: "0",
+  fees: [],
+});
 
 const todayISO = () => new Date().toISOString().split("T")[0];
 const plusDaysISO = (days: number) => {
@@ -72,9 +82,6 @@ export default function NewCustomerInvoicePage() {
   const [taxRates, setTaxRates] = useState<{ id: string; name: string; rate: string; active: boolean }[]>([]);
   const [ccFeeRate, setCcFeeRate] = useState("0");
   const [customFees, setCustomFees] = useState<{ id: string; label: string; rate: number }[]>([]);
-  // Wave-style: array of selected fee IDs (null = empty/unselected row).
-  // Starts with one blank row once customFees load.
-  const [feeRows, setFeeRows] = useState<(string | null)[]>([]);
 
   const [modalOpen, setModalOpen] = useState(false);
   const [modalSeedName, setModalSeedName] = useState("");
@@ -117,7 +124,6 @@ export default function NewCustomerInvoicePage() {
           setCcFeeRate(p.creditCardFeeRate);
           if (Array.isArray(p.customFees) && p.customFees.length > 0) {
             setCustomFees(p.customFees);
-            setFeeRows([null]); // start with one blank fee row
           }
           const prefix = p.customerInvoicePrefix ?? "INV-2026-";
           const seq = p.customerInvoiceNextSeq ?? 1001;
@@ -127,24 +133,70 @@ export default function NewCustomerInvoicePage() {
       .catch(() => {});
   }, []);
 
+  // Once customFees are loaded, seed each existing line item with one empty
+  // fee slot so the "Select a tax" picker is immediately visible (Wave UX).
+  useEffect(() => {
+    if (customFees.length > 0) {
+      setItems((prev) =>
+        prev.map((it) => (it.fees && it.fees.length > 0 ? it : { ...it, fees: [null] }))
+      );
+    }
+  }, [customFees.length]);
+
   const selectedCustomer = customers.find((c) => c.id === customerId) ?? null;
   const filteredCustomers = useMemo(
     () => customers.filter((c) => c.name.toLowerCase().includes(customerQuery.toLowerCase())),
     [customers, customerQuery]
   );
 
+  // Compute subtotal, tax, per-line fees (which roll up into aggregated
+  // appliedFees by fee id for the PDF/totals panel).
   const totals = useMemo(() => {
     let subtotal = new Decimal(0);
     let taxAmount = new Decimal(0);
+    const feeAgg = new Map<string, { id: string; label: string; rate: number; amount: Decimal }>();
+
     for (const item of items) {
+      let lineTotal = new Decimal(0);
       try {
-        const line = new Decimal(item.quantity || "0").times(item.unitPrice || "0");
-        subtotal = subtotal.plus(line);
-        taxAmount = taxAmount.plus(line.times(item.taxRate || "0"));
-      } catch {
-        // skip invalid rows
+        lineTotal = new Decimal(item.quantity || "0").times(item.unitPrice || "0");
+      } catch {}
+      subtotal = subtotal.plus(lineTotal);
+
+      let lineTax = new Decimal(0);
+      try {
+        lineTax = lineTotal.times(new Decimal(item.taxRate || "0"));
+      } catch {}
+      taxAmount = taxAmount.plus(lineTax);
+
+      // Per-line custom fees: applied to (line + line tax) at the fee's rate.
+      const base = lineTotal.plus(lineTax);
+      for (const feeId of item.fees || []) {
+        if (!feeId) continue;
+        const f = customFees.find((cf) => cf.id === feeId);
+        if (!f) continue;
+        let amt = new Decimal(0);
+        try {
+          amt = base.times(new Decimal(f.rate));
+        } catch {}
+        const cur = feeAgg.get(feeId);
+        if (cur) {
+          cur.amount = cur.amount.plus(amt);
+        } else {
+          feeAgg.set(feeId, { id: f.id, label: f.label, rate: f.rate, amount: amt });
+        }
       }
     }
+
+    const appliedFees = Array.from(feeAgg.values()).map((f) => ({
+      id: f.id,
+      label: f.label,
+      rate: f.rate,
+      amount: f.amount.toFixed(2),
+    }));
+    let customFeesSum = new Decimal(0);
+    for (const f of feeAgg.values()) customFeesSum = customFeesSum.plus(f.amount);
+
     let creditCardFee = new Decimal(0);
     if (addCreditCardFee) {
       try {
@@ -153,20 +205,7 @@ export default function NewCustomerInvoicePage() {
         creditCardFee = new Decimal(0);
       }
     }
-    const appliedFees: { id: string; label: string; rate: number; amount: string }[] = [];
-    let customFeesSum = new Decimal(0);
-    for (const feeId of feeRows) {
-      if (!feeId) continue;
-      const f = customFees.find((cf) => cf.id === feeId);
-      if (!f) continue;
-      try {
-        const amt = subtotal.plus(taxAmount).times(new Decimal(f.rate));
-        appliedFees.push({ id: f.id, label: f.label, rate: f.rate, amount: amt.toFixed(2) });
-        customFeesSum = customFeesSum.plus(amt);
-      } catch {
-        // ignore bad rate
-      }
-    }
+
     const total = subtotal.plus(taxAmount).plus(creditCardFee).plus(customFeesSum);
     const down = (() => {
       try { return new Decimal(downPayment || "0"); } catch { return new Decimal(0); }
@@ -176,14 +215,16 @@ export default function NewCustomerInvoicePage() {
       try { return total.times(new Decimal(commissionRate || "0")); } catch { return new Decimal(0); }
     })();
     return { subtotal, taxAmount, creditCardFee, appliedFees, total, downPayment: down, balance, commission };
-  }, [items, downPayment, commissionRate, addCreditCardFee, ccFeeRate, customFees, feeRows]);
+  }, [items, downPayment, commissionRate, addCreditCardFee, ccFeeRate, customFees]);
 
   function updateItem(idx: number, field: keyof LineItem, value: string) {
     setItems((prev) => {
       const next = [...prev];
       next[idx] = { ...next[idx], [field]: value };
       if (field === "description" && idx === next.length - 1 && value.trim() !== "") {
-        next.push(blankItem());
+        const fresh = blankItem();
+        if (customFees.length > 0) fresh.fees = [null];
+        next.push(fresh);
       }
       return next;
     });
@@ -193,22 +234,29 @@ export default function NewCustomerInvoicePage() {
     setItems((prev) => (prev.length === 1 ? prev : prev.filter((_, i) => i !== idx)));
   }
 
-  function selectFeeRow(idx: number, newId: string | null) {
-    setFeeRows((prev) => {
+  function selectLineFee(lineIdx: number, feeIdx: number, newId: string | null) {
+    setItems((prev) => {
       const next = [...prev];
-      next[idx] = newId;
-      // Auto-open new empty row when the last row gets a selection
-      if (newId && idx === prev.length - 1) {
-        next.push(null);
+      const item = next[lineIdx];
+      const fees = item.fees && item.fees.length > 0 ? [...item.fees] : [null];
+      fees[feeIdx] = newId;
+      // Auto-open a new blank slot when the last one was just filled.
+      if (newId && feeIdx === fees.length - 1) {
+        fees.push(null);
       }
+      next[lineIdx] = { ...item, fees };
       return next;
     });
   }
 
-  function removeFeeRow(idx: number) {
-    setFeeRows((prev) => {
-      if (prev.length === 1) return [null]; // keep one blank row
-      return prev.filter((_, i) => i !== idx);
+  function removeLineFee(lineIdx: number, feeIdx: number) {
+    setItems((prev) => {
+      const next = [...prev];
+      const item = next[lineIdx];
+      const filtered = (item.fees || []).filter((_, i) => i !== feeIdx);
+      // Keep at least one empty slot so the picker remains visible.
+      next[lineIdx] = { ...item, fees: filtered.length === 0 ? [null] : filtered };
+      return next;
     });
   }
 
@@ -217,7 +265,7 @@ export default function NewCustomerInvoicePage() {
     invoiceDate?: string | null;
     dueDate?: string | null;
     customerName?: string | null;
-    items?: LineItem[];
+    items?: { description: string; quantity: string; unitPrice: string; taxRate: string }[];
     notes?: string | null;
   }) {
     if (data.invoiceNumber) setInvoiceNumber(data.invoiceNumber);
@@ -225,7 +273,12 @@ export default function NewCustomerInvoicePage() {
     if (data.dueDate) setDueDate(data.dueDate);
     if (data.notes) setNotes(data.notes);
     if (data.items?.length) {
-      setItems([...data.items.map((i) => ({ ...i, taxRate: i.taxRate || "0" })), blankItem()]);
+      const fresh: LineItem[] = data.items.map((i) => ({
+        ...i,
+        taxRate: i.taxRate || "0",
+        fees: customFees.length > 0 ? [null] : [],
+      }));
+      setItems([...fresh, { ...blankItem(), fees: customFees.length > 0 ? [null] : [] }]);
     }
     if (data.customerName) {
       const current = await loadCustomers();
@@ -261,7 +314,7 @@ export default function NewCustomerInvoicePage() {
           invoiceNumber,
           invoiceDate,
           dueDate,
-          items: real,
+          items: real.map(({ fees: _fees, ...rest }) => rest),
           notes,
           downPayment,
           employeeId: employeeId || null,
@@ -444,7 +497,7 @@ export default function NewCustomerInvoicePage() {
           </div>
         </div>
 
-        {/* Line items + fees */}
+        {/* Line items — each row has its own per-line fee picker rows below */}
         <div className="card p-0 overflow-hidden">
           <div className="px-5 py-3 border-b bg-gray-50">
             <h2 className="font-semibold text-gray-800 text-sm">Items</h2>
@@ -464,141 +517,147 @@ export default function NewCustomerInvoicePage() {
               {items.map((item, idx) => {
                 let line = new Decimal(0);
                 try { line = new Decimal(item.quantity || "0").times(item.unitPrice || "0"); } catch {}
+                let lineTax = new Decimal(0);
+                try { lineTax = line.times(new Decimal(item.taxRate || "0")); } catch {}
+                const feeSlots = customFees.length > 0
+                  ? (item.fees && item.fees.length > 0 ? item.fees : [null])
+                  : [];
+                const usedFeeIds = feeSlots.filter((id): id is string => id !== null);
+
                 return (
-                  <tr key={idx} className="border-b last:border-b-0 hover:bg-gray-50/50">
-                    <td className="px-2 py-1">
-                      <input
-                        className="w-full px-2 py-1.5 border-0 focus:outline-none focus:bg-brand-50 rounded text-sm"
-                        placeholder="Item or service description"
-                        value={item.description}
-                        onChange={(e) => updateItem(idx, "description", e.target.value)}
-                      />
-                    </td>
-                    <td className="px-2 py-1">
-                      <input
-                        type="number"
-                        step="0.01"
-                        min="0"
-                        className="w-full px-2 py-1.5 border-0 focus:outline-none focus:bg-brand-50 rounded text-sm text-right"
-                        value={item.quantity}
-                        onChange={(e) => updateItem(idx, "quantity", e.target.value)}
-                      />
-                    </td>
-                    <td className="px-2 py-1">
-                      <input
-                        type="number"
-                        step="0.01"
-                        min="0"
-                        className="w-full px-2 py-1.5 border-0 focus:outline-none focus:bg-brand-50 rounded text-sm text-right"
-                        value={item.unitPrice}
-                        onChange={(e) => updateItem(idx, "unitPrice", e.target.value)}
-                      />
-                    </td>
-                    <td className="px-2 py-1">
-                      {taxRates.length > 0 ? (
-                        <select
-                          className="w-full px-2 py-1.5 border-0 focus:outline-none focus:bg-brand-50 rounded text-sm text-right bg-transparent"
-                          value={item.taxRate}
-                          onChange={(e) => updateItem(idx, "taxRate", e.target.value)}
-                        >
-                          <option value="0">No tax</option>
-                          {taxRates.map((t) => (
-                            <option key={t.id} value={t.rate}>
-                              {t.name} ({(parseFloat(t.rate) * 100).toFixed(2)}%)
-                            </option>
-                          ))}
-                        </select>
-                      ) : (
+                  <Fragment key={`item-${idx}`}>
+                    <tr className="border-b last:border-b-0 hover:bg-gray-50/50">
+                      <td className="px-2 py-1">
+                        <input
+                          className="w-full px-2 py-1.5 border-0 focus:outline-none focus:bg-brand-50 rounded text-sm"
+                          placeholder="Item or service description"
+                          value={item.description}
+                          onChange={(e) => updateItem(idx, "description", e.target.value)}
+                        />
+                      </td>
+                      <td className="px-2 py-1">
                         <input
                           type="number"
-                          step="0.0001"
+                          step="0.01"
                           min="0"
-                          max="1"
                           className="w-full px-2 py-1.5 border-0 focus:outline-none focus:bg-brand-50 rounded text-sm text-right"
-                          value={item.taxRate}
-                          onChange={(e) => updateItem(idx, "taxRate", e.target.value)}
+                          value={item.quantity}
+                          onChange={(e) => updateItem(idx, "quantity", e.target.value)}
                         />
-                      )}
-                    </td>
-                    <td className="px-3 py-1.5 text-right font-medium text-sm text-gray-700">
-                      {formatCurrency(line.toFixed(2))}
-                    </td>
-                    <td className="pr-2">
-                      {items.length > 1 && (
-                        <button onClick={() => removeItem(idx)} className="text-gray-300 hover:text-red-500 p-1">
-                          <Trash2 className="w-3.5 h-3.5" />
-                        </button>
-                      )}
-                    </td>
-                  </tr>
+                      </td>
+                      <td className="px-2 py-1">
+                        <input
+                          type="number"
+                          step="0.01"
+                          min="0"
+                          className="w-full px-2 py-1.5 border-0 focus:outline-none focus:bg-brand-50 rounded text-sm text-right"
+                          value={item.unitPrice}
+                          onChange={(e) => updateItem(idx, "unitPrice", e.target.value)}
+                        />
+                      </td>
+                      <td className="px-2 py-1">
+                        {taxRates.length > 0 ? (
+                          <select
+                            className="w-full px-2 py-1.5 border-0 focus:outline-none focus:bg-brand-50 rounded text-sm text-right bg-transparent"
+                            value={item.taxRate}
+                            onChange={(e) => updateItem(idx, "taxRate", e.target.value)}
+                          >
+                            <option value="0">No tax</option>
+                            {taxRates.map((t) => (
+                              <option key={t.id} value={t.rate}>
+                                {t.name} ({(parseFloat(t.rate) * 100).toFixed(2)}%)
+                              </option>
+                            ))}
+                          </select>
+                        ) : (
+                          <input
+                            type="number"
+                            step="0.0001"
+                            min="0"
+                            max="1"
+                            className="w-full px-2 py-1.5 border-0 focus:outline-none focus:bg-brand-50 rounded text-sm text-right"
+                            value={item.taxRate}
+                            onChange={(e) => updateItem(idx, "taxRate", e.target.value)}
+                          />
+                        )}
+                      </td>
+                      <td className="px-3 py-1.5 text-right font-medium text-sm text-gray-700">
+                        {formatCurrency(line.toFixed(2))}
+                      </td>
+                      <td className="pr-2">
+                        {items.length > 1 && (
+                          <button onClick={() => removeItem(idx)} className="text-gray-300 hover:text-red-500 p-1">
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        )}
+                      </td>
+                    </tr>
+
+                    {/* Per-line fee rows — one per fee slot under this item */}
+                    {feeSlots.map((feeId, fIdx) => {
+                      const f = feeId ? customFees.find((cf) => cf.id === feeId) : null;
+                      const base = line.plus(lineTax);
+                      let amt = new Decimal(0);
+                      if (f) {
+                        try { amt = base.times(new Decimal(f.rate)); } catch {}
+                      }
+                      const isLast = fIdx === feeSlots.length - 1;
+                      return (
+                        <tr key={`fee-${idx}-${fIdx}`} className="bg-gray-50/40 border-b last:border-b-0">
+                          <td className="pl-8 pr-2 py-1">
+                            {/* visual continuation marker */}
+                            <span className="inline-block w-3 border-t border-gray-300 align-middle" />
+                          </td>
+                          <td className="px-2 py-1 text-right text-xs uppercase tracking-wide text-gray-400 font-medium">
+                            Tax
+                          </td>
+                          <td colSpan={2} className="px-2 py-1">
+                            <select
+                              value={feeId ?? ""}
+                              onChange={(e) => selectLineFee(idx, fIdx, e.target.value || null)}
+                              className="w-full px-2 py-1.5 border border-gray-200 bg-white rounded text-sm focus:outline-none focus:ring-1 focus:ring-brand-500 text-gray-700"
+                            >
+                              <option value="">Select a tax</option>
+                              {customFees
+                                .filter((cf) => cf.id === feeId || !usedFeeIds.includes(cf.id))
+                                .map((cf) => (
+                                  <option key={cf.id} value={cf.id}>
+                                    {cf.label} {(cf.rate * 100).toFixed(2)}%
+                                  </option>
+                                ))}
+                            </select>
+                          </td>
+                          <td className="px-3 py-1.5 text-right font-medium text-sm text-gray-700">
+                            {feeId ? formatCurrency(amt.toFixed(2)) : <span className="text-gray-300">—</span>}
+                          </td>
+                          <td className="pr-2">
+                            {/* Show remove only on filled rows, or non-last empty rows */}
+                            {(feeId || !isLast) && (
+                              <button
+                                type="button"
+                                onClick={() => removeLineFee(idx, fIdx)}
+                                className="text-gray-300 hover:text-red-500 p-1"
+                                aria-label="Remove fee"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </Fragment>
                 );
               })}
             </tbody>
           </table>
 
-          {/* Wave-style fee rows — appear below items, one row per fee slot */}
-          {customFees.length > 0 && (
-            <>
-              <div className="border-t border-dashed px-5 py-2 bg-gray-50/60 flex items-center gap-2">
-                <span className="text-xs font-semibold text-gray-400 uppercase tracking-wider">Fees</span>
-              </div>
-              {feeRows.map((feeId, idx) => {
-                const selectedFee = feeId ? customFees.find((f) => f.id === feeId) : null;
-                let feeAmount = new Decimal(0);
-                if (selectedFee) {
-                  try {
-                    feeAmount = totals.subtotal.plus(totals.taxAmount).times(new Decimal(selectedFee.rate));
-                  } catch {}
-                }
-                // Exclude fees already selected in other rows from the dropdown options
-                const usedElsewhere = feeRows.filter((id, i) => i !== idx && id !== null) as string[];
-                return (
-                  <div
-                    key={idx}
-                    className="flex items-center border-b last:border-b-0 hover:bg-gray-50/50"
-                  >
-                    {/* Fee select — spans description + qty + price columns */}
-                    <div className="flex-1 px-2 py-1">
-                      <select
-                        value={feeId ?? ""}
-                        onChange={(e) => selectFeeRow(idx, e.target.value || null)}
-                        className="w-full px-2 py-1.5 border-0 focus:outline-none focus:bg-brand-50 rounded text-sm bg-transparent text-gray-600"
-                      >
-                        <option value="">— Select a fee —</option>
-                        {customFees
-                          .filter((f) => !usedElsewhere.includes(f.id) || f.id === feeId)
-                          .map((f) => (
-                            <option key={f.id} value={f.id}>
-                              {f.label} ({(f.rate * 100).toFixed(2)}%)
-                            </option>
-                          ))}
-                      </select>
-                    </div>
-                    {/* Spacer for tax column */}
-                    <div className="w-20" />
-                    {/* Amount */}
-                    <div className="w-28 px-3 text-right font-medium text-sm text-gray-700">
-                      {feeId ? formatCurrency(feeAmount.toFixed(2)) : <span className="text-gray-300">—</span>}
-                    </div>
-                    {/* Remove button */}
-                    <div className="w-10 pr-2 flex justify-end">
-                      <button
-                        type="button"
-                        onClick={() => removeFeeRow(idx)}
-                        className="text-gray-300 hover:text-red-500 p-1"
-                        aria-label="Remove fee row"
-                      >
-                        <X className="w-3.5 h-3.5" />
-                      </button>
-                    </div>
-                  </div>
-                );
-              })}
-            </>
-          )}
-
           <button
-            onClick={() => setItems((prev) => [...prev, blankItem()])}
+            onClick={() => {
+              const fresh = blankItem();
+              if (customFees.length > 0) fresh.fees = [null];
+              setItems((prev) => [...prev, fresh]);
+            }}
             className="w-full px-5 py-2.5 text-left text-sm text-brand-600 hover:bg-brand-50 border-t flex items-center gap-2"
           >
             <Plus className="w-4 h-4" />
@@ -633,6 +692,13 @@ export default function NewCustomerInvoicePage() {
                 <span className="text-gray-500">Subtotal</span>
                 <span className="font-medium">{formatCurrency(totals.subtotal.toFixed(2))}</span>
               </div>
+              {/* Aggregated custom fees — one line per fee type, totaled across all items */}
+              {totals.appliedFees.map((a) => (
+                <div key={a.id} className="flex justify-between">
+                  <span className="text-gray-500 truncate pr-2">{a.label} {(a.rate * 100).toFixed(2)}%</span>
+                  <span className="font-medium shrink-0">{formatCurrency(a.amount)}</span>
+                </div>
+              ))}
               <div className="flex justify-between">
                 <span className="text-gray-500">Tax</span>
                 <span className="font-medium">{formatCurrency(totals.taxAmount.toFixed(2))}</span>
@@ -653,13 +719,6 @@ export default function NewCustomerInvoicePage() {
                   </span>
                 </label>
               )}
-              {/* Applied fees summary — read-only, driven by fee rows in items area */}
-              {totals.appliedFees.map((a) => (
-                <div key={a.id} className="flex justify-between">
-                  <span className="text-gray-500 truncate pr-2">{a.label} ({(a.rate * 100).toFixed(2)}%)</span>
-                  <span className="font-medium shrink-0">{formatCurrency(a.amount)}</span>
-                </div>
-              ))}
               <div className="flex justify-between font-bold text-base border-t pt-2 mt-2">
                 <span>Total</span>
                 <span>{formatCurrency(totals.total.toFixed(2))}</span>
