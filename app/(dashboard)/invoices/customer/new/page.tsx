@@ -24,6 +24,10 @@ interface Customer {
   id: string;
   name: string;
   email: string | null;
+  phone?: string | null;
+  address?: string | null;
+  emergencyContactName?: string | null;
+  emergencyContactPhone?: string | null;
 }
 
 interface Employee {
@@ -356,7 +360,14 @@ export default function NewCustomerInvoicePage() {
             paidAmount: "0",
             downPayment: downPayment || "0",
             notes,
-            customer: { name: customer.name, email: customer.email, phone: null, address: null },
+            customer: {
+              name: customer.name,
+              email: customer.email,
+              phone: customer.phone ?? null,
+              address: customer.address ?? null,
+              emergencyContactName: customer.emergencyContactName ?? null,
+              emergencyContactPhone: customer.emergencyContactPhone ?? null,
+            },
             items: real.map((i) => ({
               description: i.description,
               quantity: i.quantity,
