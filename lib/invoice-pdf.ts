@@ -53,6 +53,8 @@ export interface InvoicePDFData {
     email: string | null;
     phone: string | null;
     address: string | null;
+    emergencyContactName?: string | null;
+    emergencyContactPhone?: string | null;
   };
   items: {
     description: string;
@@ -187,6 +189,26 @@ export function generateInvoicePDF(invoice: InvoicePDFData): jsPDF {
     doc.text(invoice.customer.email, leftColX, billY);
     billY += 12;
   }
+
+  // Emergency / secondary contact — shown under the primary customer details
+  // so the sales team has a fallback to reach when the main contact is
+  // unresponsive. Only renders when at least one field is filled.
+  if (invoice.customer.emergencyContactName || invoice.customer.emergencyContactPhone) {
+    billY += 6;
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(8);
+    doc.setTextColor(...TEXT_LIGHT);
+    doc.text("EMERGENCY CONTACT", leftColX, billY);
+    billY += 11;
+    doc.setFontSize(9.5);
+    doc.setTextColor(...TEXT_MID);
+    const parts = [invoice.customer.emergencyContactName, invoice.customer.emergencyContactPhone]
+      .filter(Boolean)
+      .join("  ·  ");
+    doc.text(parts, leftColX, billY);
+    billY += 12;
+  }
+
   const leftColBottom = billY;
 
   // ─── RIGHT: INVOICE DETAILS ────────────────────────────────────

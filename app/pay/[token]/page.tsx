@@ -73,6 +73,16 @@ export default async function PublicInvoicePage({
             {invoice.customer.email && <p className="text-sm text-gray-500">{invoice.customer.email}</p>}
             {invoice.customer.phone && <p className="text-sm text-gray-500">{invoice.customer.phone}</p>}
             {invoice.customer.address && <p className="text-sm text-gray-500 whitespace-pre-line">{invoice.customer.address}</p>}
+            {(invoice.customer.emergencyContactName || invoice.customer.emergencyContactPhone) && (
+              <div className="mt-3 pt-3 border-t border-gray-100">
+                <p className="text-[10px] font-semibold uppercase text-gray-400 tracking-wide">Emergency contact</p>
+                <p className="text-sm text-gray-600 mt-0.5">
+                  {[invoice.customer.emergencyContactName, invoice.customer.emergencyContactPhone]
+                    .filter(Boolean)
+                    .join("  ·  ")}
+                </p>
+              </div>
+            )}
           </div>
 
           {/* Items */}
