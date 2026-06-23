@@ -77,11 +77,22 @@ export default function NewCustomerInvoicePage() {
   const [downPayment, setDownPayment] = useState("0");
   const [notes, setNotes] = useState("");
   const [items, setItems] = useState<LineItem[]>([blankItem()]);
-  const [addCreditCardFee, setAddCreditCardFee] = useState(false);
-
   const [taxRates, setTaxRates] = useState<{ id: string; name: string; rate: string; active: boolean }[]>([]);
   const [ccFeeRate, setCcFeeRate] = useState("0");
   const [customFees, setCustomFees] = useState<{ id: string; label: string; rate: number }[]>([]);
+
+  // Virtual CC fee entry synthesised from the company profile rate. Uses the
+  // sentinel id "__cc__" so it flows through the same per-line aggregation
+  // pipeline as custom fees — no separate checkbox needed.
+  const allFees = useMemo(
+    () => [
+      ...(parseFloat(ccFeeRate) > 0
+        ? [{ id: "__cc__", label: "CARD FEE", rate: parseFloat(ccFeeRate) }]
+        : []),
+      ...customFees,
+    ],
+    [ccFeeRate, customFees]
+  );
 
   const [modalOpen, setModalOpen] = useState(false);
   const [modalSeedName, setModalSeedName] = useState("");
@@ -133,15 +144,15 @@ export default function NewCustomerInvoicePage() {
       .catch(() => {});
   }, []);
 
-  // Once customFees are loaded, seed each existing line item with one empty
-  // fee slot so the "Select a tax" picker is immediately visible (Wave UX).
+  // Once fee options are available (custom fees or CC fee), seed each existing
+  // line item with one empty fee slot so the picker is immediately visible (Wave UX).
   useEffect(() => {
-    if (customFees.length > 0) {
+    if (allFees.length > 0) {
       setItems((prev) =>
         prev.map((it) => (it.fees && it.fees.length > 0 ? it : { ...it, fees: [null] }))
       );
     }
-  }, [customFees.length]);
+  }, [allFees.length]);
 
   const selectedCustomer = customers.find((c) => c.id === customerId) ?? null;
   const filteredCustomers = useMemo(
@@ -169,11 +180,11 @@ export default function NewCustomerInvoicePage() {
       } catch {}
       taxAmount = taxAmount.plus(lineTax);
 
-      // Per-line custom fees: applied to (line + line tax) at the fee's rate.
+      // Per-line fees (custom + CC): applied to (line + line tax) at the fee's rate.
       const base = lineTotal.plus(lineTax);
       for (const feeId of item.fees || []) {
         if (!feeId) continue;
-        const f = customFees.find((cf) => cf.id === feeId);
+        const f = allFees.find((cf) => cf.id === feeId);
         if (!f) continue;
         let amt = new Decimal(0);
         try {
@@ -194,19 +205,10 @@ export default function NewCustomerInvoicePage() {
       rate: f.rate,
       amount: f.amount.toFixed(2),
     }));
-    let customFeesSum = new Decimal(0);
-    for (const f of feeAgg.values()) customFeesSum = customFeesSum.plus(f.amount);
+    let feesSum = new Decimal(0);
+    for (const f of feeAgg.values()) feesSum = feesSum.plus(f.amount);
 
-    let creditCardFee = new Decimal(0);
-    if (addCreditCardFee) {
-      try {
-        creditCardFee = subtotal.plus(taxAmount).times(new Decimal(ccFeeRate || "0"));
-      } catch {
-        creditCardFee = new Decimal(0);
-      }
-    }
-
-    const total = subtotal.plus(taxAmount).plus(creditCardFee).plus(customFeesSum);
+    const total = subtotal.plus(taxAmount).plus(feesSum);
     const down = (() => {
       try { return new Decimal(downPayment || "0"); } catch { return new Decimal(0); }
     })();
@@ -214,8 +216,8 @@ export default function NewCustomerInvoicePage() {
     const commission = (() => {
       try { return total.times(new Decimal(commissionRate || "0")); } catch { return new Decimal(0); }
     })();
-    return { subtotal, taxAmount, creditCardFee, appliedFees, total, downPayment: down, balance, commission };
-  }, [items, downPayment, commissionRate, addCreditCardFee, ccFeeRate, customFees]);
+    return { subtotal, taxAmount, appliedFees, total, downPayment: down, balance, commission };
+  }, [items, downPayment, commissionRate, allFees]);
 
   function updateItem(idx: number, field: keyof LineItem, value: string) {
     setItems((prev) => {
@@ -223,7 +225,7 @@ export default function NewCustomerInvoicePage() {
       next[idx] = { ...next[idx], [field]: value };
       if (field === "description" && idx === next.length - 1 && value.trim() !== "") {
         const fresh = blankItem();
-        if (customFees.length > 0) fresh.fees = [null];
+        if (allFees.length > 0) fresh.fees = [null];
         next.push(fresh);
       }
       return next;
@@ -276,9 +278,9 @@ export default function NewCustomerInvoicePage() {
       const fresh: LineItem[] = data.items.map((i) => ({
         ...i,
         taxRate: i.taxRate || "0",
-        fees: customFees.length > 0 ? [null] : [],
+        fees: allFees.length > 0 ? [null] : [],
       }));
-      setItems([...fresh, { ...blankItem(), fees: customFees.length > 0 ? [null] : [] }]);
+      setItems([...fresh, { ...blankItem(), fees: allFees.length > 0 ? [null] : [] }]);
     }
     if (data.customerName) {
       const current = await loadCustomers();
@@ -321,7 +323,6 @@ export default function NewCustomerInvoicePage() {
           commissionRate: commissionRate || "0",
           paidAmount: "0",
           paymentStatus: "UNPAID",
-          addCreditCardFee,
           appliedFees: totals.appliedFees,
         }),
       });
@@ -350,7 +351,7 @@ export default function NewCustomerInvoicePage() {
             subtotal: totals.subtotal.toFixed(2),
             taxAmount: totals.taxAmount.toFixed(2),
             totalAmount: totals.total.toFixed(2),
-            creditCardFee: totals.creditCardFee.toFixed(2),
+            creditCardFee: "0",
             appliedFees: totals.appliedFees.map((f) => ({ label: f.label, amount: f.amount })),
             paidAmount: "0",
             downPayment: downPayment || "0",
@@ -519,7 +520,7 @@ export default function NewCustomerInvoicePage() {
                 try { line = new Decimal(item.quantity || "0").times(item.unitPrice || "0"); } catch {}
                 let lineTax = new Decimal(0);
                 try { lineTax = line.times(new Decimal(item.taxRate || "0")); } catch {}
-                const feeSlots = customFees.length > 0
+                const feeSlots = allFees.length > 0
                   ? (item.fees && item.fees.length > 0 ? item.fees : [null])
                   : [];
                 const usedFeeIds = feeSlots.filter((id): id is string => id !== null);
@@ -595,7 +596,7 @@ export default function NewCustomerInvoicePage() {
 
                     {/* Per-line fee rows — one per fee slot under this item */}
                     {feeSlots.map((feeId, fIdx) => {
-                      const f = feeId ? customFees.find((cf) => cf.id === feeId) : null;
+                      const f = feeId ? allFees.find((cf) => cf.id === feeId) : null;
                       const base = line.plus(lineTax);
                       let amt = new Decimal(0);
                       if (f) {
@@ -617,8 +618,8 @@ export default function NewCustomerInvoicePage() {
                               onChange={(e) => selectLineFee(idx, fIdx, e.target.value || null)}
                               className="w-full px-2 py-1.5 border border-gray-200 bg-white rounded text-sm focus:outline-none focus:ring-1 focus:ring-brand-500 text-gray-700"
                             >
-                              <option value="">Select a tax</option>
-                              {customFees
+                              <option value="">Select a fee</option>
+                              {allFees
                                 .filter((cf) => cf.id === feeId || !usedFeeIds.includes(cf.id))
                                 .map((cf) => (
                                   <option key={cf.id} value={cf.id}>
@@ -655,7 +656,7 @@ export default function NewCustomerInvoicePage() {
           <button
             onClick={() => {
               const fresh = blankItem();
-              if (customFees.length > 0) fresh.fees = [null];
+              if (allFees.length > 0) fresh.fees = [null];
               setItems((prev) => [...prev, fresh]);
             }}
             className="w-full px-5 py-2.5 text-left text-sm text-brand-600 hover:bg-brand-50 border-t flex items-center gap-2"
@@ -692,7 +693,7 @@ export default function NewCustomerInvoicePage() {
                 <span className="text-gray-500">Subtotal</span>
                 <span className="font-medium">{formatCurrency(totals.subtotal.toFixed(2))}</span>
               </div>
-              {/* Aggregated custom fees — one line per fee type, totaled across all items */}
+              {/* Aggregated fees — one line per fee type, totaled across all items */}
               {totals.appliedFees.map((a) => (
                 <div key={a.id} className="flex justify-between">
                   <span className="text-gray-500 truncate pr-2">{a.label} {(a.rate * 100).toFixed(2)}%</span>
@@ -703,29 +704,13 @@ export default function NewCustomerInvoicePage() {
                 <span className="text-gray-500">Tax</span>
                 <span className="font-medium">{formatCurrency(totals.taxAmount.toFixed(2))}</span>
               </div>
-              {parseFloat(ccFeeRate) > 0 && (
-                <label className="flex items-center justify-between gap-2 mt-1 cursor-pointer">
-                  <span className="flex items-center gap-2 text-gray-700">
-                    <input
-                      type="checkbox"
-                      className="w-4 h-4 rounded border-gray-300"
-                      checked={addCreditCardFee}
-                      onChange={(e) => setAddCreditCardFee(e.target.checked)}
-                    />
-                    Add {(parseFloat(ccFeeRate) * 100).toFixed(2)}% card fee
-                  </span>
-                  <span className={`font-medium ${addCreditCardFee ? "text-gray-900" : "text-gray-300"}`}>
-                    {formatCurrency(totals.creditCardFee.toFixed(2))}
-                  </span>
-                </label>
-              )}
               <div className="flex justify-between font-bold text-base border-t pt-2 mt-2">
                 <span>Total</span>
                 <span>{formatCurrency(totals.total.toFixed(2))}</span>
               </div>
               {parseFloat(ccFeeRate) === 0 && (
                 <p className="text-[11px] text-gray-400 pt-1">
-                  Set a card processing fee in <a href="/settings" className="text-brand-600 hover:underline">Settings</a> to offer it on invoices.
+                  Set a card processing fee in <a href="/settings" className="text-brand-600 hover:underline">Settings</a> to add it per line.
                 </p>
               )}
             </div>
