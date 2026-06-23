@@ -72,8 +72,9 @@ export default function NewCustomerInvoicePage() {
   const [taxRates, setTaxRates] = useState<{ id: string; name: string; rate: string; active: boolean }[]>([]);
   const [ccFeeRate, setCcFeeRate] = useState("0");
   const [customFees, setCustomFees] = useState<{ id: string; label: string; rate: number }[]>([]);
-  // Map of feeId -> enabled. Empty means none selected.
-  const [feeSelections, setFeeSelections] = useState<Record<string, boolean>>({});
+  // Wave-style: array of selected fee IDs (null = empty/unselected row).
+  // Starts with one blank row once customFees load.
+  const [feeRows, setFeeRows] = useState<(string | null)[]>([]);
 
   const [modalOpen, setModalOpen] = useState(false);
   const [modalSeedName, setModalSeedName] = useState("");
@@ -114,9 +115,10 @@ export default function NewCustomerInvoicePage() {
         ) => {
           if (!p) return;
           setCcFeeRate(p.creditCardFeeRate);
-          if (Array.isArray(p.customFees)) setCustomFees(p.customFees);
-          // Pre-fill the next sequence number from settings. User can still
-          // override it manually before saving.
+          if (Array.isArray(p.customFees) && p.customFees.length > 0) {
+            setCustomFees(p.customFees);
+            setFeeRows([null]); // start with one blank fee row
+          }
           const prefix = p.customerInvoicePrefix ?? "INV-2026-";
           const seq = p.customerInvoiceNextSeq ?? 1001;
           setInvoiceNumber(`${prefix}${String(seq).padStart(4, "0")}`);
@@ -151,12 +153,12 @@ export default function NewCustomerInvoicePage() {
         creditCardFee = new Decimal(0);
       }
     }
-    // Custom fees: each applies as (subtotal + tax) * rate, only when
-    // the user has toggled it on for this invoice.
     const appliedFees: { id: string; label: string; rate: number; amount: string }[] = [];
     let customFeesSum = new Decimal(0);
-    for (const f of customFees) {
-      if (!feeSelections[f.id]) continue;
+    for (const feeId of feeRows) {
+      if (!feeId) continue;
+      const f = customFees.find((cf) => cf.id === feeId);
+      if (!f) continue;
       try {
         const amt = subtotal.plus(taxAmount).times(new Decimal(f.rate));
         appliedFees.push({ id: f.id, label: f.label, rate: f.rate, amount: amt.toFixed(2) });
@@ -174,13 +176,12 @@ export default function NewCustomerInvoicePage() {
       try { return total.times(new Decimal(commissionRate || "0")); } catch { return new Decimal(0); }
     })();
     return { subtotal, taxAmount, creditCardFee, appliedFees, total, downPayment: down, balance, commission };
-  }, [items, downPayment, commissionRate, addCreditCardFee, ccFeeRate, customFees, feeSelections]);
+  }, [items, downPayment, commissionRate, addCreditCardFee, ccFeeRate, customFees, feeRows]);
 
   function updateItem(idx: number, field: keyof LineItem, value: string) {
     setItems((prev) => {
       const next = [...prev];
       next[idx] = { ...next[idx], [field]: value };
-      // Wave-style: auto-add a fresh blank row when typing in the last row's description
       if (field === "description" && idx === next.length - 1 && value.trim() !== "") {
         next.push(blankItem());
       }
@@ -190,6 +191,25 @@ export default function NewCustomerInvoicePage() {
 
   function removeItem(idx: number) {
     setItems((prev) => (prev.length === 1 ? prev : prev.filter((_, i) => i !== idx)));
+  }
+
+  function selectFeeRow(idx: number, newId: string | null) {
+    setFeeRows((prev) => {
+      const next = [...prev];
+      next[idx] = newId;
+      // Auto-open new empty row when the last row gets a selection
+      if (newId && idx === prev.length - 1) {
+        next.push(null);
+      }
+      return next;
+    });
+  }
+
+  function removeFeeRow(idx: number) {
+    setFeeRows((prev) => {
+      if (prev.length === 1) return [null]; // keep one blank row
+      return prev.filter((_, i) => i !== idx);
+    });
   }
 
   async function handleExtracted(data: {
@@ -376,8 +396,6 @@ export default function NewCustomerInvoicePage() {
                   />
                   {customerOpen && (customerQuery.trim() !== "" || filteredCustomers.length > 0) && (
                     <div className="absolute z-10 mt-1 left-0 right-0 bg-white border border-gray-200 rounded-lg shadow-lg overflow-hidden">
-                      {/* Scrollable suggestion list — only the existing
-                          customers live here, capped by max-h. */}
                       {filteredCustomers.length > 0 && (
                         <div className="max-h-64 overflow-y-auto">
                           {filteredCustomers.slice(0, 8).map((c) => (
@@ -393,10 +411,6 @@ export default function NewCustomerInvoicePage() {
                           ))}
                         </div>
                       )}
-
-                      {/* Create-new sits BELOW the scroll list with a clear
-                          divider, so it's always visible and never hidden
-                          mid-scroll. */}
                       <button
                         type="button"
                         onClick={() => { setModalSeedName(customerQuery); setModalOpen(true); setCustomerOpen(false); }}
@@ -430,7 +444,7 @@ export default function NewCustomerInvoicePage() {
           </div>
         </div>
 
-        {/* Line items */}
+        {/* Line items + fees */}
         <div className="card p-0 overflow-hidden">
           <div className="px-5 py-3 border-b bg-gray-50">
             <h2 className="font-semibold text-gray-800 text-sm">Items</h2>
@@ -521,6 +535,68 @@ export default function NewCustomerInvoicePage() {
               })}
             </tbody>
           </table>
+
+          {/* Wave-style fee rows — appear below items, one row per fee slot */}
+          {customFees.length > 0 && (
+            <>
+              <div className="border-t border-dashed px-5 py-2 bg-gray-50/60 flex items-center gap-2">
+                <span className="text-xs font-semibold text-gray-400 uppercase tracking-wider">Fees</span>
+              </div>
+              {feeRows.map((feeId, idx) => {
+                const selectedFee = feeId ? customFees.find((f) => f.id === feeId) : null;
+                let feeAmount = new Decimal(0);
+                if (selectedFee) {
+                  try {
+                    feeAmount = totals.subtotal.plus(totals.taxAmount).times(new Decimal(selectedFee.rate));
+                  } catch {}
+                }
+                // Exclude fees already selected in other rows from the dropdown options
+                const usedElsewhere = feeRows.filter((id, i) => i !== idx && id !== null) as string[];
+                return (
+                  <div
+                    key={idx}
+                    className="flex items-center border-b last:border-b-0 hover:bg-gray-50/50"
+                  >
+                    {/* Fee select — spans description + qty + price columns */}
+                    <div className="flex-1 px-2 py-1">
+                      <select
+                        value={feeId ?? ""}
+                        onChange={(e) => selectFeeRow(idx, e.target.value || null)}
+                        className="w-full px-2 py-1.5 border-0 focus:outline-none focus:bg-brand-50 rounded text-sm bg-transparent text-gray-600"
+                      >
+                        <option value="">— Select a fee —</option>
+                        {customFees
+                          .filter((f) => !usedElsewhere.includes(f.id) || f.id === feeId)
+                          .map((f) => (
+                            <option key={f.id} value={f.id}>
+                              {f.label} ({(f.rate * 100).toFixed(2)}%)
+                            </option>
+                          ))}
+                      </select>
+                    </div>
+                    {/* Spacer for tax column */}
+                    <div className="w-20" />
+                    {/* Amount */}
+                    <div className="w-28 px-3 text-right font-medium text-sm text-gray-700">
+                      {feeId ? formatCurrency(feeAmount.toFixed(2)) : <span className="text-gray-300">—</span>}
+                    </div>
+                    {/* Remove button */}
+                    <div className="w-10 pr-2 flex justify-end">
+                      <button
+                        type="button"
+                        onClick={() => removeFeeRow(idx)}
+                        className="text-gray-300 hover:text-red-500 p-1"
+                        aria-label="Remove fee row"
+                      >
+                        <X className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+            </>
+          )}
+
           <button
             onClick={() => setItems((prev) => [...prev, blankItem()])}
             className="w-full px-5 py-2.5 text-left text-sm text-brand-600 hover:bg-brand-50 border-t flex items-center gap-2"
@@ -577,62 +653,13 @@ export default function NewCustomerInvoicePage() {
                   </span>
                 </label>
               )}
-              {customFees.length > 0 && (
-                <div className="mt-2 space-y-1.5">
-                  {/* Dropdown to add a fee. Only fees not already applied
-                      appear in the options; selecting one toggles it on
-                      and the picker resets to the placeholder. */}
-                  <select
-                    className="input text-sm"
-                    value=""
-                    onChange={(e) => {
-                      const id = e.target.value;
-                      if (!id) return;
-                      setFeeSelections((prev) => ({ ...prev, [id]: true }));
-                    }}
-                  >
-                    <option value="">+ Add a fee…</option>
-                    {customFees
-                      .filter((f) => !feeSelections[f.id])
-                      .map((f) => (
-                        <option key={f.id} value={f.id}>
-                          {f.label} ({(f.rate * 100).toFixed(2)}%)
-                        </option>
-                      ))}
-                  </select>
-
-                  {/* Applied fees — one row each with a remove button. */}
-                  {totals.appliedFees.map((a) => (
-                    <div
-                      key={a.id}
-                      className="flex items-center justify-between gap-2 bg-brand-50 border border-brand-100 rounded px-2 py-1.5"
-                    >
-                      <span className="text-xs text-gray-700 truncate">
-                        {a.label} ({(a.rate * 100).toFixed(2)}%)
-                      </span>
-                      <div className="flex items-center gap-2">
-                        <span className="text-sm font-medium text-gray-900">
-                          {formatCurrency(a.amount)}
-                        </span>
-                        <button
-                          type="button"
-                          onClick={() =>
-                            setFeeSelections((prev) => {
-                              const next = { ...prev };
-                              delete next[a.id];
-                              return next;
-                            })
-                          }
-                          className="text-gray-400 hover:text-red-500"
-                          aria-label={`Remove ${a.label}`}
-                        >
-                          <X className="w-3.5 h-3.5" />
-                        </button>
-                      </div>
-                    </div>
-                  ))}
+              {/* Applied fees summary — read-only, driven by fee rows in items area */}
+              {totals.appliedFees.map((a) => (
+                <div key={a.id} className="flex justify-between">
+                  <span className="text-gray-500 truncate pr-2">{a.label} ({(a.rate * 100).toFixed(2)}%)</span>
+                  <span className="font-medium shrink-0">{formatCurrency(a.amount)}</span>
                 </div>
-              )}
+              ))}
               <div className="flex justify-between font-bold text-base border-t pt-2 mt-2">
                 <span>Total</span>
                 <span>{formatCurrency(totals.total.toFixed(2))}</span>
