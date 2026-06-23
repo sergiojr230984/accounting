@@ -16,6 +16,8 @@ export default function CustomerCreateModal({ open, initialName = "", onClose, o
   const [email, setEmail] = useState("");
   const [phone, setPhone] = useState("");
   const [address, setAddress] = useState("");
+  const [emergencyContactName, setEmergencyContactName] = useState("");
+  const [emergencyContactPhone, setEmergencyContactPhone] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
 
@@ -25,6 +27,8 @@ export default function CustomerCreateModal({ open, initialName = "", onClose, o
       setEmail("");
       setPhone("");
       setAddress("");
+      setEmergencyContactName("");
+      setEmergencyContactPhone("");
       setError("");
     }
   }, [open, initialName]);
@@ -42,7 +46,14 @@ export default function CustomerCreateModal({ open, initialName = "", onClose, o
       const res = await fetch("/api/customers", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name, email: email || undefined, phone: phone || undefined, address: address || undefined }),
+        body: JSON.stringify({
+          name,
+          email: email || undefined,
+          phone: phone || undefined,
+          address: address || undefined,
+          emergencyContactName: emergencyContactName || undefined,
+          emergencyContactPhone: emergencyContactPhone || undefined,
+        }),
       });
       if (!res.ok) {
         const d = await res.json().catch(() => ({}));
@@ -82,6 +93,16 @@ export default function CustomerCreateModal({ open, initialName = "", onClose, o
           <div>
             <label className="label">Address</label>
             <AddressAutocomplete value={address} onChange={setAddress} />
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="label">Emergency contact name</label>
+              <input className="input" value={emergencyContactName} onChange={(e) => setEmergencyContactName(e.target.value)} placeholder="Spouse, family…" />
+            </div>
+            <div>
+              <label className="label">Emergency contact phone</label>
+              <input className="input" value={emergencyContactPhone} onChange={(e) => setEmergencyContactPhone(e.target.value)} />
+            </div>
           </div>
           {error && <div className="bg-red-50 border border-red-200 text-red-700 px-3 py-2 rounded-lg text-sm">{error}</div>}
         </div>

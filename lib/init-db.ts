@@ -115,6 +115,8 @@ const SCHEMA_STATEMENTS: string[] = [
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updatedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP
   );`,
+  `ALTER TABLE "Customer" ADD COLUMN IF NOT EXISTS "emergencyContactName" TEXT;`,
+  `ALTER TABLE "Customer" ADD COLUMN IF NOT EXISTS "emergencyContactPhone" TEXT;`,
   `ALTER TABLE "Supplier" ADD COLUMN IF NOT EXISTS "paymentTermsDays" INTEGER NOT NULL DEFAULT 30;`,
   `ALTER TABLE "Supplier" ADD COLUMN IF NOT EXISTS "defaultCategory" "SupplierCategory";`,
   `ALTER TABLE "Supplier" ADD COLUMN IF NOT EXISTS "bankName" TEXT;`,

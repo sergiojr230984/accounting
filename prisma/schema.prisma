@@ -38,14 +38,16 @@ model User {
 }
 
 model Customer {
-  id        String            @id @default(cuid())
-  name      String
-  email     String?
-  phone     String?
-  address   String?
-  createdAt DateTime          @default(now())
-  updatedAt DateTime          @updatedAt
-  invoices  CustomerInvoice[]
+  id                     String            @id @default(cuid())
+  name                   String
+  email                  String?
+  phone                  String?
+  address                String?
+  emergencyContactName   String?
+  emergencyContactPhone  String?
+  createdAt              DateTime          @default(now())
+  updatedAt              DateTime          @updatedAt
+  invoices               CustomerInvoice[]
 }
 
 model Supplier {
