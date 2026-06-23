@@ -54,7 +54,7 @@ interface InvoiceDetail {
   commissionRate: string;
   employee: { id: string; name: string } | null;
   appliedFees: { id?: string; label: string; rate?: number; amount: string }[];
-  customer: { id: string; name: string; email: string | null; phone: string | null; address: string | null };
+  customer: { id: string; name: string; email: string | null; phone: string | null; address: string | null; emergencyContactName: string | null; emergencyContactPhone: string | null };
   items: { id: string; description: string; quantity: string; unitPrice: string; taxRate: string; lineTotal: string }[];
   payments: { id: string; amount: string; paymentDate: string; notes: string | null }[];
   files: { id: string; originalName: string; mimeType: string }[];
@@ -413,6 +413,16 @@ export default function CustomerInvoiceDetailPage() {
                 <p className="font-medium">{invoice.customer.name}</p>
                 {invoice.customer.email && <p className="text-gray-500">{invoice.customer.email}</p>}
                 {invoice.customer.phone && <p className="text-gray-500">{invoice.customer.phone}</p>}
+                {(invoice.customer.emergencyContactName || invoice.customer.emergencyContactPhone) && (
+                  <div className="pt-2 border-t border-gray-100">
+                    <p className="text-[10px] font-semibold uppercase text-gray-400 tracking-wide">Emergency contact</p>
+                    <p className="text-gray-600 mt-0.5">
+                      {[invoice.customer.emergencyContactName, invoice.customer.emergencyContactPhone]
+                        .filter(Boolean)
+                        .join("  ·  ")}
+                    </p>
+                  </div>
+                )}
               </div>
             </div>
           </div>
