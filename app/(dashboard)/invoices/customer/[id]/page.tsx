@@ -79,6 +79,7 @@ export default function CustomerInvoiceDetailPage() {
   const [paymentForm, setPaymentForm] = useState({ amount: "", paymentDate: new Date().toISOString().split("T")[0], notes: "" });
   const [paymentSubmitting, setPaymentSubmitting] = useState(false);
   const [paymentError, setPaymentError] = useState("");
+  const [deletingPaymentId, setDeletingPaymentId] = useState<string | null>(null);
 
   const { register, handleSubmit, control, reset, formState: { errors } } = useForm<EditForm>({
     resolver: zodResolver(editSchema),
@@ -155,7 +156,6 @@ export default function CustomerInvoiceDetailPage() {
       if (!res.ok) {
         setSendMessage({ kind: "error", text: data.error ?? "Failed to send" });
         if (data.link) {
-          // even if email failed, we have a public link
           await load();
         }
       } else {
@@ -193,6 +193,16 @@ export default function CustomerInvoiceDetailPage() {
       await load();
     } finally {
       setPaymentSubmitting(false);
+    }
+  }
+
+  async function handleDeletePayment(paymentId: string) {
+    setDeletingPaymentId(paymentId);
+    try {
+      const res = await fetch(`/api/invoices/customer/${id}/payments/${paymentId}`, { method: "DELETE" });
+      if (res.ok) await load();
+    } finally {
+      setDeletingPaymentId(null);
     }
   }
 
@@ -589,6 +599,7 @@ export default function CustomerInvoiceDetailPage() {
                       <th className="pb-2">Date</th>
                       <th className="pb-2 text-right">Amount</th>
                       <th className="pb-2">Notes</th>
+                      <th className="pb-2" />
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-50">
@@ -597,6 +608,18 @@ export default function CustomerInvoiceDetailPage() {
                         <td className="py-2">{format(new Date(p.paymentDate), "MMM d, yyyy")}</td>
                         <td className="py-2 text-right font-medium text-green-700">{formatCurrency(p.amount)}</td>
                         <td className="py-2 text-gray-500">{p.notes}</td>
+                        <td className="py-2 text-right">
+                          <button
+                            onClick={() => handleDeletePayment(p.id)}
+                            disabled={deletingPaymentId === p.id}
+                            className="p-1 text-gray-300 hover:text-red-500 hover:bg-red-50 rounded transition-colors disabled:opacity-40"
+                            title="Remove payment"
+                          >
+                            {deletingPaymentId === p.id
+                              ? <Loader2 className="w-3 h-3 animate-spin" />
+                              : <Trash2 className="w-3 h-3" />}
+                          </button>
+                        </td>
                       </tr>
                     ))}
                   </tbody>
