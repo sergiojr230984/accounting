@@ -162,6 +162,17 @@ const SCHEMA_STATEMENTS: string[] = [
   `DO $$ BEGIN
     ALTER TABLE "CustomerInvoice" ADD CONSTRAINT "CustomerInvoice_employeeId_fkey" FOREIGN KEY ("employeeId") REFERENCES "Employee"("id") ON DELETE SET NULL ON UPDATE CASCADE;
    EXCEPTION WHEN duplicate_object THEN NULL; END $$;`,
+  `CREATE TABLE IF NOT EXISTS "Product" (
+    "id" TEXT NOT NULL PRIMARY KEY,
+    "name" TEXT NOT NULL,
+    "description" TEXT,
+    "price" DECIMAL(15,2) NOT NULL DEFAULT 0,
+    "taxRate" DECIMAL(5,4) NOT NULL DEFAULT 0,
+    "incomeAccount" TEXT,
+    "active" BOOLEAN NOT NULL DEFAULT true,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP
+  );`,
   `CREATE TABLE IF NOT EXISTS "UploadedFile" (
     "id" TEXT NOT NULL PRIMARY KEY,
     "originalName" TEXT NOT NULL,

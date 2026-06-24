@@ -13,6 +13,7 @@ import {
   Plus,
   ChevronDown,
   Settings,
+  Package,
 } from "lucide-react";
 
 type LeafItem = { href: string; label: string; icon?: React.ComponentType<{ className?: string }> };
@@ -29,6 +30,7 @@ const navItems: NavItemWithRole[] = [
     children: [
       { href: "/invoices/customer", label: "Invoices" },
       { href: "/customers", label: "Customers" },
+      { href: "/products", label: "Products & Services", icon: Package },
     ],
   },
   {

@@ -186,6 +186,18 @@ model TaxRate {
   updatedAt DateTime @updatedAt
 }
 
+model Product {
+  id            String   @id @default(cuid())
+  name          String
+  description   String?
+  price         Decimal  @db.Decimal(15, 2) @default(0)
+  taxRate       Decimal  @db.Decimal(5, 4) @default(0)
+  incomeAccount String?
+  active        Boolean  @default(true)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+}
+
 model Employee {
   id             String            @id @default(cuid())
   name           String

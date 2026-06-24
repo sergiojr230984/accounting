@@ -30,6 +30,16 @@ interface Customer {
   emergencyContactPhone?: string | null;
 }
 
+interface Product {
+  id: string;
+  name: string;
+  description: string | null;
+  price: string;
+  taxRate: string;
+  incomeAccount: string | null;
+  active: boolean;
+}
+
 interface Employee {
   id: string;
   name: string;
@@ -70,6 +80,9 @@ export default function NewCustomerInvoicePage() {
   const [customerId, setCustomerId] = useState("");
   const [customerQuery, setCustomerQuery] = useState("");
   const [customerOpen, setCustomerOpen] = useState(false);
+
+  const [products, setProducts] = useState<Product[]>([]);
+  const [productFocusIdx, setProductFocusIdx] = useState<number | null>(null);
 
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [employeeId, setEmployeeId] = useState("");
@@ -123,6 +136,10 @@ export default function NewCustomerInvoicePage() {
       .then((list: { id: string; name: string; rate: string; active: boolean }[]) =>
         setTaxRates(list.filter((t) => t.active))
       )
+      .catch(() => {});
+    fetch("/api/products")
+      .then((r) => (r.ok ? r.json() : []))
+      .then((list: Product[]) => setProducts(list.filter((p) => p.active)))
       .catch(() => {});
     fetch("/api/settings")
       .then((r) => (r.ok ? r.json() : null))
@@ -264,6 +281,25 @@ export default function NewCustomerInvoicePage() {
       next[lineIdx] = { ...item, fees: filtered.length === 0 ? [null] : filtered };
       return next;
     });
+  }
+
+  function applyProduct(idx: number, product: Product) {
+    setItems((prev) => {
+      const next = [...prev];
+      next[idx] = {
+        ...next[idx],
+        description: product.name,
+        unitPrice: product.price,
+        taxRate: product.taxRate,
+      };
+      if (idx === next.length - 1) {
+        const fresh = blankItem();
+        if (allFees.length > 0) fresh.fees = [null];
+        next.push(fresh);
+      }
+      return next;
+    });
+    setProductFocusIdx(null);
   }
 
   async function handleExtracted(data: {
@@ -543,13 +579,43 @@ export default function NewCustomerInvoicePage() {
                 return (
                   <Fragment key={`item-${idx}`}>
                     <tr className="border-b last:border-b-0 hover:bg-gray-50/50">
-                      <td className="px-2 py-1">
+                      <td className="px-2 py-1 relative">
                         <input
                           className="w-full px-2 py-1.5 border-0 focus:outline-none focus:bg-brand-50 rounded text-sm"
                           placeholder="Item or service description"
                           value={item.description}
                           onChange={(e) => updateItem(idx, "description", e.target.value)}
+                          onFocus={() => setProductFocusIdx(idx)}
+                          onBlur={() => setTimeout(() => setProductFocusIdx(null), 150)}
                         />
+                        {productFocusIdx === idx && (() => {
+                          const q = item.description.toLowerCase();
+                          const matches = products.filter(
+                            (p) =>
+                              p.name.toLowerCase().includes(q) ||
+                              (p.description ?? "").toLowerCase().includes(q)
+                          ).slice(0, 8);
+                          if (matches.length === 0) return null;
+                          return (
+                            <div className="absolute z-20 left-2 right-2 top-full mt-0.5 bg-white border border-gray-200 rounded-lg shadow-lg overflow-hidden">
+                              {matches.map((p) => (
+                                <button
+                                  key={p.id}
+                                  type="button"
+                                  onMouseDown={() => applyProduct(idx, p)}
+                                  className="block w-full text-left px-3 py-2 hover:bg-brand-50 text-sm"
+                                >
+                                  <p className="font-medium text-gray-900">{p.name}</p>
+                                  <p className="text-xs text-gray-500">
+                                    ${parseFloat(p.price).toFixed(2)}
+                                    {parseFloat(p.taxRate) > 0 && ` · Tax ${(parseFloat(p.taxRate) * 100).toFixed(2)}%`}
+                                    {p.description && ` · ${p.description}`}
+                                  </p>
+                                </button>
+                              ))}
+                            </div>
+                          );
+                        })()}
                       </td>
                       <td className="px-2 py-1">
                         <input
@@ -801,7 +867,7 @@ export default function NewCustomerInvoicePage() {
               className="btn-primary w-full justify-center"
             >
               {saving === "print" ? <Loader2 className="w-4 h-4 animate-spin" /> : <Printer className="w-4 h-4" />}
-              Save & Print PDF
+              Save &amp; Print PDF
             </button>
             <button
               onClick={() => save("save")}
@@ -818,7 +884,7 @@ export default function NewCustomerInvoicePage() {
               title="Email invoice to customer (requires RESEND_API_KEY)"
             >
               {saving === "send" ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
-              Save & Email
+              Save &amp; Email
             </button>
           </div>
         </div>
