@@ -375,6 +375,10 @@ export default function NewCustomerInvoicePage() {
               taxRate: i.taxRate,
               lineTotal: new Decimal(i.quantity || "0").times(i.unitPrice || "0").toFixed(2),
             })),
+            employee: (() => {
+              const emp = employees.find((e) => e.id === employeeId);
+              return emp ? { id: emp.id, name: emp.name } : null;
+            })(),
             company,
           });
           const url = doc.output("bloburl");
