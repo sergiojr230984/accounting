@@ -55,6 +55,13 @@ export interface InvoicePDFData {
     taxRate: string | number;
     lineTotal: string | number;
   }[];
+  // Payment history — rendered as a small table under the totals so
+  // customers can see exactly when each partial payment landed.
+  payments?: {
+    paymentDate: string | Date;
+    amount: string | number;
+    notes?: string | null;
+  }[];
   company?: {
     name?: string | null;
     logo?: string | null;
@@ -87,7 +94,7 @@ export function generateInvoicePDF(invoice: InvoicePDFData): jsPDF {
   const margin = 48;
   const isPO = invoice.kind === "supplier";
 
-  // ─── HEADER ────────────────────────────────────────────────────
+  // ─── HEADER ────────────────────────────────────
   // Thin orange brand stripe across the top.
   doc.setFillColor(...ORANGE);
   doc.rect(0, 0, pageWidth, 8, "F");
@@ -138,7 +145,7 @@ export function generateInvoicePDF(invoice: InvoicePDFData): jsPDF {
     align: "right",
   });
 
-  // ─── TWO-COLUMN META BLOCK ─────────────────────────────────────
+  // ─── TWO-COLUMN META BLOCK ──────────────────────────────
   const metaTop = Math.max(headerBottom + 28, 132);
   const colGap = 24;
   const leftColX = margin;
@@ -146,7 +153,7 @@ export function generateInvoicePDF(invoice: InvoicePDFData): jsPDF {
   const rightColX = margin + leftColW + colGap;
   const rightColW = pageWidth - margin - rightColX;
 
-  // ─── LEFT: BILL TO ─────────────────────────────────────────────
+  // ─── LEFT: BILL TO ─────────────────────────────────────
   doc.setFont("helvetica", "normal");
   doc.setFontSize(8.5);
   doc.setTextColor(...TEXT_LIGHT);
@@ -201,7 +208,7 @@ export function generateInvoicePDF(invoice: InvoicePDFData): jsPDF {
 
   const leftColBottom = billY;
 
-  // ─── RIGHT: INVOICE DETAILS ────────────────────────────────────
+  // ─── RIGHT: INVOICE DETAILS ───────────────────────────────
   // Vertical list: Invoice Number, Sales Rep, Invoice Date, Due Date,
   // then a highlighted "Amount Due" box.
   const total = Number(invoice.totalAmount);
@@ -250,7 +257,7 @@ export function generateInvoicePDF(invoice: InvoicePDFData): jsPDF {
   });
   metaY += boxH;
 
-  // ─── ITEMS TABLE ───────────────────────────────────────────────
+  // ─── ITEMS TABLE ─────────────────────────────────────
   const tableStartY = Math.max(leftColBottom, metaY) + 28;
   const priceHeader = isPO ? "Cost" : "Price";
   autoTable(doc, {
@@ -286,7 +293,7 @@ export function generateInvoicePDF(invoice: InvoicePDFData): jsPDF {
     alternateRowStyles: { fillColor: [252, 252, 252] },
   });
 
-  // ─── TOTALS (lower-right) ──────────────────────────────────────
+  // ─── TOTALS (lower-right) ───────────────────────────────
   const afterTableY =
     (doc as unknown as { lastAutoTable: { finalY: number } }).lastAutoTable.finalY + 20;
   const labelX = pageWidth - margin - 220;
@@ -347,7 +354,56 @@ export function generateInvoicePDF(invoice: InvoicePDFData): jsPDF {
   doc.text(pdfCurrency(balance.toFixed(2)), valueX, totalsY, { align: "right" });
   totalsY += 30;
 
-  // ─── NOTES / TERMS ─────────────────────────────────────────────
+  // ─── PAYMENT HISTORY ──────────────────────────────────
+  // Lists every recorded payment with date, amount, and any notes the
+  // user added (e.g. "cash", "check #1234"). Only renders if at least
+  // one payment exists.
+  const payments = invoice.payments ?? [];
+  if (payments.length > 0) {
+    if (totalsY > pageHeight - 160) {
+      doc.addPage();
+      totalsY = margin + 20;
+    }
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(10);
+    doc.setTextColor(...TEXT_DARK);
+    doc.text("Payment History", margin, totalsY);
+    totalsY += 8;
+
+    autoTable(doc, {
+      startY: totalsY,
+      head: [["Date", "Amount", "Notes"]],
+      body: payments.map((p) => [
+        format(new Date(p.paymentDate), "MMM d, yyyy"),
+        pdfCurrency(String(p.amount)),
+        p.notes ?? "",
+      ]),
+      margin: { left: margin, right: margin },
+      styles: { font: "helvetica", fontSize: 9.5, cellPadding: 6, valign: "middle" },
+      headStyles: {
+        fillColor: BG_GRAY,
+        textColor: TEXT_MID,
+        fontStyle: "bold",
+        fontSize: 9,
+        halign: "left",
+        lineWidth: 0,
+      },
+      bodyStyles: {
+        textColor: TEXT_DARK,
+        lineColor: RULE_GRAY,
+        lineWidth: 0.5,
+      },
+      columnStyles: {
+        0: { cellWidth: 110 },
+        1: { halign: "right", cellWidth: 100, fontStyle: "bold" },
+        2: { cellWidth: "auto" },
+      },
+    });
+    totalsY =
+      (doc as unknown as { lastAutoTable: { finalY: number } }).lastAutoTable.finalY + 20;
+  }
+
+  // ─── NOTES / TERMS ────────────────────────────────────
   if (invoice.notes && invoice.notes.trim()) {
     // Page-break guard: keep notes block off the page footer.
     if (totalsY > pageHeight - 200) {
