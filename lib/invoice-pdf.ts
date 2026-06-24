@@ -55,8 +55,7 @@ export interface InvoicePDFData {
     taxRate: string | number;
     lineTotal: string | number;
   }[];
-  // Payment history — rendered as a small table under the totals so
-  // customers can see exactly when each partial payment landed.
+  // Payment history — individual lines rendered inline in the totals block.
   payments?: {
     paymentDate: string | Date;
     amount: string | number;
@@ -339,7 +338,20 @@ export function generateInvoicePDF(invoice: InvoicePDFData): jsPDF {
   if (down > 0) {
     writeRow("Down Payment", "-" + pdfCurrency(down.toFixed(2)), { muted: true });
   }
-  if (paid > 0) {
+
+  // Individual payment lines — one row per Payment record.
+  // Format: "Payment on Jun 21, 2026 using cash:"  -$1,175.93
+  // Falls back to the aggregate row if no Payment records exist but paidAmount > 0.
+  const payments = invoice.payments ?? [];
+  if (payments.length > 0) {
+    for (const p of payments) {
+      const dateStr = format(new Date(p.paymentDate), "MMM d, yyyy");
+      const label = p.notes?.trim()
+        ? `Payment on ${dateStr} using ${p.notes.trim()}:`
+        : `Payment on ${dateStr}:`;
+      writeRow(label, "-" + pdfCurrency(String(p.amount)), { muted: true });
+    }
+  } else if (paid > 0) {
     writeRow("Payment Received", "-" + pdfCurrency(paid.toFixed(2)), { muted: true });
   }
 
@@ -353,55 +365,6 @@ export function generateInvoicePDF(invoice: InvoicePDFData): jsPDF {
   doc.text("Balance Due", labelX, totalsY);
   doc.text(pdfCurrency(balance.toFixed(2)), valueX, totalsY, { align: "right" });
   totalsY += 30;
-
-  // ─── PAYMENT HISTORY ──────────────────────────────────
-  // Lists every recorded payment with date, amount, and any notes the
-  // user added (e.g. "cash", "check #1234"). Only renders if at least
-  // one payment exists.
-  const payments = invoice.payments ?? [];
-  if (payments.length > 0) {
-    if (totalsY > pageHeight - 160) {
-      doc.addPage();
-      totalsY = margin + 20;
-    }
-    doc.setFont("helvetica", "bold");
-    doc.setFontSize(10);
-    doc.setTextColor(...TEXT_DARK);
-    doc.text("Payment History", margin, totalsY);
-    totalsY += 8;
-
-    autoTable(doc, {
-      startY: totalsY,
-      head: [["Date", "Amount", "Notes"]],
-      body: payments.map((p) => [
-        format(new Date(p.paymentDate), "MMM d, yyyy"),
-        pdfCurrency(String(p.amount)),
-        p.notes ?? "",
-      ]),
-      margin: { left: margin, right: margin },
-      styles: { font: "helvetica", fontSize: 9.5, cellPadding: 6, valign: "middle" },
-      headStyles: {
-        fillColor: BG_GRAY,
-        textColor: TEXT_MID,
-        fontStyle: "bold",
-        fontSize: 9,
-        halign: "left",
-        lineWidth: 0,
-      },
-      bodyStyles: {
-        textColor: TEXT_DARK,
-        lineColor: RULE_GRAY,
-        lineWidth: 0.5,
-      },
-      columnStyles: {
-        0: { cellWidth: 110 },
-        1: { halign: "right", cellWidth: 100, fontStyle: "bold" },
-        2: { cellWidth: "auto" },
-      },
-    });
-    totalsY =
-      (doc as unknown as { lastAutoTable: { finalY: number } }).lastAutoTable.finalY + 20;
-  }
 
   // ─── NOTES / TERMS ────────────────────────────────────
   if (invoice.notes && invoice.notes.trim()) {
