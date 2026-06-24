@@ -188,5 +188,23 @@ export async function POST(request: Request) {
     })
     .catch(() => undefined);
 
+  // Auto-save each line item to the product catalog (skip if name already exists)
+  try {
+    for (const item of items) {
+      const name = item.description.trim();
+      if (!name) continue;
+      const existing = await prisma.product.findFirst({
+        where: { name: { equals: name, mode: "insensitive" } },
+      });
+      if (!existing) {
+        await prisma.product.create({
+          data: { name, price: item.unitPrice, taxRate: item.taxRate, active: true },
+        });
+      }
+    }
+  } catch {
+    // Product sync failure must never break invoice creation
+  }
+
   return NextResponse.json(invoice, { status: 201 });
 }

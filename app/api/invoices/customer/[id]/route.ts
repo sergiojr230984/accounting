@@ -115,6 +115,24 @@ export async function PATCH(
         lineTotal: item.lineTotal,
       })),
     };
+
+    // Auto-save new line items to the product catalog
+    try {
+      for (const item of data.items) {
+        const name = item.description.trim();
+        if (!name) continue;
+        const existing = await prisma.product.findFirst({
+          where: { name: { equals: name, mode: "insensitive" } },
+        });
+        if (!existing) {
+          await prisma.product.create({
+            data: { name, price: item.unitPrice, taxRate: item.taxRate, active: true },
+          });
+        }
+      }
+    } catch {
+      // Product sync failure must never break invoice update
+    }
   }
 
   const updated = await prisma.customerInvoice.update({

@@ -6,7 +6,7 @@ import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import Link from "next/link";
-import { ArrowLeft, Edit2, Save, X, Trash2, Loader2, Send, Copy, Check, Printer } from "lucide-react";
+import { ArrowLeft, Edit2, Save, X, Trash2, Loader2, Send, Copy, Check, Printer, Plus } from "lucide-react";
 import { generateInvoicePDF } from "@/lib/invoice-pdf";
 import { format } from "date-fns";
 import PaymentBadge from "@/components/PaymentBadge";
@@ -75,6 +75,10 @@ export default function CustomerInvoiceDetailPage() {
   const [sendMessage, setSendMessage] = useState<{ kind: "success" | "error"; text: string } | null>(null);
   const [linkCopied, setLinkCopied] = useState(false);
   const [employees, setEmployees] = useState<EmployeeOpt[]>([]);
+  const [showPaymentForm, setShowPaymentForm] = useState(false);
+  const [paymentForm, setPaymentForm] = useState({ amount: "", paymentDate: new Date().toISOString().split("T")[0], notes: "" });
+  const [paymentSubmitting, setPaymentSubmitting] = useState(false);
+  const [paymentError, setPaymentError] = useState("");
 
   const { register, handleSubmit, control, reset, formState: { errors } } = useForm<EditForm>({
     resolver: zodResolver(editSchema),
@@ -162,6 +166,33 @@ export default function CustomerInvoiceDetailPage() {
       setSendMessage({ kind: "error", text: (e as Error).message });
     } finally {
       setSending(false);
+    }
+  }
+
+  async function handleRecordPayment(e: React.FormEvent) {
+    e.preventDefault();
+    if (!paymentForm.amount || parseFloat(paymentForm.amount) <= 0) {
+      setPaymentError("Please enter a valid amount");
+      return;
+    }
+    setPaymentSubmitting(true);
+    setPaymentError("");
+    try {
+      const res = await fetch(`/api/invoices/customer/${id}/payments`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(paymentForm),
+      });
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}));
+        setPaymentError(d.error ?? "Failed to record payment");
+        return;
+      }
+      setShowPaymentForm(false);
+      setPaymentForm({ amount: "", paymentDate: new Date().toISOString().split("T")[0], notes: "" });
+      await load();
+    } finally {
+      setPaymentSubmitting(false);
     }
   }
 
@@ -489,29 +520,91 @@ export default function CustomerInvoiceDetailPage() {
             </div>
           </div>
 
-          {invoice.payments.length > 0 && (
-            <div className="card">
-              <h2 className="font-semibold text-gray-800 mb-4">Payments</h2>
-              <table className="w-full text-sm">
-                <thead className="border-b">
-                  <tr className="text-left text-gray-500">
-                    <th className="pb-2">Date</th>
-                    <th className="pb-2 text-right">Amount</th>
-                    <th className="pb-2">Notes</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-gray-50">
-                  {invoice.payments.map((p) => (
-                    <tr key={p.id}>
-                      <td className="py-2">{format(new Date(p.paymentDate), "MMM d, yyyy")}</td>
-                      <td className="py-2 text-right font-medium text-green-700">{formatCurrency(p.amount)}</td>
-                      <td className="py-2 text-gray-500">{p.notes}</td>
+          <div className="card">
+              <div className="flex items-center justify-between mb-4">
+                <h2 className="font-semibold text-gray-800">Payments</h2>
+                {!showPaymentForm && (
+                  <button onClick={() => setShowPaymentForm(true)} className="btn-primary text-xs py-1 px-3">
+                    <Plus className="w-3 h-3" />
+                    Record payment
+                  </button>
+                )}
+              </div>
+
+              {showPaymentForm && (
+                <form onSubmit={handleRecordPayment} className="mb-4 p-4 bg-blue-50 rounded-lg border border-blue-100">
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                    <div>
+                      <label className="label">Amount ($)</label>
+                      <input
+                        type="number"
+                        step="0.01"
+                        min="0"
+                        className="input"
+                        placeholder="0.00"
+                        value={paymentForm.amount}
+                        onChange={(e) => setPaymentForm((prev) => ({ ...prev, amount: e.target.value }))}
+                      />
+                    </div>
+                    <div>
+                      <label className="label">Payment date</label>
+                      <input
+                        type="date"
+                        className="input"
+                        value={paymentForm.paymentDate}
+                        onChange={(e) => setPaymentForm((prev) => ({ ...prev, paymentDate: e.target.value }))}
+                      />
+                    </div>
+                    <div>
+                      <label className="label">Notes</label>
+                      <input
+                        className="input"
+                        placeholder="e.g. Check #1234, Cash"
+                        value={paymentForm.notes}
+                        onChange={(e) => setPaymentForm((prev) => ({ ...prev, notes: e.target.value }))}
+                      />
+                    </div>
+                  </div>
+                  {paymentError && <p className="text-red-600 text-sm mt-2">{paymentError}</p>}
+                  <div className="flex justify-end gap-2 mt-3">
+                    <button
+                      type="button"
+                      onClick={() => { setShowPaymentForm(false); setPaymentError(""); }}
+                      className="btn-secondary"
+                    >
+                      <X className="w-4 h-4" /> Cancel
+                    </button>
+                    <button type="submit" disabled={paymentSubmitting} className="btn-primary">
+                      {paymentSubmitting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Check className="w-4 h-4" />}
+                      {paymentSubmitting ? "Saving…" : "Save payment"}
+                    </button>
+                  </div>
+                </form>
+              )}
+
+              {invoice.payments.length > 0 ? (
+                <table className="w-full text-sm">
+                  <thead className="border-b">
+                    <tr className="text-left text-gray-500">
+                      <th className="pb-2">Date</th>
+                      <th className="pb-2 text-right">Amount</th>
+                      <th className="pb-2">Notes</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
+                  </thead>
+                  <tbody className="divide-y divide-gray-50">
+                    {invoice.payments.map((p) => (
+                      <tr key={p.id}>
+                        <td className="py-2">{format(new Date(p.paymentDate), "MMM d, yyyy")}</td>
+                        <td className="py-2 text-right font-medium text-green-700">{formatCurrency(p.amount)}</td>
+                        <td className="py-2 text-gray-500">{p.notes}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              ) : (
+                <p className="text-sm text-gray-400 text-center py-4">No payments recorded yet — click &ldquo;Record payment&rdquo; above to add one</p>
+              )}
             </div>
-          )}
 
           <div className="card">
             <h2 className="font-semibold text-gray-800 mb-4">Attachments</h2>
