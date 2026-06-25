@@ -1,18 +1,19 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { MapPin } from "lucide-react";
+import { MapPin, Loader2 } from "lucide-react";
 
 /**
- * Address input with Google Places Autocomplete.
+ * Address input with OpenStreetMap Nominatim autocomplete.
  *
- * - Reads NEXT_PUBLIC_GOOGLE_MAPS_API_KEY at runtime. If the key isn't set
- *   (or the script fails to load) the input degrades gracefully to a plain
- *   text field — typing still works, just no suggestions.
- * - Restricts suggestions to US addresses to keep the dropdown clean.
- * - Calls onChange with the formatted address string when the user picks a
- *   suggestion (or types manually). onPlaceSelected receives the structured
- *   place components in case a caller wants city / state / zip separately.
+ * - No API key, no billing setup. Sends one request to nominatim.openstreetmap.org
+ *   per ~350 ms of typing (debounced), restricted to US addresses.
+ * - Picking a suggestion fills the input with the formatted address and (if
+ *   provided) calls onPlaceSelected with the structured components.
+ * - Typing manually always works; the suggestion dropdown is purely additive.
+ *
+ * Nominatim usage policy: ≤1 req/sec per browser, browsers attach a Referer
+ * automatically which satisfies the identification requirement.
  */
 
 interface PlaceComponents {
@@ -34,61 +35,28 @@ interface Props {
   id?: string;
 }
 
-// Minimal types for the Google Maps Places library — we only touch the fields
-// we use, so a permissive shape keeps this file self-contained.
-interface GAddressComponent {
-  long_name: string;
-  short_name: string;
-  types: string[];
-}
-interface GPlace {
-  formatted_address?: string;
-  address_components?: GAddressComponent[];
-}
-interface GAutocomplete {
-  addListener: (event: string, handler: () => void) => void;
-  getPlace: () => GPlace;
-}
-interface GMapsEvent {
-  clearInstanceListeners: (instance: unknown) => void;
-}
-interface GMaps {
-  places?: {
-    Autocomplete: new (
-      input: HTMLInputElement,
-      opts: {
-        componentRestrictions?: { country: string | string[] };
-        fields?: string[];
-        types?: string[];
-      }
-    ) => GAutocomplete;
-  };
-  event?: GMapsEvent;
-}
-interface WindowWithMaps {
-  google?: { maps?: GMaps };
-  __cuevitaMapsLoading?: Promise<void>;
+interface NominatimAddress {
+  house_number?: string;
+  road?: string;
+  city?: string;
+  town?: string;
+  village?: string;
+  hamlet?: string;
+  state?: string;
+  postcode?: string;
+  country?: string;
+  country_code?: string;
 }
 
-function getWindow(): WindowWithMaps {
-  return window as unknown as WindowWithMaps;
+interface NominatimResult {
+  place_id: number;
+  display_name: string;
+  address: NominatimAddress;
 }
 
-function loadGoogleMaps(apiKey: string): Promise<void> {
-  const w = getWindow();
-  if (w.google?.maps?.places) return Promise.resolve();
-  if (w.__cuevitaMapsLoading) return w.__cuevitaMapsLoading;
-  w.__cuevitaMapsLoading = new Promise<void>((resolve, reject) => {
-    const script = document.createElement("script");
-    script.src = `https://maps.googleapis.com/maps/api/js?key=${encodeURIComponent(apiKey)}&libraries=places&v=weekly`;
-    script.async = true;
-    script.defer = true;
-    script.onload = () => resolve();
-    script.onerror = () => reject(new Error("Google Maps script failed to load"));
-    document.head.appendChild(script);
-  });
-  return w.__cuevitaMapsLoading;
-}
+const DEBOUNCE_MS = 350;
+const MIN_CHARS = 3;
+const MAX_RESULTS = 5;
 
 export default function AddressAutocomplete({
   value,
@@ -98,90 +66,121 @@ export default function AddressAutocomplete({
   className,
   id,
 }: Props) {
-  const inputRef = useRef<HTMLInputElement>(null);
-  const [enabled, setEnabled] = useState(false);
-  const [failed, setFailed] = useState(false);
-  const handlersRef = useRef({ onChange, onPlaceSelected });
-  handlersRef.current = { onChange, onPlaceSelected };
+  const [suggestions, setSuggestions] = useState<NominatimResult[]>([]);
+  const [open, setOpen] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const wrapperRef = useRef<HTMLDivElement>(null);
+  // Skip the next suggestion fetch — used after the user picks a suggestion
+  // so the new value (which fully matches the chosen address) doesn't
+  // immediately re-trigger the dropdown.
+  const skipFetchRef = useRef(false);
 
   useEffect(() => {
-    const apiKey = process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY;
-    if (!apiKey) return; // No key — input still works, just no suggestions.
-
-    let autocomplete: GAutocomplete | null = null;
-    let cancelled = false;
-
-    loadGoogleMaps(apiKey)
-      .then(() => {
-        if (cancelled) return;
-        const w = getWindow();
-        const places = w.google?.maps?.places;
-        if (!inputRef.current || !places) return;
-
-        autocomplete = new places.Autocomplete(inputRef.current, {
-          componentRestrictions: { country: "us" },
-          fields: ["formatted_address", "address_components"],
-          types: ["address"],
+    if (skipFetchRef.current) {
+      skipFetchRef.current = false;
+      return;
+    }
+    const q = value.trim();
+    if (q.length < MIN_CHARS) {
+      setSuggestions([]);
+      return;
+    }
+    const timer = setTimeout(async () => {
+      setLoading(true);
+      try {
+        const url = new URL("https://nominatim.openstreetmap.org/search");
+        url.searchParams.set("q", q);
+        url.searchParams.set("format", "json");
+        url.searchParams.set("addressdetails", "1");
+        url.searchParams.set("limit", String(MAX_RESULTS));
+        url.searchParams.set("countrycodes", "us");
+        const res = await fetch(url.toString(), {
+          headers: { Accept: "application/json" },
         });
-
-        autocomplete.addListener("place_changed", () => {
-          if (!autocomplete) return;
-          const place = autocomplete.getPlace();
-          if (!place.formatted_address) return;
-
-          handlersRef.current.onChange(place.formatted_address);
-
-          if (handlersRef.current.onPlaceSelected) {
-            const out: PlaceComponents = { formattedAddress: place.formatted_address };
-            for (const c of place.address_components ?? []) {
-              if (c.types.includes("street_number")) out.streetNumber = c.long_name;
-              if (c.types.includes("route")) out.street = c.long_name;
-              if (c.types.includes("locality")) out.city = c.long_name;
-              else if (!out.city && c.types.includes("postal_town")) out.city = c.long_name;
-              if (c.types.includes("administrative_area_level_1")) out.state = c.short_name;
-              if (c.types.includes("postal_code")) out.zip = c.long_name;
-              if (c.types.includes("country")) out.country = c.short_name;
-            }
-            handlersRef.current.onPlaceSelected(out);
-          }
-        });
-
-        setEnabled(true);
-      })
-      .catch(() => {
-        if (!cancelled) setFailed(true);
-      });
-
-    return () => {
-      cancelled = true;
-      const w = getWindow();
-      if (autocomplete && w.google?.maps?.event) {
-        w.google.maps.event.clearInstanceListeners(autocomplete);
+        if (!res.ok) {
+          setSuggestions([]);
+          return;
+        }
+        const data = (await res.json()) as NominatimResult[];
+        setSuggestions(Array.isArray(data) ? data : []);
+        setOpen(true);
+      } catch {
+        setSuggestions([]);
+      } finally {
+        setLoading(false);
       }
-    };
+    }, DEBOUNCE_MS);
+
+    return () => clearTimeout(timer);
+  }, [value]);
+
+  // Close on outside click
+  useEffect(() => {
+    function onDocClick(e: MouseEvent) {
+      if (!wrapperRef.current) return;
+      if (!wrapperRef.current.contains(e.target as Node)) setOpen(false);
+    }
+    document.addEventListener("mousedown", onDocClick);
+    return () => document.removeEventListener("mousedown", onDocClick);
   }, []);
 
+  function formatDisplay(r: NominatimResult): string {
+    const a = r.address;
+    const street = [a.house_number, a.road].filter(Boolean).join(" ");
+    const city = a.city || a.town || a.village || a.hamlet || "";
+    const parts = [street, city, a.state, a.postcode].filter(Boolean);
+    return parts.length > 0 ? parts.join(", ") : r.display_name;
+  }
+
+  function handlePick(r: NominatimResult) {
+    const formatted = formatDisplay(r);
+    skipFetchRef.current = true;
+    onChange(formatted);
+    setOpen(false);
+    setSuggestions([]);
+    if (onPlaceSelected) {
+      const a = r.address;
+      onPlaceSelected({
+        formattedAddress: formatted,
+        streetNumber: a.house_number,
+        street: a.road,
+        city: a.city || a.town || a.village || a.hamlet,
+        state: a.state,
+        zip: a.postcode,
+        country: a.country_code?.toUpperCase(),
+      });
+    }
+  }
+
   return (
-    <div className="relative">
+    <div ref={wrapperRef} className="relative">
       <input
-        ref={inputRef}
         id={id}
         type="text"
         value={value}
         onChange={(e) => onChange(e.target.value)}
-        placeholder={
-          placeholder ?? (enabled ? "Start typing — pick a suggestion" : "123 Main St, City, State")
-        }
-        className={`${className ?? "input"} ${enabled ? "pr-9" : ""}`}
+        onFocus={() => { if (suggestions.length > 0) setOpen(true); }}
+        placeholder={placeholder ?? "Start typing an address…"}
+        className={`${className ?? "input"} pr-9`}
         autoComplete="off"
       />
-      {enabled && (
-        <MapPin className="w-4 h-4 text-brand-500 absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none" />
-      )}
-      {failed && (
-        <p className="text-xs text-amber-600 mt-1">
-          Address suggestions unavailable — type manually.
-        </p>
+      <span className="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none text-brand-500">
+        {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <MapPin className="w-4 h-4" />}
+      </span>
+      {open && suggestions.length > 0 && (
+        <ul className="absolute z-20 left-0 right-0 mt-1 bg-white border border-gray-200 rounded-lg shadow-lg max-h-72 overflow-y-auto text-sm">
+          {suggestions.map((s) => (
+            <li key={s.place_id}>
+              <button
+                type="button"
+                onClick={() => handlePick(s)}
+                className="w-full text-left px-3 py-2 hover:bg-brand-50 hover:text-brand-700 transition-colors"
+              >
+                {formatDisplay(s)}
+              </button>
+            </li>
+          ))}
+        </ul>
       )}
     </div>
   );
