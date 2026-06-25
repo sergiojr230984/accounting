@@ -46,7 +46,7 @@ interface InvoiceDetail {
   paymentStatus: "UNPAID" | "PARTIALLY_PAID" | "PAID";
   category: "COGS" | "SERVICES_EXPENSE" | "OPERATING_EXPENSE" | "OTHER";
   notes: string | null;
-  supplier: { id: string; name: string; email: string | null; phone: string | null };
+  supplier: { id: string; name: string; email: string | null; phone: string | null; address: string | null; zelle: string | null };
   items: { id: string; description: string; quantity: string; unitCost: string; taxRate: string; lineTotal: string }[];
   payments: { id: string; amount: string; paymentDate: string; notes: string | null }[];
   files: { id: string; originalName: string; mimeType: string }[];
@@ -143,7 +143,8 @@ export default function SupplierInvoiceDetailPage() {
         name: invoice.supplier.name,
         email: invoice.supplier.email,
         phone: invoice.supplier.phone,
-        address: null,
+        address: invoice.supplier.address,
+        zelle: invoice.supplier.zelle,
       },
       items: invoice.items.map((i) => ({
         description: i.description,

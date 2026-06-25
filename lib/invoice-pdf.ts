@@ -43,6 +43,7 @@ export interface InvoicePDFData {
     email: string | null;
     phone: string | null;
     address: string | null;
+    zelle?: string | null;
     emergencyContactName?: string | null;
     emergencyContactPhone?: string | null;
   };
@@ -183,6 +184,21 @@ export function generateInvoicePDF(invoice: InvoicePDFData): jsPDF {
   }
   if (invoice.customer.email) {
     doc.text(invoice.customer.email, leftColX, billY);
+    billY += 12;
+  }
+
+  // Zelle — small label + value block, mainly used on PO PDFs so the
+  // accounts-payable user can see how to pay the vendor at a glance.
+  if (invoice.customer.zelle) {
+    billY += 6;
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(8);
+    doc.setTextColor(...TEXT_LIGHT);
+    doc.text("ZELLE", leftColX, billY);
+    billY += 11;
+    doc.setFontSize(9.5);
+    doc.setTextColor(...TEXT_MID);
+    doc.text(invoice.customer.zelle, leftColX, billY);
     billY += 12;
   }
 
