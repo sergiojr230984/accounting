@@ -18,6 +18,7 @@ const updateSchema = z.object({
   bankName: z.string().optional().or(z.null()),
   bankAccountNumber: z.string().optional().or(z.null()),
   bankRouting: z.string().optional().or(z.null()),
+  zelle: z.string().optional().or(z.null()),
   paymentInstructions: z.string().optional().or(z.null()),
 });
 
@@ -46,6 +47,7 @@ export async function PATCH(
   if (parsed.data.bankName !== undefined) data.bankName = parsed.data.bankName || null;
   if (parsed.data.bankAccountNumber !== undefined) data.bankAccountNumber = parsed.data.bankAccountNumber || null;
   if (parsed.data.bankRouting !== undefined) data.bankRouting = parsed.data.bankRouting || null;
+  if (parsed.data.zelle !== undefined) data.zelle = parsed.data.zelle || null;
   if (parsed.data.paymentInstructions !== undefined) data.paymentInstructions = parsed.data.paymentInstructions || null;
 
   const supplier = await prisma.supplier.update({ where: { id }, data });

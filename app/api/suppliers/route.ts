@@ -19,6 +19,7 @@ const schema = z.object({
   bankName: z.string().optional(),
   bankAccountNumber: z.string().optional(),
   bankRouting: z.string().optional(),
+  zelle: z.string().optional(),
   paymentInstructions: z.string().optional(),
 });
 
@@ -70,6 +71,7 @@ export async function POST(request: Request) {
         bankName: parsed.data.bankName || null,
         bankAccountNumber: parsed.data.bankAccountNumber || null,
         bankRouting: parsed.data.bankRouting || null,
+        zelle: parsed.data.zelle || null,
         paymentInstructions: parsed.data.paymentInstructions || null,
       },
     });

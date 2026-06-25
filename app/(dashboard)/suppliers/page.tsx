@@ -19,6 +19,7 @@ const schema = z.object({
   bankName: z.string().optional(),
   bankAccountNumber: z.string().optional(),
   bankRouting: z.string().optional(),
+  zelle: z.string().optional(),
   paymentInstructions: z.string().optional(),
 });
 type FormData = z.infer<typeof schema>;
@@ -34,6 +35,7 @@ interface Supplier {
   bankName: string | null;
   bankAccountNumber: string | null;
   bankRouting: string | null;
+  zelle: string | null;
   paymentInstructions: string | null;
   _count: { invoices: number };
 }
@@ -125,6 +127,10 @@ function SupplierForm({
           <div>
             <label className="label">Routing / ABA</label>
             <input className="input" {...register("bankRouting")} />
+          </div>
+          <div className="sm:col-span-2">
+            <label className="label">Zelle</label>
+            <input className="input" placeholder="email or phone" {...register("zelle")} />
           </div>
           <div className="sm:col-span-2">
             <label className="label">Payment instructions</label>
@@ -292,6 +298,7 @@ export default function SuppliersPage() {
               <th className="text-left px-5 py-3 text-xs font-semibold text-gray-500 uppercase">Email</th>
               <th className="text-left px-5 py-3 text-xs font-semibold text-gray-500 uppercase">Phone</th>
               <th className="text-left px-5 py-3 text-xs font-semibold text-gray-500 uppercase">Address</th>
+              <th className="text-left px-5 py-3 text-xs font-semibold text-gray-500 uppercase">Zelle</th>
               <th className="text-center px-5 py-3 text-xs font-semibold text-gray-500 uppercase">Invoices</th>
               <th className="px-5 py-3" />
             </tr>
@@ -300,7 +307,7 @@ export default function SuppliersPage() {
             {loading ? (
               Array.from({ length: 4 }).map((_, i) => (
                 <tr key={i}>
-                  {Array.from({ length: 6 }).map((_, j) => (
+                  {Array.from({ length: 7 }).map((_, j) => (
                     <td key={j} className="px-5 py-3">
                       <div className="h-4 bg-gray-100 rounded animate-pulse" />
                     </td>
@@ -309,7 +316,7 @@ export default function SuppliersPage() {
               ))
             ) : filtered.length === 0 ? (
               <tr>
-                <td colSpan={6} className="px-5 py-12 text-center text-gray-400">
+                <td colSpan={7} className="px-5 py-12 text-center text-gray-400">
                   <Truck className="w-8 h-8 mx-auto mb-2 opacity-40" />
                   {search ? "No suppliers match your search" : "No suppliers yet — add your first one above"}
                 </td>
@@ -322,6 +329,7 @@ export default function SuppliersPage() {
                     <td className="px-5 py-3 text-gray-500">{s.email ?? "—"}</td>
                     <td className="px-5 py-3 text-gray-500">{s.phone ?? "—"}</td>
                     <td className="px-5 py-3 text-gray-500 max-w-xs truncate">{s.address ?? "—"}</td>
+                    <td className="px-5 py-3 text-gray-500">{s.zelle ?? "—"}</td>
                     <td className="px-5 py-3 text-center">
                       <Link
                         href={`/invoices/supplier?supplierId=${s.id}`}
@@ -356,7 +364,7 @@ export default function SuppliersPage() {
                   {/* Inline edit form */}
                   {editingId === s.id && (
                     <tr key={`edit-${s.id}`}>
-                      <td colSpan={6} className="px-5 py-4 bg-blue-50 border-b border-blue-100">
+                      <td colSpan={7} className="px-5 py-4 bg-blue-50 border-b border-blue-100">
                         <p className="text-xs font-semibold text-brand-700 mb-3 uppercase tracking-wide">
                           Editing: {s.name}
                         </p>
@@ -371,6 +379,7 @@ export default function SuppliersPage() {
                             bankName: s.bankName ?? "",
                             bankAccountNumber: s.bankAccountNumber ?? "",
                             bankRouting: s.bankRouting ?? "",
+                            zelle: s.zelle ?? "",
                             paymentInstructions: s.paymentInstructions ?? "",
                           }}
                           submitLabel="Save Changes"
@@ -384,7 +393,7 @@ export default function SuppliersPage() {
                   {/* Delete error */}
                   {deleteError[s.id] && (
                     <tr key={`err-${s.id}`}>
-                      <td colSpan={6} className="px-5 py-2 bg-red-50">
+                      <td colSpan={7} className="px-5 py-2 bg-red-50">
                         <p className="text-red-600 text-xs">{deleteError[s.id]}</p>
                       </td>
                     </tr>
