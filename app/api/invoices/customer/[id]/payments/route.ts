@@ -36,10 +36,18 @@ export async function POST(
 
   const { amount, paymentDate, notes } = parsed.data;
 
+  // Date inputs send "YYYY-MM-DD". new Date("2026-06-25") parses as UTC
+  // midnight, which in any timezone west of UTC (e.g. EST) renders as the
+  // PREVIOUS day. Pin to noon UTC so the same calendar date is shown
+  // everywhere from UTC-11 to UTC+11.
+  const parsedDate = /^\d{4}-\d{2}-\d{2}$/.test(paymentDate)
+    ? new Date(`${paymentDate}T12:00:00Z`)
+    : new Date(paymentDate);
+
   await prisma.payment.create({
     data: {
       amount,
-      paymentDate: new Date(paymentDate),
+      paymentDate: parsedDate,
       notes: notes || null,
       customerInvoiceId: id,
     },
