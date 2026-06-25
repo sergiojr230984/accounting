@@ -341,8 +341,12 @@ export function generateInvoicePDF(invoice: InvoicePDFData): jsPDF {
 
   // Individual payment lines — one row per Payment record.
   // Format: "Payment on Jun 21, 2026 using cash:"  -$1,175.93
-  // Falls back to the aggregate row if no Payment records exist but paidAmount > 0.
+  // If paidAmount > sum(payments) — usually a legacy invoice where the
+  // "Paid amount" field was edited directly before the per-payment system
+  // existed — render the leftover as a single "Payment Received" line so
+  // the rows always reconcile with the Balance Due shown on screen.
   const payments = invoice.payments ?? [];
+  const paymentSum = payments.reduce((acc, p) => acc + Number(p.amount), 0);
   if (payments.length > 0) {
     for (const p of payments) {
       const dateStr = format(new Date(p.paymentDate), "MMM d, yyyy");
@@ -350,6 +354,10 @@ export function generateInvoicePDF(invoice: InvoicePDFData): jsPDF {
         ? `Payment on ${dateStr} using ${p.notes.trim()}:`
         : `Payment on ${dateStr}:`;
       writeRow(label, "-" + pdfCurrency(String(p.amount)), { muted: true });
+    }
+    const leftover = paid - paymentSum;
+    if (leftover > 0.005) {
+      writeRow("Payment Received", "-" + pdfCurrency(leftover.toFixed(2)), { muted: true });
     }
   } else if (paid > 0) {
     writeRow("Payment Received", "-" + pdfCurrency(paid.toFixed(2)), { muted: true });
