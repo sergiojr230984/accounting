@@ -269,7 +269,22 @@ export default function DashboardPage() {
                         </linearGradient>
                       </defs>
                       <CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6" />
-                      <XAxis dataKey="month" tick={{ fontSize: 10, fill: "#9ca3af" }} axisLine={false} tickLine={false} />
+                      <XAxis
+                        dataKey="month"
+                        tick={{ fontSize: 10, fill: "#9ca3af" }}
+                        axisLine={false}
+                        tickLine={false}
+                        interval={0}
+                        tickFormatter={(v: string) => {
+                          // API sends "YYYY-MM" — show short month name, and
+                          // tag January with the year so the reader can see
+                          // year boundaries in the 12-month series.
+                          const [y, m] = v.split("-");
+                          const names = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+                          const name = names[parseInt(m, 10) - 1] ?? v;
+                          return m === "01" ? `${name} '${y.slice(2)}` : name;
+                        }}
+                      />
                       <YAxis tick={{ fontSize: 10, fill: "#9ca3af" }} tickFormatter={(v) => `$${(v / 1000).toFixed(0)}k`} axisLine={false} tickLine={false} />
                       <Tooltip formatter={(v: number) => formatCurrency(v)} />
                       <Legend wrapperStyle={{ display: "none" }} />
