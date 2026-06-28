@@ -10,17 +10,17 @@ datasource db {
 enum Role {
   ADMIN
   MANAGER
-  SALES
+  SALES   // = Employee in the permission matrix
 }
 
 // ── CRM enums ──────────────────────────────────────────────────────────────
 
 enum LeadStatus {
-  NEW // Lead recién entrado, sin contactar
-  CONTACTED // Ya se le escribió/llamó al menos una vez
-  FOLLOW_UP // En seguimiento activo
-  CLOSED // Venta cerrada (ganado)
-  LOST // Perdido / no interesado
+  NEW
+  CONTACTED
+  FOLLOW_UP
+  CLOSED
+  LOST
 }
 
 enum LeadPriority {
@@ -40,13 +40,13 @@ enum LeadSource {
 }
 
 enum MessageDirection {
-  INBOUND // Cliente → vendedora
-  OUTBOUND // Vendedora → cliente
+  INBOUND
+  OUTBOUND
 }
 
 enum AssignmentMode {
-  MANUAL // El admin asigna a mano
-  ROUND_ROBIN // Rotación automática entre vendedoras activas
+  MANUAL
+  ROUND_ROBIN
 }
 
 enum PaymentStatus {
@@ -72,14 +72,9 @@ model User {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  // ── CRM: campos de vendedora ──
-  // Número de WhatsApp visible de la vendedora (formato E.164, ej: +5215512345678)
   whatsappNumber        String?
-  // ID del número de teléfono en la WhatsApp Cloud API de Meta. Se usa en el
-  // webhook para saber a QUÉ vendedora le escribió el cliente.
   whatsappPhoneNumberId String? @unique
 
-  // Relaciones CRM
   assignedLeads       Lead[]           @relation("AssignedLeads")
   assignmentsReceived LeadAssignment[] @relation("AssignmentTo")
   assignmentsMade     LeadAssignment[] @relation("AssignmentBy")
@@ -105,6 +100,16 @@ model Supplier {
   createdAt DateTime          @default(now())
   updatedAt DateTime          @updatedAt
   invoices  SupplierInvoice[]
+
+  // ── 1099 contractor fields ──
+  is1099Contractor Boolean @default(false)
+  taxId            String? // AES-256-GCM encrypted at application layer
+  taxIdType        String? // SSN | EIN
+  legalName        String?
+  businessAddress  String?
+  w9OnFile         Boolean @default(false)
+  w9FilePath       String?
+  default1099Box   String? @default("NEC_BOX_1")
 }
 
 model CustomerInvoice {
@@ -183,6 +188,7 @@ model Payment {
   amount            Decimal          @db.Decimal(15, 2)
   paymentDate       DateTime
   notes             String?
+  paymentMethod     String?          // cash | check | bank_transfer | card
   customerInvoiceId String?
   customerInvoice   CustomerInvoice? @relation(fields: [customerInvoiceId], references: [id])
   supplierInvoiceId String?
@@ -205,29 +211,65 @@ model UploadedFile {
   createdAt         DateTime         @default(now())
 }
 
+// ── Audit log (append-only) ────────────────────────────────────────────────
+// The app DB user has INSERT + SELECT only on this table (see README).
+
+model AuditLog {
+  id          String   @id @default(cuid())
+  timestamp   DateTime @default(now())
+  actorUserId String?
+  actorName   String
+  actorRole   String
+  action      String   // AuditAction enum values
+  entityType  String
+  entityId    String?
+  entityLabel String
+  changes     Json?
+  ipAddress   String
+  userAgent   String
+
+  @@index([timestamp])
+  @@index([actorUserId])
+  @@index([entityType])
+  @@index([action])
+}
+
+// ── Backup log ─────────────────────────────────────────────────────────────
+
+model BackupLog {
+  id            String    @id @default(cuid())
+  startedAt     DateTime  @default(now())
+  finishedAt    DateTime?
+  status        String    // RUNNING | SUCCESS | FAILED
+  type          String    // SCHEDULED | MANUAL
+  sizeBytes     BigInt?
+  location      String?
+  errorMessage  String?
+  triggeredById String?
+
+  @@index([startedAt])
+  @@index([status])
+}
+
 // ── CRM: Leads de WhatsApp ──────────────────────────────────────────────────
 
-/// Un lead = un prospecto que escribió por WhatsApp (o se cargó a mano).
-/// El teléfono es único para evitar duplicados: si el mismo número escribe
-/// otra vez, se reutiliza el lead existente y solo se agrega el mensaje.
 model Lead {
   id    String @id @default(cuid())
   name  String
-  phone String @unique // WhatsApp del cliente, formato E.164
+  phone String @unique
 
   status   LeadStatus   @default(NEW)
   priority LeadPriority @default(MEDIUM)
   source   LeadSource   @default(WHATSAPP)
 
-  // Vendedora asignada (puede quedar sin asignar hasta que el admin la asigne)
   assignedToId String?
   assignedTo   User?   @relation("AssignedLeads", fields: [assignedToId], references: [id])
 
-  notes           String? // Notas internas del equipo
-  entryDate       DateTime  @default(now()) // Fecha de entrada del lead
-  lastMessageAt   DateTime? // Fecha del último mensaje (entrante o saliente)
-  lastMessageText String? // Vista previa del último mensaje recibido
-  nextFollowUpAt  DateTime? // Próxima fecha de seguimiento
+  notes           String?
+  entryDate       DateTime  @default(now())
+  lastMessageAt   DateTime?
+  lastMessageText String?
+  nextFollowUpAt  DateTime?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -240,14 +282,12 @@ model Lead {
   @@index([entryDate])
 }
 
-/// Cada mensaje del historial de conversación de un lead.
 model LeadMessage {
   id          String           @id @default(cuid())
   leadId      String
   lead        Lead             @relation(fields: [leadId], references: [id], onDelete: Cascade)
   direction   MessageDirection
   body        String
-  // ID del mensaje en WhatsApp (para deduplicar webhooks reenviados por Meta)
   waMessageId String?          @unique
   fromNumber  String?
   toNumber    String?
@@ -257,33 +297,27 @@ model LeadMessage {
   @@index([leadId])
 }
 
-/// Historial de cambios de asignación (auditoría de quién pasó el lead a quién).
 model LeadAssignment {
   id     String @id @default(cuid())
   leadId String
   lead   Lead   @relation(fields: [leadId], references: [id], onDelete: Cascade)
 
-  // Vendedora anterior (null si el lead no estaba asignado)
   fromUserName String?
-  // Vendedora nueva
   toUserId     String
   toUser       User    @relation("AssignmentTo", fields: [toUserId], references: [id])
 
-  // Quién hizo el cambio (null si fue el sistema, ej. round-robin del webhook)
   changedById String?
   changedBy   User?   @relation("AssignmentBy", fields: [changedById], references: [id])
 
-  reason    String? // "manual", "round_robin", "reassign", etc.
+  reason    String?
   createdAt DateTime @default(now())
 
   @@index([leadId])
 }
 
-/// Configuración global del CRM (fila única id="singleton").
 model CrmSetting {
   id                String         @id @default("singleton")
   assignmentMode    AssignmentMode @default(ROUND_ROBIN)
-  // Puntero de rotación para el round-robin de asignación automática
   lastRotationIndex Int            @default(0)
   updatedAt         DateTime       @updatedAt
 }

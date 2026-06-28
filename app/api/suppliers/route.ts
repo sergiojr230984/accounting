@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
+import { requirePermission } from "@/lib/permissions";
+import { writeAuditLog, extractMeta, actorFromSession } from "@/lib/audit";
 import { initializeDatabase } from "@/lib/init-db";
 import { z } from "zod";
 
@@ -11,9 +13,15 @@ const schema = z.object({
   address: z.string().optional(),
 });
 
-export async function GET() {
+export async function GET(request: Request) {
   const session = await auth();
   if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
+  const { allowed } = requirePermission(session, "supplier", "read");
+  if (!allowed) {
+    await writeAuditLog({ ...actorFromSession(session), action: "ACCESS_DENIED", entityType: "supplier", entityLabel: "Supplier List", ...extractMeta(request) });
+    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  }
 
   await initializeDatabase();
   try {
@@ -33,6 +41,12 @@ export async function GET() {
 export async function POST(request: Request) {
   const session = await auth();
   if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
+  const { allowed } = requirePermission(session, "supplier", "create");
+  if (!allowed) {
+    await writeAuditLog({ ...actorFromSession(session), action: "ACCESS_DENIED", entityType: "supplier", entityLabel: "Create Supplier", ...extractMeta(request) });
+    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  }
 
   let body: unknown;
   try {
@@ -56,6 +70,16 @@ export async function POST(request: Request) {
         address: parsed.data.address || null,
       },
     });
+
+    await writeAuditLog({
+      ...actorFromSession(session),
+      action: "CREATE",
+      entityType: "supplier",
+      entityId: supplier.id,
+      entityLabel: supplier.name,
+      ...extractMeta(request),
+    });
+
     return NextResponse.json(supplier, { status: 201 });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);

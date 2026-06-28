@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
+import { requirePermission } from "@/lib/permissions";
+import { writeAuditLog, extractMeta, actorFromSession } from "@/lib/audit";
 import { z } from "zod";
 import Decimal from "decimal.js";
 
@@ -25,6 +27,12 @@ const invoiceSchema = z.object({
 export async function GET(request: Request) {
   const session = await auth();
   if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
+  const { allowed } = requirePermission(session, "customer_invoice", "read");
+  if (!allowed) {
+    await writeAuditLog({ ...actorFromSession(session), action: "ACCESS_DENIED", entityType: "customer_invoice", entityLabel: "Customer Invoice List", ...extractMeta(request) });
+    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  }
 
   const { searchParams } = new URL(request.url);
   const customerId = searchParams.get("customerId");
@@ -66,6 +74,12 @@ export async function POST(request: Request) {
   const session = await auth();
   if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
+  const { allowed, role } = requirePermission(session, "customer_invoice", "create");
+  if (!allowed) {
+    await writeAuditLog({ ...actorFromSession(session), action: "ACCESS_DENIED", entityType: "customer_invoice", entityLabel: "Create Customer Invoice", ...extractMeta(request) });
+    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  }
+
   const body = await request.json();
   const parsed = invoiceSchema.safeParse(body);
   if (!parsed.success) {
@@ -75,7 +89,6 @@ export async function POST(request: Request) {
   const { customerId, invoiceNumber, invoiceDate, dueDate, items, notes, paymentStatus, paidAmount } =
     parsed.data;
 
-  // Duplicate check
   const existing = await prisma.customerInvoice.findUnique({
     where: { invoiceNumber_customerId: { invoiceNumber, customerId } },
   });
@@ -127,5 +140,15 @@ export async function POST(request: Request) {
     include: { customer: true, items: true },
   });
 
+  await writeAuditLog({
+    ...actorFromSession(session),
+    action: "CREATE",
+    entityType: "customer_invoice",
+    entityId: invoice.id,
+    entityLabel: `Invoice #${invoiceNumber}`,
+    ...extractMeta(request),
+  });
+
+  void role; // used for potential future per-role logic
   return NextResponse.json(invoice, { status: 201 });
 }
