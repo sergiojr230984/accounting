@@ -41,6 +41,9 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
         });
         if (!user) return null;
 
+        // Disabled accounts cannot log in
+        if (!user.active) return null;
+
         const valid = await bcrypt.compare(parsed.data.password, user.password);
         if (!valid) return null;
 
