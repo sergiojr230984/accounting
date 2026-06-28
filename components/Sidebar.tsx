@@ -13,29 +13,39 @@ import {
   MessageSquare,
   Contact,
   UsersRound,
+  ShieldCheck,
+  ScrollText,
+  DatabaseBackup,
+  FileSpreadsheet,
+  UserCog,
 } from "lucide-react";
 
 type NavItem = { href: string; label: string; icon: typeof LayoutDashboard };
 
-// Sección CRM (leads de WhatsApp) — visible para todos los roles
 const crmNav: NavItem[] = [
   { href: "/crm/dashboard", label: "Panel CRM", icon: LayoutDashboard },
   { href: "/crm/leads", label: "Leads", icon: Contact },
 ];
 
-// Gestión del equipo de ventas — solo administradores
 const crmAdminNav: NavItem[] = [
   { href: "/crm/team", label: "Vendedoras", icon: UsersRound },
 ];
 
-// Sección Contabilidad — solo ADMIN / MANAGER
 const accountingNav: NavItem[] = [
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
   { href: "/invoices/customer", label: "Customer Invoices", icon: FileText },
-  { href: "/invoices/supplier", label: "Supplier Invoices", icon: ShoppingCart },
+  { href: "/invoices/supplier", label: "Supplier Bills", icon: ShoppingCart },
   { href: "/customers", label: "Customers", icon: Users },
   { href: "/suppliers", label: "Suppliers", icon: Truck },
   { href: "/reports", label: "Reports", icon: BarChart3 },
+];
+
+const adminNav: NavItem[] = [
+  { href: "/admin", label: "Admin Dashboard", icon: ShieldCheck },
+  { href: "/admin/users", label: "Users", icon: UserCog },
+  { href: "/admin/audit-log", label: "Audit Log", icon: ScrollText },
+  { href: "/admin/backups", label: "Backups", icon: DatabaseBackup },
+  { href: "/admin/1099", label: "1099 Contractors", icon: FileSpreadsheet },
 ];
 
 function NavLink({ href, label, icon: Icon, active }: NavItem & { active: boolean }) {
@@ -55,7 +65,7 @@ function NavLink({ href, label, icon: Icon, active }: NavItem & { active: boolea
 export default function Sidebar({ role }: { role?: string }) {
   const pathname = usePathname();
   const isActive = (href: string) =>
-    pathname === href || (href !== "/dashboard" && href !== "/crm/dashboard" && pathname.startsWith(href));
+    pathname === href || (href !== "/dashboard" && href !== "/crm/dashboard" && href !== "/admin" && pathname.startsWith(href));
 
   const canManage = role === "ADMIN" || role === "MANAGER";
   const isAdmin = role === "ADMIN";
@@ -93,6 +103,18 @@ export default function Sidebar({ role }: { role?: string }) {
               Contabilidad
             </p>
             {accountingNav.map((item) => (
+              <NavLink key={item.href} {...item} active={isActive(item.href)} />
+            ))}
+          </>
+        )}
+
+        {isAdmin && (
+          <>
+            <p className="px-3 pt-5 pb-2 text-[10px] font-semibold uppercase tracking-wider text-amber-400 flex items-center gap-1.5">
+              <ShieldCheck className="w-3 h-3" />
+              Admin / Owner
+            </p>
+            {adminNav.map((item) => (
               <NavLink key={item.href} {...item} active={isActive(item.href)} />
             ))}
           </>
