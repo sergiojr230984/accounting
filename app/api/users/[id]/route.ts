@@ -8,7 +8,7 @@ const updateSchema = z.object({
   name: z.string().min(1).optional(),
   email: z.string().email().optional(),
   password: z.string().min(8).optional(),
-  role: z.enum(["ADMIN", "MANAGER"]).optional(),
+  role: z.enum(["ADMIN", "MANAGER", "SALES"]).optional(),
   active: z.boolean().optional(),
 });
 
@@ -53,7 +53,7 @@ export async function PATCH(
   }
 
   // Safety: don't lock yourself out of the system entirely.
-  if (target.role === "ADMIN" && (parsed.data.role === "MANAGER" || parsed.data.active === false)) {
+  if (target.role === "ADMIN" && (parsed.data.role === "MANAGER" || parsed.data.role === "SALES" || parsed.data.active === false)) {
     const willBeAdmin = parsed.data.role ? parsed.data.role === "ADMIN" : target.role === "ADMIN";
     const willBeActive = parsed.data.active === undefined ? target.active : parsed.data.active;
     const err = await lastActiveAdminCheck(target.id, willBeAdmin, willBeActive);

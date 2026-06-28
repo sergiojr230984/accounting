@@ -5,6 +5,7 @@ let initialized = false;
 
 const SCHEMA_STATEMENTS: string[] = [
   `DO $$ BEGIN CREATE TYPE "Role" AS ENUM ('ADMIN', 'MANAGER'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;`,
+  `DO $$ BEGIN ALTER TYPE "Role" ADD VALUE 'SALES'; EXCEPTION WHEN duplicate_object THEN NULL; END $$;`,
   `DO $$ BEGIN CREATE TYPE "PaymentStatus" AS ENUM ('UNPAID', 'PARTIALLY_PAID', 'PAID'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;`,
   `DO $$ BEGIN CREATE TYPE "SupplierCategory" AS ENUM ('COGS', 'SERVICES_EXPENSE', 'OPERATING_EXPENSE', 'OTHER'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;`,
   `CREATE TABLE IF NOT EXISTS "User" (
@@ -203,13 +204,10 @@ export async function initializeDatabase() {
   }
   console.log("[init-db] Schema ready");
 
-  // Brute-force admin promotion via raw SQL. Bypasses Prisma's email
-  // uniqueness/casing rules entirely — case-insensitive match, runs on
-  // every boot. This is the final answer if every other promotion path
-  // has failed: just hammer the role to ADMIN.
+  // Force-promote only the true system admin. sales@ is a regular user account
+  // and must NOT be hardcoded here — its role is managed via the Settings UI.
   const HARD_CODED_ADMINS = [
     "admin@lacuevita.com",
-    "sales@lacuevitafurniture.com",
   ];
   for (const email of HARD_CODED_ADMINS) {
     try {
@@ -247,11 +245,9 @@ export async function initializeDatabase() {
     // Permanent admin list — these emails are always promoted to ADMIN on
     // boot. Add new admins by setting the ADMIN_EMAILS env var to a
     // comma-separated list (e.g. ADMIN_EMAILS="ana@example.com,jose@example.com").
-    // Hard-coded entries below cover the real production admins so new
-    // deployments don't need the env var to work out of the box.
+    // Only the true system admin is hardcoded; all other users are managed via UI.
     const builtInAdmins = [
       "admin@lacuevita.com",
-      "sales@lacuevitafurniture.com",
     ];
     const envAdmins = (process.env.ADMIN_EMAILS ?? "")
       .split(",")

@@ -5,7 +5,7 @@ import { decode } from "@auth/core/jwt";
 import { auth } from "./auth";
 import { rateLimit, type RateLimitOptions } from "./rate-limit";
 
-export type Role = "ADMIN" | "MANAGER";
+export type Role = "ADMIN" | "MANAGER" | "SALES";
 
 export interface AuthedSession extends Session {
   user: {
