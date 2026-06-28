@@ -127,16 +127,6 @@ function useProfile() {
   return { profile, setProfile, loading, reload: load };
 }
 
-/**
- * Read an image File and return a downscaled PNG data URL.
- *
- * - PNG is preferred so logos with transparency render cleanly on the
- *   invoice header (white tile in the brand corner).
- * - SVG inputs are passed through as-is because they're vector + tiny.
- * - Anything bigger than `maxDim` on either side gets proportionally
- *   shrunk so the resulting base64 payload stays well under any
- *   reasonable request-body cap.
- */
 async function fileToShrunkDataUrl(file: File, maxDim = 400, _quality = 0.9): Promise<string> {
   if (file.type === "image/svg+xml") {
     return new Promise((resolve, reject) => {
@@ -420,7 +410,7 @@ function TaxesSection() {
       <div className="flex items-center justify-between">
         <div>
           <h2 className="text-lg font-bold text-gray-900">Sales taxes</h2>
-          <p className="text-sm text-gray-500 mt-1">Define named tax rates so they're a one-click pick on invoice line items.</p>
+          <p className="text-sm text-gray-500 mt-1">Define named tax rates so they&apos;re a one-click pick on invoice line items.</p>
         </div>
         {!creating && (
           <button onClick={() => setCreating(true)} className="btn-primary">
@@ -557,7 +547,7 @@ function FeesSection() {
       <div>
         <h2 className="text-lg font-bold text-gray-900">Credit card processing fee</h2>
         <p className="text-sm text-gray-500 mt-1">
-          When enabled on an invoice, this percentage of the subtotal is added as a separate line so the customer covers your card processor's fee.
+          When enabled on an invoice, this percentage of the subtotal is added as a separate line so the customer covers your card processor&apos;s fee.
         </p>
       </div>
 
@@ -601,7 +591,6 @@ function CustomFeesSection() {
   const [saving, setSaving] = useState(false);
   const [savedAt, setSavedAt] = useState<Date | null>(null);
   const [error, setError] = useState("");
-  // Local draft list — applied to profile on Save.
   const [draft, setDraft] = useState<CustomFee[]>([]);
 
   useEffect(() => {
@@ -625,7 +614,6 @@ function CustomFeesSection() {
 
   async function save() {
     setError("");
-    // Validate
     for (const f of draft) {
       if (!f.label.trim()) {
         setError("Every fee needs a label.");
@@ -717,10 +705,7 @@ function CustomFeesSection() {
         ))}
       </div>
 
-      <button
-        onClick={addRow}
-        className="btn-secondary text-sm"
-      >
+      <button onClick={addRow} className="btn-secondary text-sm">
         <Plus className="w-4 h-4" />
         Add a fee
       </button>
@@ -744,11 +729,13 @@ function CustomFeesSection() {
   );
 }
 
+type UserRole = "ADMIN" | "MANAGER" | "SALES";
+
 interface UserRow {
   id: string;
   name: string;
   email: string;
-  role: "ADMIN" | "MANAGER";
+  role: UserRole;
   active: boolean;
   lastLogin: string | null;
   createdAt: string;
@@ -788,7 +775,7 @@ function UsersSection() {
   }
   useEffect(() => { load(); }, []);
 
-  async function updateUser(id: string, patch: Partial<{ name: string; email: string; role: "ADMIN" | "MANAGER"; active: boolean; password: string }>) {
+  async function updateUser(id: string, patch: Partial<{ name: string; email: string; role: UserRole; active: boolean; password: string }>) {
     setBusy(id); setError("");
     const res = await fetch(`/api/users/${id}`, {
       method: "PATCH",
@@ -826,7 +813,7 @@ function UsersSection() {
           <div>
             <h2 className="text-lg font-bold text-gray-900">Users</h2>
             <p className="text-sm text-gray-500 mt-1">
-              Each person who logs in needs their own account. Admins manage settings and the team; managers enter invoices and customers.
+              Each person who logs in needs their own account. Admins manage settings and the team; managers enter invoices and customers; employees have view-only access.
             </p>
           </div>
           {!showCreate && (
@@ -907,7 +894,7 @@ function UserCreateForm({
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [role, setRole] = useState<"ADMIN" | "MANAGER">("MANAGER");
+  const [role, setRole] = useState<UserRole>("MANAGER");
   const [saving, setSaving] = useState(false);
 
   function generatePw() {
@@ -980,8 +967,9 @@ function UserCreateForm({
         </div>
         <div>
           <label className="label">Role</label>
-          <select className="input" value={role} onChange={(e) => setRole(e.target.value as "ADMIN" | "MANAGER")}>
+          <select className="input" value={role} onChange={(e) => setRole(e.target.value as UserRole)}>
             <option value="MANAGER">Manager — invoices, customers, suppliers</option>
+            <option value="SALES">Employee — view only</option>
             <option value="ADMIN">Admin — full access including settings</option>
           </select>
         </div>
@@ -1018,16 +1006,24 @@ function UserRowDisplay({
   showingPw: boolean;
   onStartEdit: () => void;
   onCancelEdit: () => void;
-  onPatch: (patch: Partial<{ name: string; email: string; role: "ADMIN" | "MANAGER"; active: boolean; password: string }>) => void;
+  onPatch: (patch: Partial<{ name: string; email: string; role: UserRole; active: boolean; password: string }>) => void;
   onTogglePwForm: () => void;
   onDeactivate: () => void;
 }) {
   const [name, setName] = useState(user.name);
   const [email, setEmail] = useState(user.email);
-  const [role, setRole] = useState<"ADMIN" | "MANAGER">(user.role);
+  const [role, setRole] = useState<UserRole>(user.role);
   const [newPassword, setNewPassword] = useState("");
 
   useEffect(() => { setName(user.name); setEmail(user.email); setRole(user.role); }, [user]);
+
+  const roleBadge = user.role === "ADMIN"
+    ? "bg-purple-100 text-purple-800"
+    : user.role === "SALES"
+    ? "bg-green-100 text-green-800"
+    : "bg-blue-100 text-blue-800";
+
+  const roleLabel = user.role === "SALES" ? "EMPLOYEE" : user.role;
 
   if (editing) {
     return (
@@ -1035,9 +1031,10 @@ function UserRowDisplay({
         <td className="px-4 py-2"><input className="input" value={name} onChange={(e) => setName(e.target.value)} /></td>
         <td className="px-4 py-2"><input className="input" type="email" value={email} onChange={(e) => setEmail(e.target.value)} /></td>
         <td className="px-4 py-2 text-center">
-          <select className="input w-28" value={role} onChange={(e) => setRole(e.target.value as "ADMIN" | "MANAGER")} disabled={isSelf}>
+          <select className="input w-32" value={role} onChange={(e) => setRole(e.target.value as UserRole)} disabled={isSelf}>
             <option value="ADMIN">Admin</option>
             <option value="MANAGER">Manager</option>
+            <option value="SALES">Employee</option>
           </select>
         </td>
         <td className="px-4 py-2 text-gray-400">—</td>
@@ -1066,10 +1063,8 @@ function UserRowDisplay({
         </td>
         <td className="px-4 py-3 text-gray-700">{user.email}</td>
         <td className="px-4 py-3 text-center">
-          <span className={`inline-flex px-2 py-0.5 text-xs font-medium rounded-full ${
-            user.role === "ADMIN" ? "bg-purple-100 text-purple-800" : "bg-blue-100 text-blue-800"
-          }`}>
-            {user.role}
+          <span className={`inline-flex px-2 py-0.5 text-xs font-medium rounded-full ${roleBadge}`}>
+            {roleLabel}
           </span>
         </td>
         <td className="px-4 py-3 text-gray-500 text-xs">
@@ -1191,7 +1186,6 @@ function NumberingSection() {
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* Customer invoices */}
         <div className="space-y-3 p-4 border border-gray-100 rounded-xl">
           <h3 className="font-semibold text-gray-900">Customer invoices</h3>
           <div>
@@ -1219,7 +1213,6 @@ function NumberingSection() {
           </div>
         </div>
 
-        {/* Supplier bills / POs */}
         <div className="space-y-3 p-4 border border-gray-100 rounded-xl">
           <h3 className="font-semibold text-gray-900">Supplier bills / purchase orders</h3>
           <div>
