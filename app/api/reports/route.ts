@@ -130,5 +130,73 @@ export async function GET(request: Request) {
     return NextResponse.json({ invoices, total: total.toFixed(2) });
   }
 
+  if (type === "profitability") {
+    const [customerInvoices, supplierInvoices] = await Promise.all([
+      prisma.customerInvoice.findMany({
+        where: hasDate ? { invoiceDate: dateFilter } : {},
+        select: {
+          id: true,
+          invoiceNumber: true,
+          invoiceDate: true,
+          totalAmount: true,
+          paymentStatus: true,
+          customer: { select: { name: true } },
+        },
+        orderBy: { invoiceDate: "desc" },
+      }),
+      prisma.supplierInvoice.findMany({
+        where: { customerInvoiceRef: { not: null } },
+        select: { customerInvoiceRef: true, totalAmount: true },
+      }),
+    ]);
+
+    const costMap: Record<string, Decimal> = {};
+    for (const sup of supplierInvoices) {
+      if (!sup.customerInvoiceRef) continue;
+      const key = sup.customerInvoiceRef.trim().toLowerCase();
+      costMap[key] = (costMap[key] ?? new Decimal(0)).plus(new Decimal(sup.totalAmount.toString()));
+    }
+
+    let totalRevenue = new Decimal(0);
+    let totalCost = new Decimal(0);
+
+    const rows = customerInvoices.map((inv) => {
+      const key = inv.invoiceNumber.trim().toLowerCase();
+      const cost = costMap[key] ?? new Decimal(0);
+      const revenue = new Decimal(inv.totalAmount.toString());
+      const grossProfit = revenue.minus(cost);
+      const grossMargin = revenue.isZero()
+        ? "0"
+        : grossProfit.dividedBy(revenue).times(100).toFixed(2);
+      totalRevenue = totalRevenue.plus(revenue);
+      totalCost = totalCost.plus(cost);
+      return {
+        id: inv.id,
+        invoiceNumber: inv.invoiceNumber,
+        customerName: inv.customer.name,
+        invoiceDate: inv.invoiceDate,
+        revenue: revenue.toFixed(2),
+        cost: cost.toFixed(2),
+        grossProfit: grossProfit.toFixed(2),
+        grossMargin,
+        paymentStatus: inv.paymentStatus,
+        hasCost: !cost.isZero(),
+      };
+    });
+
+    const totalProfit = totalRevenue.minus(totalCost);
+    const overallMargin = totalRevenue.isZero()
+      ? "0"
+      : totalProfit.dividedBy(totalRevenue).times(100).toFixed(2);
+
+    return NextResponse.json({
+      rows,
+      totalRevenue: totalRevenue.toFixed(2),
+      totalCost: totalCost.toFixed(2),
+      totalProfit: totalProfit.toFixed(2),
+      overallMargin,
+    });
+  }
+
   return NextResponse.json({ error: "Unknown report type" }, { status: 400 });
 }

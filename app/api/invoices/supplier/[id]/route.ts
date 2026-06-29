@@ -12,6 +12,7 @@ const updateSchema = z.object({
   notes: z.string().optional(),
   paymentStatus: z.enum(["UNPAID", "PARTIALLY_PAID", "PAID"]).optional(),
   paidAmount: z.string().optional(),
+  customerInvoiceRef: z.string().optional().nullable(),
   items: z
     .array(
       z.object({
@@ -75,6 +76,7 @@ export async function PATCH(
   if (data.notes !== undefined) updateData.notes = data.notes;
   if (data.paymentStatus) updateData.paymentStatus = data.paymentStatus;
   if (data.paidAmount !== undefined) updateData.paidAmount = data.paidAmount;
+  if (data.customerInvoiceRef !== undefined) updateData.customerInvoiceRef = data.customerInvoiceRef || null;
 
   // Only touch line items if the client actually sent some. Empty array is
   // treated as 'leave them alone' — see the customer-invoice route for the
