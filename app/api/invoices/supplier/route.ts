@@ -23,6 +23,7 @@ const invoiceSchema = z.object({
   notes: z.string().optional(),
   paymentStatus: z.enum(["UNPAID", "PARTIALLY_PAID", "PAID"]).default("UNPAID"),
   paidAmount: z.string().default("0"),
+  customerInvoiceRef: z.string().optional(),
 });
 
 export async function GET(request: Request) {
@@ -89,7 +90,7 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
   }
 
-  const { supplierId, invoiceNumber, invoiceDate, dueDate, category, items, notes, paymentStatus, paidAmount } =
+  const { supplierId, invoiceNumber, invoiceDate, dueDate, category, items, notes, paymentStatus, paidAmount, customerInvoiceRef } =
     parsed.data;
 
   const existing = await prisma.supplierInvoice.findUnique({
@@ -130,6 +131,7 @@ export async function POST(request: Request) {
       paidAmount,
       paymentStatus,
       notes,
+      customerInvoiceRef: customerInvoiceRef || null,
       items: {
         create: computedItems.map((item) => ({
           description: item.description,

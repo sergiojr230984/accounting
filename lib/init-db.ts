@@ -119,22 +119,21 @@ const SCHEMA_STATEMENTS: string[] = [
     CONSTRAINT "UploadedFile_supplierInvoiceId_fkey" FOREIGN KEY ("supplierInvoiceId") REFERENCES "SupplierInvoice"("id") ON DELETE SET NULL ON UPDATE CASCADE
   );`,
 
-  // ── CRM: enums ──
+  // CRM enums
   `DO $$ BEGIN CREATE TYPE "LeadStatus" AS ENUM ('NEW', 'CONTACTED', 'FOLLOW_UP', 'CLOSED', 'LOST'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;`,
   `DO $$ BEGIN CREATE TYPE "LeadPriority" AS ENUM ('LOW', 'MEDIUM', 'HIGH'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;`,
   `DO $$ BEGIN CREATE TYPE "LeadSource" AS ENUM ('WHATSAPP', 'MANUAL', 'REFERRAL', 'FACEBOOK', 'INSTAGRAM', 'WEBSITE', 'OTHER'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;`,
   `DO $$ BEGIN CREATE TYPE "MessageDirection" AS ENUM ('INBOUND', 'OUTBOUND'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;`,
   `DO $$ BEGIN CREATE TYPE "AssignmentMode" AS ENUM ('MANUAL', 'ROUND_ROBIN'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;`,
-  // Agrega el rol SALES (vendedora) al enum Role existente
   `ALTER TYPE "Role" ADD VALUE IF NOT EXISTS 'SALES';`,
 
-  // ── CRM: columnas nuevas en User (vendedoras de WhatsApp) ──
+  // User columns
   `ALTER TABLE "User" ADD COLUMN IF NOT EXISTS "active" BOOLEAN NOT NULL DEFAULT true;`,
   `ALTER TABLE "User" ADD COLUMN IF NOT EXISTS "whatsappNumber" TEXT;`,
   `ALTER TABLE "User" ADD COLUMN IF NOT EXISTS "whatsappPhoneNumberId" TEXT;`,
   `CREATE UNIQUE INDEX IF NOT EXISTS "User_whatsappPhoneNumberId_key" ON "User"("whatsappPhoneNumberId");`,
 
-  // ── CRM: tablas ──
+  // CRM tables
   `CREATE TABLE IF NOT EXISTS "Lead" (
     "id" TEXT NOT NULL PRIMARY KEY,
     "name" TEXT NOT NULL,
@@ -189,6 +188,9 @@ const SCHEMA_STATEMENTS: string[] = [
     "lastRotationIndex" INTEGER NOT NULL DEFAULT 0,
     "updatedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP
   );`,
+
+  // Profitability: link supplier bills to customer invoices
+  `ALTER TABLE "SupplierInvoice" ADD COLUMN IF NOT EXISTS "customerInvoiceRef" TEXT;`,
 ];
 
 export async function initializeDatabase() {
@@ -217,6 +219,7 @@ export async function initializeDatabase() {
 
     const adminCount = await prisma.user.count({ where: { role: "ADMIN" } });
     if (adminCount === 0) {
+      const bcrypt = await import("bcryptjs");
       const hash = await bcrypt.hash("admin123", 12);
       await prisma.user.create({
         data: {
@@ -232,8 +235,6 @@ export async function initializeDatabase() {
     console.error("[init-db] admin seed failed:", e);
   }
 
-  // Lead de prueba con el número real, para probar el CRM tras el deploy.
-  // Idempotente: solo se crea si no existe ya.
   try {
     const testPhone = "+17863163774";
     const exists = await prisma.lead.findUnique({ where: { phone: testPhone } });

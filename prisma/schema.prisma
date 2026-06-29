@@ -10,10 +10,8 @@ datasource db {
 enum Role {
   ADMIN
   MANAGER
-  SALES   // = Employee in the permission matrix
+  SALES
 }
-
-// ── CRM enums ──────────────────────────────────────────────────────────────
 
 enum LeadStatus {
   NEW
@@ -101,10 +99,9 @@ model Supplier {
   updatedAt DateTime          @updatedAt
   invoices  SupplierInvoice[]
 
-  // ── 1099 contractor fields ──
   is1099Contractor Boolean @default(false)
-  taxId            String? // AES-256-GCM encrypted at application layer
-  taxIdType        String? // SSN | EIN
+  taxId            String?
+  taxIdType        String?
   legalName        String?
   businessAddress  String?
   w9OnFile         Boolean @default(false)
@@ -148,24 +145,25 @@ model CustomerInvoiceItem {
 }
 
 model SupplierInvoice {
-  id            String                @id @default(cuid())
-  invoiceNumber String
-  supplierId    String
-  supplier      Supplier              @relation(fields: [supplierId], references: [id])
-  invoiceDate   DateTime
-  dueDate       DateTime?
-  category      SupplierCategory
-  subtotal      Decimal               @db.Decimal(15, 2)
-  taxAmount     Decimal               @default(0) @db.Decimal(15, 2)
-  totalAmount   Decimal               @db.Decimal(15, 2)
-  paidAmount    Decimal               @default(0) @db.Decimal(15, 2)
-  paymentStatus PaymentStatus         @default(UNPAID)
-  notes         String?
-  createdAt     DateTime              @default(now())
-  updatedAt     DateTime              @updatedAt
-  items         SupplierInvoiceItem[]
-  payments      Payment[]
-  files         UploadedFile[]
+  id                 String                @id @default(cuid())
+  invoiceNumber      String
+  supplierId         String
+  supplier           Supplier              @relation(fields: [supplierId], references: [id])
+  invoiceDate        DateTime
+  dueDate            DateTime?
+  category           SupplierCategory
+  subtotal           Decimal               @db.Decimal(15, 2)
+  taxAmount          Decimal               @default(0) @db.Decimal(15, 2)
+  totalAmount        Decimal               @db.Decimal(15, 2)
+  paidAmount         Decimal               @default(0) @db.Decimal(15, 2)
+  paymentStatus      PaymentStatus         @default(UNPAID)
+  notes              String?
+  customerInvoiceRef String?
+  createdAt          DateTime              @default(now())
+  updatedAt          DateTime              @updatedAt
+  items              SupplierInvoiceItem[]
+  payments           Payment[]
+  files              UploadedFile[]
 
   @@unique([invoiceNumber, supplierId])
 }
@@ -188,7 +186,7 @@ model Payment {
   amount            Decimal          @db.Decimal(15, 2)
   paymentDate       DateTime
   notes             String?
-  paymentMethod     String?          // cash | check | bank_transfer | card
+  paymentMethod     String?
   customerInvoiceId String?
   customerInvoice   CustomerInvoice? @relation(fields: [customerInvoiceId], references: [id])
   supplierInvoiceId String?
@@ -211,16 +209,13 @@ model UploadedFile {
   createdAt         DateTime         @default(now())
 }
 
-// ── Audit log (append-only) ────────────────────────────────────────────────
-// The app DB user has INSERT + SELECT only on this table (see README).
-
 model AuditLog {
   id          String   @id @default(cuid())
   timestamp   DateTime @default(now())
   actorUserId String?
   actorName   String
   actorRole   String
-  action      String   // AuditAction enum values
+  action      String
   entityType  String
   entityId    String?
   entityLabel String
@@ -234,14 +229,12 @@ model AuditLog {
   @@index([action])
 }
 
-// ── Backup log ─────────────────────────────────────────────────────────────
-
 model BackupLog {
   id            String    @id @default(cuid())
   startedAt     DateTime  @default(now())
   finishedAt    DateTime?
-  status        String    // RUNNING | SUCCESS | FAILED
-  type          String    // SCHEDULED | MANUAL
+  status        String
+  type          String
   sizeBytes     BigInt?
   location      String?
   errorMessage  String?
@@ -250,8 +243,6 @@ model BackupLog {
   @@index([startedAt])
   @@index([status])
 }
-
-// ── CRM: Leads de WhatsApp ──────────────────────────────────────────────────
 
 model Lead {
   id    String @id @default(cuid())

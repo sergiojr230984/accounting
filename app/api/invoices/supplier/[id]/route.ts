@@ -14,6 +14,7 @@ const updateSchema = z.object({
   notes: z.string().optional(),
   paymentStatus: z.enum(["UNPAID", "PARTIALLY_PAID", "PAID"]).optional(),
   paidAmount: z.string().optional(),
+  customerInvoiceRef: z.string().optional().nullable(),
   items: z
     .array(
       z.object({
@@ -86,6 +87,7 @@ export async function PATCH(
     totalAmount: existing.totalAmount.toString(),
     category: existing.category,
     notes: existing.notes,
+    customerInvoiceRef: existing.customerInvoiceRef,
   };
 
   const data = parsed.data;
@@ -98,6 +100,7 @@ export async function PATCH(
   if (data.notes !== undefined) updateData.notes = data.notes;
   if (data.paymentStatus) updateData.paymentStatus = data.paymentStatus;
   if (data.paidAmount !== undefined) updateData.paidAmount = data.paidAmount;
+  if (data.customerInvoiceRef !== undefined) updateData.customerInvoiceRef = data.customerInvoiceRef || null;
 
   if (data.items) {
     let subtotal = new Decimal(0);
@@ -129,6 +132,18 @@ export async function PATCH(
     };
   }
 
+  // Auto-derive paymentStatus when paidAmount changes and caller did not send an explicit status
+  if (data.paidAmount !== undefined && data.paymentStatus === undefined) {
+    const newPaid = new Decimal(data.paidAmount);
+    const effectiveTotal = updateData.totalAmount !== undefined
+      ? new Decimal(updateData.totalAmount as string)
+      : new Decimal(existing.totalAmount.toString());
+    const balance = effectiveTotal.minus(newPaid);
+    if (balance.lte(0)) updateData.paymentStatus = "PAID";
+    else if (newPaid.gt(0)) updateData.paymentStatus = "PARTIALLY_PAID";
+    else updateData.paymentStatus = "UNPAID";
+  }
+
   const updated = await prisma.supplierInvoice.update({
     where: { id },
     data: updateData,
@@ -142,6 +157,7 @@ export async function PATCH(
     totalAmount: updated.totalAmount.toString(),
     category: updated.category,
     notes: updated.notes,
+    customerInvoiceRef: updated.customerInvoiceRef,
   };
 
   await writeAuditLog({
