@@ -5,7 +5,7 @@ let initialized = false;
 
 const SCHEMA_STATEMENTS: string[] = [
   `DO $$ BEGIN CREATE TYPE "Role" AS ENUM ('ADMIN', 'MANAGER'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;`,
-  `DO $$ BEGIN ALTER TYPE "Role" ADD VALUE 'SALES'; EXCEPTION WHEN duplicate_object THEN NULL; END $$;`,
+  `DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_enum WHERE enumlabel = 'SALES' AND enumtypid = (SELECT oid FROM pg_type WHERE typname = 'Role')) THEN ALTER TYPE "Role" ADD VALUE 'SALES'; END IF; END $$;`,
   `DO $$ BEGIN CREATE TYPE "PaymentStatus" AS ENUM ('UNPAID', 'PARTIALLY_PAID', 'PAID'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;`,
   `DO $$ BEGIN CREATE TYPE "SupplierCategory" AS ENUM ('COGS', 'SERVICES_EXPENSE', 'OPERATING_EXPENSE', 'OTHER'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;`,
   `CREATE TABLE IF NOT EXISTS "User" (
