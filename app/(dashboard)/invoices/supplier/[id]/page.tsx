@@ -22,6 +22,7 @@ const editSchema = z.object({
   paymentStatus: z.enum(["UNPAID", "PARTIALLY_PAID", "PAID"]),
   paidAmount: z.string(),
   notes: z.string().optional(),
+  customerInvoiceRef: z.string().optional().nullable(),
   items: z.array(
     z.object({
       description: z.string().min(1),
@@ -45,6 +46,7 @@ interface InvoiceDetail {
   paymentStatus: "UNPAID" | "PARTIALLY_PAID" | "PAID";
   category: "COGS" | "SERVICES_EXPENSE" | "OPERATING_EXPENSE" | "OTHER";
   notes: string | null;
+  customerInvoiceRef: string | null;
   supplier: { id: string; name: string; email: string | null; phone: string | null };
   items: { id: string; description: string; quantity: string; unitCost: string; taxRate: string; lineTotal: string }[];
   payments: { id: string; amount: string; paymentDate: string; notes: string | null }[];
@@ -78,6 +80,7 @@ export default function SupplierInvoiceDetailPage() {
       paymentStatus: data.paymentStatus,
       paidAmount: data.paidAmount,
       notes: data.notes ?? "",
+      customerInvoiceRef: data.customerInvoiceRef ?? "",
       items: data.items.map((item: InvoiceDetail["items"][0]) => ({
         description: item.description,
         quantity: item.quantity,
@@ -209,6 +212,15 @@ export default function SupplierInvoiceDetailPage() {
                 <label className="label">Amount Paid ($)</label>
                 <input type="number" step="0.01" min="0" className="input" {...register("paidAmount")} />
               </div>
+              <div className="col-span-2">
+                <label className="label">Customer Invoice # (for profitability)</label>
+                <input
+                  className="input"
+                  placeholder="e.g. INV-2026-1001"
+                  {...register("customerInvoiceRef")}
+                />
+                <p className="text-xs text-gray-400 mt-0.5">Links this cost to a customer invoice for the profitability report</p>
+              </div>
             </div>
             <div>
               <label className="label">Notes</label>
@@ -239,6 +251,12 @@ export default function SupplierInvoiceDetailPage() {
                   <span className="text-gray-500">Category</span>
                   <CategoryBadge category={invoice.category} />
                 </div>
+                {invoice.customerInvoiceRef && (
+                  <div className="flex justify-between">
+                    <span className="text-gray-500">Customer Invoice Ref</span>
+                    <span className="font-medium text-brand-700">{invoice.customerInvoiceRef}</span>
+                  </div>
+                )}
                 {invoice.notes && (
                   <div className="pt-2 border-t">
                     <span className="text-gray-500">Notes: </span>
