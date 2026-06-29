@@ -109,6 +109,25 @@ export async function PATCH(
     };
   }
 
+  // Auto-derive paymentStatus when paidAmount changes and the caller didn't
+  // explicitly send a status override.
+  if (data.paidAmount !== undefined && data.paymentStatus === undefined) {
+    const newPaid = new Decimal(data.paidAmount);
+    // If items were recalculated above, use the new total; otherwise the existing one.
+    const effectiveTotal = updateData.totalAmount !== undefined
+      ? new Decimal(updateData.totalAmount as string)
+      : new Decimal(existing.totalAmount.toString());
+    const balance = effectiveTotal.minus(newPaid);
+
+    if (balance.lte(0)) {
+      updateData.paymentStatus = "PAID";
+    } else if (newPaid.gt(0)) {
+      updateData.paymentStatus = "PARTIALLY_PAID";
+    } else {
+      updateData.paymentStatus = "UNPAID";
+    }
+  }
+
   const updated = await prisma.supplierInvoice.update({
     where: { id },
     data: updateData,
