@@ -19,6 +19,7 @@ const schema = z.object({
   paymentStatus: z.enum(["UNPAID", "PARTIALLY_PAID", "PAID"]),
   paidAmount: z.string().default("0"),
   notes: z.string().optional(),
+  customerInvoiceRef: z.string().optional(),
   items: z.array(
     z.object({
       description: z.string().min(1, "Required"),
@@ -46,6 +47,7 @@ export default function NewSupplierInvoicePage() {
       category: "COGS",
       paymentStatus: "UNPAID",
       paidAmount: "0",
+      customerInvoiceRef: "",
       items: [{ description: "", quantity: "1", unitCost: "0", taxRate: "0" }],
     },
   });
@@ -172,7 +174,7 @@ export default function NewSupplierInvoicePage() {
       {/* AI Extractor */}
       <div className="card">
         <div className="flex items-center justify-between mb-3">
-          <h2 className="font-semibold text-gray-800">Step 1 — Upload Invoice (optional)</h2>
+          <h2 className="font-semibold text-gray-800">Step 1 &mdash; Upload Invoice (optional)</h2>
           <span className="text-xs text-gray-400 bg-gray-100 px-2 py-1 rounded-full">AI-powered</span>
         </div>
         <InvoiceExtractor type="supplier" onExtracted={handleExtracted} />
@@ -199,7 +201,7 @@ export default function NewSupplierInvoicePage() {
 
       <form onSubmit={handleSubmit(onSubmit)} className="space-y-6">
         <div className="card space-y-4">
-          <h2 className="font-semibold text-gray-800">Step 2 — Review &amp; Complete Invoice Details</h2>
+          <h2 className="font-semibold text-gray-800">Step 2 &mdash; Review &amp; Complete Invoice Details</h2>
 
           <div className="grid grid-cols-2 gap-4">
             <div>
@@ -254,6 +256,16 @@ export default function NewSupplierInvoicePage() {
             <div>
               <label className="label">Amount Paid ($)</label>
               <input type="number" step="0.01" min="0" className="input" {...register("paidAmount")} />
+            </div>
+
+            <div>
+              <label className="label">Customer Invoice # (for profitability)</label>
+              <input
+                className="input"
+                placeholder="e.g. INV-2026-1001"
+                {...register("customerInvoiceRef")}
+              />
+              <p className="text-xs text-gray-400 mt-0.5">Links this cost to a customer invoice for the profitability report</p>
             </div>
           </div>
 
