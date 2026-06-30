@@ -87,9 +87,13 @@ export default function CustomerInvoiceDetailPage() {
   const [previewUrl, setPreviewUrl] = useState("");
   const [previewing, setPreviewing] = useState(false);
 
-  const { register, handleSubmit, control, reset, getValues, formState: { errors } } = useForm<EditForm>({
+  const { register, handleSubmit, control, reset, getValues, setValue, watch, formState: { errors } } = useForm<EditForm>({
     resolver: zodResolver(editSchema),
   });
+
+  // Watch paidAmount and downPayment to auto-derive paymentStatus in real-time
+  const watchedPaid = watch("paidAmount");
+  const watchedDown = watch("downPayment");
 
   const load = useCallback(async () => {
     const res = await fetch(`/api/invoices/customer/${id}`);
@@ -125,6 +129,28 @@ export default function CustomerInvoiceDetailPage() {
       )
       .catch(() => {});
   }, []);
+
+  // Auto-update paymentStatus when paidAmount or downPayment changes in edit mode
+  useEffect(() => {
+    if (!editing || !invoice) return;
+    try {
+      const total = new Decimal(invoice.totalAmount || "0");
+      const paid = new Decimal(watchedPaid || "0");
+      const down = new Decimal(watchedDown || "0");
+      const balance = total.minus(paid).minus(down);
+      let status: "UNPAID" | "PARTIALLY_PAID" | "PAID";
+      if (balance.lte(0)) {
+        status = "PAID";
+      } else if (paid.gt(0) || down.gt(0)) {
+        status = "PARTIALLY_PAID";
+      } else {
+        status = "UNPAID";
+      }
+      setValue("paymentStatus", status, { shouldValidate: false });
+    } catch {
+      // Ignore Decimal parse errors on incomplete / empty input
+    }
+  }, [watchedPaid, watchedDown, editing, invoice, setValue]);
 
   async function onSave(data: EditForm) {
     setSaving(true);
@@ -465,6 +491,7 @@ export default function CustomerInvoiceDetailPage() {
                     <option value="PARTIALLY_PAID">Partially Paid</option>
                     <option value="PAID">Paid</option>
                   </select>
+                  <p className="text-xs text-gray-400 mt-1">Auto-updates when Amount Paid changes</p>
                 </div>
                 <div>
                   <label className="label">Invoice Date</label>
