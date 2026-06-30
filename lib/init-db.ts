@@ -189,6 +189,8 @@ const SCHEMA_STATEMENTS: string[] = [
     CONSTRAINT "UploadedFile_supplierInvoiceId_fkey" FOREIGN KEY ("supplierInvoiceId") REFERENCES "SupplierInvoice"("id") ON DELETE SET NULL ON UPDATE CASCADE
   );`,
   `ALTER TABLE "SupplierInvoice" ADD COLUMN IF NOT EXISTS "customerInvoiceRef" TEXT;`,
+  `ALTER TABLE "CustomerInvoiceItem" ADD COLUMN IF NOT EXISTS "itemDescription" TEXT;`,
+  `ALTER TABLE "SupplierInvoiceItem" ADD COLUMN IF NOT EXISTS "itemDescription" TEXT;`,
 ];
 
 export async function initializeDatabase() {
@@ -234,19 +236,13 @@ export async function initializeDatabase() {
       console.log("[init-db] Migrated admin email bizledger -> lacuevita (role=ADMIN)");
     }
 
-    // Self-heal: always make sure admin@lacuevita.com is ADMIN. If a previous
-    // migration or manual change demoted them, this restores access to
-    // Settings, taxes, employee CRUD, and invoice delete.
+    // Self-heal: always make sure admin@lacuevita.com is ADMIN.
     const lcAdmin = await prisma.user.findUnique({ where: { email: "admin@lacuevita.com" } });
     if (lcAdmin && lcAdmin.role !== "ADMIN") {
       await prisma.user.update({ where: { id: lcAdmin.id }, data: { role: "ADMIN" } });
       console.log("[init-db] Restored admin@lacuevita.com role -> ADMIN");
     }
 
-    // Permanent admin list — these emails are always promoted to ADMIN on
-    // boot. Add new admins by setting the ADMIN_EMAILS env var to a
-    // comma-separated list (e.g. ADMIN_EMAILS="ana@example.com,jose@example.com").
-    // Only the true system admin is hardcoded; all other users are managed via UI.
     const builtInAdmins = [
       "admin@lacuevita.com",
     ];
@@ -256,9 +252,6 @@ export async function initializeDatabase() {
       .filter(Boolean);
     const adminEmails = Array.from(new Set([...builtInAdmins, ...envAdmins]));
     for (const email of adminEmails) {
-      // Case-insensitive lookup — Postgres is case-sensitive on unique
-      // columns, so an account stored as "Sales@..." would be missed by
-      // a literal findUnique on "sales@...".
       const u = await prisma.user.findFirst({
         where: { email: { equals: email, mode: "insensitive" } },
       });

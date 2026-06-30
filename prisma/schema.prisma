@@ -100,16 +100,17 @@ model CustomerInvoice {
 }
 
 model CustomerInvoiceItem {
-  id          String          @id @default(cuid())
-  invoiceId   String
-  invoice     CustomerInvoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
-  description String
-  quantity    Decimal         @db.Decimal(15, 4)
-  unitPrice   Decimal         @db.Decimal(15, 2)
-  taxRate     Decimal         @db.Decimal(5, 4) @default(0)
-  lineTotal   Decimal         @db.Decimal(15, 2)
-  createdAt   DateTime        @default(now())
-  updatedAt   DateTime        @updatedAt
+  id              String          @id @default(cuid())
+  invoiceId       String
+  invoice         CustomerInvoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  description     String
+  itemDescription String?
+  quantity        Decimal         @db.Decimal(15, 4)
+  unitPrice       Decimal         @db.Decimal(15, 2)
+  taxRate         Decimal         @db.Decimal(5, 4) @default(0)
+  lineTotal       Decimal         @db.Decimal(15, 2)
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
 }
 
 model SupplierInvoice {
@@ -137,16 +138,17 @@ model SupplierInvoice {
 }
 
 model SupplierInvoiceItem {
-  id          String          @id @default(cuid())
-  invoiceId   String
-  invoice     SupplierInvoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
-  description String
-  quantity    Decimal         @db.Decimal(15, 4)
-  unitCost    Decimal         @db.Decimal(15, 2)
-  taxRate     Decimal         @db.Decimal(5, 4) @default(0)
-  lineTotal   Decimal         @db.Decimal(15, 2)
-  createdAt   DateTime        @default(now())
-  updatedAt   DateTime        @updatedAt
+  id              String          @id @default(cuid())
+  invoiceId       String
+  invoice         SupplierInvoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  description     String
+  itemDescription String?
+  quantity        Decimal         @db.Decimal(15, 4)
+  unitCost        Decimal         @db.Decimal(15, 2)
+  taxRate         Decimal         @db.Decimal(5, 4) @default(0)
+  lineTotal       Decimal         @db.Decimal(15, 2)
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
 }
 
 model Payment {

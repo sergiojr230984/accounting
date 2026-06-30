@@ -6,6 +6,7 @@ import Decimal from "decimal.js";
 
 const itemSchema = z.object({
   description: z.string().min(1),
+  itemDescription: z.string().optional(),
   quantity: z.string().regex(/^\d+(\.\d+)?$/, "Must be a number"),
   unitPrice: z.string().regex(/^\d+(\.\d+)?$/, "Must be a number"),
   taxRate: z.string().regex(/^\d+(\.\d+)?$/, "Must be a number").default("0"),
@@ -134,9 +135,6 @@ export async function POST(request: Request) {
     }
   }
 
-  // Sum custom fees applied to this invoice. We trust the client's
-  // pre-computed amount string per fee, but also clamp to the rate
-  // we stored to guard against tampering.
   let customFeesSum = new Decimal(0);
   for (const f of appliedFees) {
     try {
@@ -168,6 +166,7 @@ export async function POST(request: Request) {
       items: {
         create: computedItems.map((item) => ({
           description: item.description,
+          itemDescription: item.itemDescription ?? null,
           quantity: item.quantity,
           unitPrice: item.unitPrice,
           taxRate: item.taxRate,
@@ -178,9 +177,6 @@ export async function POST(request: Request) {
     include: { customer: true, items: true },
   });
 
-  // Advance the auto-numbering counter so the next /invoices/customer/new
-  // pre-fills the next sequence. We always bump (even if the user typed a
-  // custom invoice number) so the counter never goes backwards.
   await prisma.companyProfile
     .update({
       where: { id: "default" },
@@ -188,7 +184,7 @@ export async function POST(request: Request) {
     })
     .catch(() => undefined);
 
-  // Auto-save each line item to the product catalog (skip if name already exists)
+  // Auto-save each line item to the product catalog
   try {
     for (const item of items) {
       const name = item.description.trim();
@@ -198,7 +194,13 @@ export async function POST(request: Request) {
       });
       if (!existing) {
         await prisma.product.create({
-          data: { name, price: item.unitPrice, taxRate: item.taxRate, active: true },
+          data: {
+            name,
+            description: item.itemDescription ?? null,
+            price: item.unitPrice,
+            taxRate: item.taxRate,
+            active: true,
+          },
         });
       }
     }

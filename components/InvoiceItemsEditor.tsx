@@ -13,6 +13,7 @@ import Decimal from "decimal.js";
 
 interface ItemRow {
   description: string;
+  itemDescription?: string;
   quantity: string;
   unitPrice?: string;
   unitCost?: string;
@@ -68,6 +69,7 @@ export default function InvoiceItemsEditor<T extends FieldValues = any>({
           onClick={() =>
             append({
               description: "",
+              itemDescription: "",
               quantity: "1",
               [priceField]: "0",
               taxRate: "0",
@@ -82,15 +84,25 @@ export default function InvoiceItemsEditor<T extends FieldValues = any>({
 
       <div className="space-y-2">
         {fields.map((field, index) => (
-          <div key={field.id} className="grid grid-cols-12 gap-2 items-center bg-gray-50 rounded-lg p-2">
-            <div className="col-span-4">
+          <div key={field.id} className="grid grid-cols-12 gap-2 items-start bg-gray-50 rounded-lg p-2">
+            {/* Item name — col 0-2 */}
+            <div className="col-span-3">
               <input
                 className="input text-sm"
-                placeholder="Description"
+                placeholder="Item name"
                 {...register(`${fieldName}.${index}.description` as Path<T>)}
               />
             </div>
-            <div className="col-span-2">
+            {/* Item description — col 3-5 */}
+            <div className="col-span-3">
+              <input
+                className="input text-sm text-gray-600"
+                placeholder="Description (optional)"
+                {...register(`${fieldName}.${index}.itemDescription` as Path<T>)}
+              />
+            </div>
+            {/* Qty */}
+            <div className="col-span-1">
               <input
                 className="input text-sm"
                 placeholder="Qty"
@@ -100,6 +112,7 @@ export default function InvoiceItemsEditor<T extends FieldValues = any>({
                 {...register(`${fieldName}.${index}.quantity` as Path<T>)}
               />
             </div>
+            {/* Price */}
             <div className="col-span-2">
               <input
                 className="input text-sm"
@@ -110,10 +123,11 @@ export default function InvoiceItemsEditor<T extends FieldValues = any>({
                 {...register(`${fieldName}.${index}.${priceField}` as Path<T>)}
               />
             </div>
-            <div className="col-span-2">
+            {/* Tax rate */}
+            <div className="col-span-1">
               <input
                 className="input text-sm"
-                placeholder="Tax rate"
+                placeholder="Tax"
                 type="number"
                 step="0.001"
                 min="0"
@@ -121,14 +135,16 @@ export default function InvoiceItemsEditor<T extends FieldValues = any>({
                 {...register(`${fieldName}.${index}.taxRate` as Path<T>)}
               />
             </div>
-            <div className="col-span-1 text-right">
+            {/* Line total */}
+            <div className="col-span-1 text-right pt-2">
               <LinePreview
                 quantity={items?.[index]?.quantity ?? "0"}
                 price={(items?.[index] as unknown as Record<string, string>)?.[priceField] ?? "0"}
                 taxRate={items?.[index]?.taxRate ?? "0"}
               />
             </div>
-            <div className="col-span-1 flex justify-end">
+            {/* Delete */}
+            <div className="col-span-1 flex justify-end pt-1">
               {fields.length > 1 && (
                 <button
                   type="button"
@@ -145,7 +161,7 @@ export default function InvoiceItemsEditor<T extends FieldValues = any>({
 
       <div className="mt-2 grid grid-cols-12 gap-2">
         <div className="col-span-10 text-right text-xs text-gray-500 pr-2">
-          <span className="uppercase tracking-wide">Headers: Description / Qty / {priceLabel} / Tax Rate / Total</span>
+          <span className="uppercase tracking-wide">Name · Description · Qty · {priceLabel} · Tax · Total</span>
         </div>
       </div>
     </div>

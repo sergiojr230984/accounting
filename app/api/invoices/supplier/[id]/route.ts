@@ -18,6 +18,7 @@ const updateSchema = z.object({
       z.object({
         id: z.string().optional(),
         description: z.string().min(1),
+        itemDescription: z.string().optional(),
         quantity: z.string(),
         unitCost: z.string(),
         taxRate: z.string().default("0"),
@@ -78,22 +79,34 @@ export async function PATCH(
   if (data.paidAmount !== undefined) updateData.paidAmount = data.paidAmount;
   if (data.customerInvoiceRef !== undefined) updateData.customerInvoiceRef = data.customerInvoiceRef || null;
 
-  // Only touch line items if the client actually sent some. Empty array is
-  // treated as 'leave them alone' — see the customer-invoice route for the
-  // full history.
   if (data.items && data.items.length > 0) {
     let subtotal = new Decimal(0);
     let taxAmount = new Decimal(0);
+    let computedItems: { description: string; itemDescription?: string; quantity: string; unitCost: string; taxRate: string; lineTotal: string }[];
 
-    const computedItems = data.items.map((item) => {
-      const qty = new Decimal(item.quantity);
-      const cost = new Decimal(item.unitCost);
-      const rate = new Decimal(item.taxRate);
-      const lineTotal = qty.times(cost);
-      subtotal = subtotal.plus(lineTotal);
-      taxAmount = taxAmount.plus(lineTotal.times(rate));
-      return { ...item, lineTotal: lineTotal.toFixed(2) };
-    });
+    try {
+      computedItems = data.items.map((item) => {
+        const qty = new Decimal(item.quantity || "0");
+        const cost = new Decimal(item.unitCost || "0");
+        const rate = new Decimal(item.taxRate || "0");
+        const lineTotal = qty.times(cost);
+        subtotal = subtotal.plus(lineTotal);
+        taxAmount = taxAmount.plus(lineTotal.times(rate));
+        return {
+          description: item.description,
+          itemDescription: item.itemDescription,
+          quantity: item.quantity,
+          unitCost: item.unitCost,
+          taxRate: item.taxRate,
+          lineTotal: lineTotal.toFixed(2),
+        };
+      });
+    } catch {
+      return NextResponse.json(
+        { error: "Invalid item values — please check quantities and prices" },
+        { status: 400 }
+      );
+    }
 
     updateData.subtotal = subtotal.toFixed(2);
     updateData.taxAmount = taxAmount.toFixed(2);
@@ -103,6 +116,7 @@ export async function PATCH(
     updateData.items = {
       create: computedItems.map((item) => ({
         description: item.description,
+        itemDescription: item.itemDescription ?? null,
         quantity: item.quantity,
         unitCost: item.unitCost,
         taxRate: item.taxRate,
@@ -115,7 +129,6 @@ export async function PATCH(
   // explicitly send a status override.
   if (data.paidAmount !== undefined && data.paymentStatus === undefined) {
     const newPaid = new Decimal(data.paidAmount);
-    // If items were recalculated above, use the new total; otherwise the existing one.
     const effectiveTotal = updateData.totalAmount !== undefined
       ? new Decimal(updateData.totalAmount as string)
       : new Decimal(existing.totalAmount.toString());

@@ -20,6 +20,7 @@ const updateSchema = z.object({
       z.object({
         id: z.string().optional(),
         description: z.string().min(1),
+        itemDescription: z.string().optional(),
         quantity: z.string(),
         unitPrice: z.string(),
         taxRate: z.string().default("0"),
@@ -88,7 +89,7 @@ export async function PATCH(
   if (data.items && data.items.length > 0) {
     let subtotal = new Decimal(0);
     let taxAmount = new Decimal(0);
-    let computedItems: { description: string; quantity: string; unitPrice: string; taxRate: string; lineTotal: string }[];
+    let computedItems: { description: string; itemDescription?: string; quantity: string; unitPrice: string; taxRate: string; lineTotal: string }[];
 
     try {
       computedItems = data.items.map((item) => {
@@ -100,6 +101,7 @@ export async function PATCH(
         taxAmount = taxAmount.plus(lineTotal.times(rate));
         return {
           description: item.description,
+          itemDescription: item.itemDescription,
           quantity: item.quantity,
           unitPrice: item.unitPrice,
           taxRate: item.taxRate,
@@ -122,6 +124,7 @@ export async function PATCH(
     updateData.items = {
       create: computedItems.map((item) => ({
         description: item.description,
+        itemDescription: item.itemDescription ?? null,
         quantity: item.quantity,
         unitPrice: item.unitPrice,
         taxRate: item.taxRate,
@@ -139,7 +142,13 @@ export async function PATCH(
         });
         if (!existing) {
           await prisma.product.create({
-            data: { name, price: item.unitPrice, taxRate: item.taxRate, active: true },
+            data: {
+              name,
+              description: item.itemDescription ?? null,
+              price: item.unitPrice,
+              taxRate: item.taxRate,
+              active: true,
+            },
           });
         }
       }

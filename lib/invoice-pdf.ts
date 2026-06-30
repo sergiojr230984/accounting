@@ -49,6 +49,7 @@ export interface InvoicePDFData {
   };
   items: {
     description: string;
+    itemDescription?: string | null;
     quantity: string | number;
     // unitPrice for customer invoices, unitCost for supplier bills.
     unitPrice?: string | number;
@@ -70,8 +71,7 @@ export interface InvoicePDFData {
     phone?: string | null;
     creditCardFeeLabel?: string | null;
   } | null;
-  // Sales rep assigned to the invoice. The name is shown next to the
-  // "Sales Rep" label in the right-column meta block.
+  // Sales rep assigned to the invoice.
   employee?: { id: string; name: string } | null;
   // 'customer' (default) prints INVOICE + BILL TO + Unit price.
   // 'supplier' prints PURCHASE ORDER + VENDOR + Unit cost.
@@ -95,7 +95,6 @@ export function generateInvoicePDF(invoice: InvoicePDFData): jsPDF {
   const isPO = invoice.kind === "supplier";
 
   // ─── HEADER ────────────────────────────────────
-  // Thin orange brand stripe across the top.
   doc.setFillColor(...ORANGE);
   doc.rect(0, 0, pageWidth, 8, "F");
 
@@ -103,7 +102,6 @@ export function generateInvoicePDF(invoice: InvoicePDFData): jsPDF {
   const hasLogo = Boolean(company?.logo);
   const companyName = company?.name?.trim() || "La Cuevita";
 
-  // Logo (top-left), max 160×80, aspect-ratio preserved.
   let headerBottom = 30;
   if (hasLogo && company?.logo) {
     try {
@@ -137,7 +135,6 @@ export function generateInvoicePDF(invoice: InvoicePDFData): jsPDF {
     headerBottom = 64;
   }
 
-  // INVOICE title — top-right, large.
   doc.setFont("helvetica", "bold");
   doc.setFontSize(isPO ? 28 : 36);
   doc.setTextColor(...TEXT_DARK);
@@ -187,8 +184,6 @@ export function generateInvoicePDF(invoice: InvoicePDFData): jsPDF {
     billY += 12;
   }
 
-  // Zelle — small label + value block, mainly used on PO PDFs so the
-  // accounts-payable user can see how to pay the vendor at a glance.
   if (invoice.customer.zelle) {
     billY += 6;
     doc.setFont("helvetica", "normal");
@@ -202,9 +197,6 @@ export function generateInvoicePDF(invoice: InvoicePDFData): jsPDF {
     billY += 12;
   }
 
-  // Emergency / secondary contact — shown under the primary customer details
-  // so the sales team has a fallback to reach when the main contact is
-  // unresponsive. Only renders when at least one field is filled.
   if (invoice.customer.emergencyContactName || invoice.customer.emergencyContactPhone) {
     billY += 6;
     doc.setFont("helvetica", "normal");
@@ -224,8 +216,6 @@ export function generateInvoicePDF(invoice: InvoicePDFData): jsPDF {
   const leftColBottom = billY;
 
   // ─── RIGHT: INVOICE DETAILS ───────────────────────────────
-  // Vertical list: Invoice Number, Sales Rep, Invoice Date, Due Date,
-  // then a highlighted "Amount Due" box.
   const total = Number(invoice.totalAmount);
   const paid = Number(invoice.paidAmount);
   const down = Number(invoice.downPayment);
@@ -255,7 +245,6 @@ export function generateInvoicePDF(invoice: InvoicePDFData): jsPDF {
     metaY += 18;
   }
 
-  // Highlighted "Amount Due" box.
   metaY += 4;
   const boxH = 30;
   doc.setFillColor(...BG_GRAY);
@@ -275,6 +264,10 @@ export function generateInvoicePDF(invoice: InvoicePDFData): jsPDF {
   // ─── ITEMS TABLE ─────────────────────────────────────
   const tableStartY = Math.max(leftColBottom, metaY) + 28;
   const priceHeader = isPO ? "Cost" : "Price";
+
+  // Pre-compute per-item descriptions for use in didDrawCell
+  const itemDescs = invoice.items.map((i) => i.itemDescription?.trim() ?? "");
+
   autoTable(doc, {
     startY: tableStartY,
     head: [["Items", "Quantity", priceHeader, "Amount"]],
@@ -306,6 +299,29 @@ export function generateInvoicePDF(invoice: InvoicePDFData): jsPDF {
       3: { halign: "right", cellWidth: 90, fontStyle: "bold" },
     },
     alternateRowStyles: { fillColor: [252, 252, 252] },
+    didParseCell: (data) => {
+      // Increase minimum cell height for rows that have an item description
+      if (data.section === "body" && data.column.index === 0) {
+        const desc = itemDescs[data.row.index];
+        if (desc) {
+          data.cell.styles.minCellHeight = 38;
+        }
+      }
+    },
+    didDrawCell: (data) => {
+      // Draw item description in smaller gray text below the bold item name
+      if (data.section !== "body" || data.column.index !== 0) return;
+      const desc = itemDescs[data.row.index];
+      if (!desc) return;
+      doc.setFont("helvetica", "normal");
+      doc.setFontSize(8);
+      doc.setTextColor(...TEXT_MID);
+      const maxW = (data.cell as unknown as { width: number }).width - 18;
+      const lines = doc.splitTextToSize(desc, maxW);
+      const cellX = (data.cell as unknown as { x: number }).x;
+      const cellY = (data.cell as unknown as { y: number }).y;
+      doc.text(lines, cellX + 9, cellY + 22);
+    },
   });
 
   // ─── TOTALS (lower-right) ───────────────────────────────
@@ -338,14 +354,12 @@ export function generateInvoicePDF(invoice: InvoicePDFData): jsPDF {
     });
   }
 
-  // Additional fees from Settings → Additional fees (one line per fee).
   for (const fee of invoice.appliedFees ?? []) {
     const amt = Number(fee.amount);
     if (!isFinite(amt) || amt <= 0) continue;
     writeRow(fee.label, pdfCurrency(amt.toFixed(2)), { muted: true });
   }
 
-  // Divider before Total
   doc.setDrawColor(...RULE_GRAY);
   doc.line(labelX, totalsY - 8, valueX, totalsY - 8);
   totalsY += 2;
@@ -355,12 +369,6 @@ export function generateInvoicePDF(invoice: InvoicePDFData): jsPDF {
     writeRow("Down Payment", "-" + pdfCurrency(down.toFixed(2)), { muted: true });
   }
 
-  // Individual payment lines — one row per Payment record.
-  // Format: "Payment on Jun 21, 2026 using cash:"  -$1,175.93
-  // If paidAmount > sum(payments) — usually a legacy invoice where the
-  // "Paid amount" field was edited directly before the per-payment system
-  // existed — render the leftover as a single "Payment Received" line so
-  // the rows always reconcile with the Balance Due shown on screen.
   const payments = invoice.payments ?? [];
   const paymentSum = payments.reduce((acc, p) => acc + Number(p.amount), 0);
   if (payments.length > 0) {
@@ -379,7 +387,6 @@ export function generateInvoicePDF(invoice: InvoicePDFData): jsPDF {
     writeRow("Payment Received", "-" + pdfCurrency(paid.toFixed(2)), { muted: true });
   }
 
-  // Divider + large "Remaining Balance Due"
   doc.setDrawColor(...RULE_GRAY);
   doc.line(labelX, totalsY - 8, valueX, totalsY - 8);
   totalsY += 4;
@@ -392,7 +399,6 @@ export function generateInvoicePDF(invoice: InvoicePDFData): jsPDF {
 
   // ─── NOTES / TERMS ────────────────────────────────────
   if (invoice.notes && invoice.notes.trim()) {
-    // Page-break guard: keep notes block off the page footer.
     if (totalsY > pageHeight - 200) {
       doc.addPage();
       totalsY = margin + 20;
@@ -407,21 +413,17 @@ export function generateInvoicePDF(invoice: InvoicePDFData): jsPDF {
     doc.setFontSize(9.5);
     doc.setTextColor(...TEXT_MID);
 
-    // Render each non-empty line as a bullet point. The user can paste
-    // bilingual EN/ES notes, delivery instructions, financing terms,
-    // etc., one per line; we render them as a clean bulleted list.
     const noteLines = invoice.notes
       .split(/\r?\n/)
       .map((l) => l.trim())
       .filter(Boolean);
     for (const line of noteLines) {
-      // Page-break guard mid-list
       if (totalsY > pageHeight - 100) {
         doc.addPage();
         totalsY = margin + 20;
       }
       const wrapped = doc.splitTextToSize(line, pageWidth - margin * 2 - 14);
-      doc.text("•", margin, totalsY); // bullet
+      doc.text("•", margin, totalsY);
       doc.text(wrapped, margin + 14, totalsY);
       totalsY += wrapped.length * 12 + 2;
     }

@@ -6,6 +6,7 @@ import Decimal from "decimal.js";
 
 const itemSchema = z.object({
   description: z.string().min(1),
+  itemDescription: z.string().optional(),
   quantity: z.string().regex(/^\d+(\.\d+)?$/),
   unitCost: z.string().regex(/^\d+(\.\d+)?$/),
   taxRate: z.string().regex(/^\d+(\.\d+)?$/).default("0"),
@@ -121,6 +122,7 @@ export async function POST(request: Request) {
       items: {
         create: computedItems.map((item) => ({
           description: item.description,
+          itemDescription: item.itemDescription ?? null,
           quantity: item.quantity,
           unitCost: item.unitCost,
           taxRate: item.taxRate,
@@ -131,8 +133,6 @@ export async function POST(request: Request) {
     include: { supplier: true, items: true },
   });
 
-  // Bump the supplier-invoice counter so the next /invoices/supplier/new
-  // pre-fills the next sequence number.
   await prisma.companyProfile
     .update({
       where: { id: "default" },
