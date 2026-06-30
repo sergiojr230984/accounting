@@ -290,7 +290,8 @@ export default function CustomerInvoiceDetailPage() {
       const paid = new Decimal(vals.paidAmount || "0");
       const down = new Decimal(vals.downPayment || "0");
 
-      const emp = employees.find((e) => e.id === (vals.employeeId || (invoice.employeeId ?? "")));
+      const empId = vals.employeeId || (invoice.employeeId ?? "");
+      const emp = employees.find((e) => e.id === empId);
 
       const doc = generateInvoicePDF({
         invoiceNumber: vals.invoiceNumber || invoice.invoiceNumber,
@@ -303,7 +304,7 @@ export default function CustomerInvoiceDetailPage() {
         downPayment: down.toFixed(2),
         creditCardFee: invoice.creditCardFee,
         appliedFees: invoice.appliedFees,
-        notes: vals.notes ?? invoice.notes ?? "",
+        notes: (vals.notes ?? invoice.notes) ?? "",
         customer: invoice.customer,
         items: computedItems,
         payments: invoice.payments,
@@ -694,7 +695,8 @@ export default function CustomerInvoiceDetailPage() {
                         className="input"
                         placeholder="e.g. Check #1234, Cash"
                         value={paymentForm.notes}
-                        onChange={(e) => setPaymentForm((prev) => ({ ...prev, notes: e.target.value }))}
+                        onChange={(e) => setPaymentForm((prev) => ({ ...prev, notes: e.target.value }))
+                        }
                       />
                     </div>
                   </div>
