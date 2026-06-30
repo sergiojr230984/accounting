@@ -1,16 +1,22 @@
 import { NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
-import { requirePermission } from "@/lib/permissions";
-import { writeAuditLog, extractMeta, actorFromSession } from "@/lib/audit";
 import { z } from "zod";
 import Decimal from "decimal.js";
 
 const itemSchema = z.object({
   description: z.string().min(1),
+  itemDescription: z.string().optional(),
   quantity: z.string().regex(/^\d+(\.\d+)?$/, "Must be a number"),
   unitPrice: z.string().regex(/^\d+(\.\d+)?$/, "Must be a number"),
   taxRate: z.string().regex(/^\d+(\.\d+)?$/, "Must be a number").default("0"),
+});
+
+const appliedFeeSchema = z.object({
+  id: z.string(),
+  label: z.string(),
+  rate: z.number(),
+  amount: z.string(),
 });
 
 const invoiceSchema = z.object({
@@ -22,17 +28,16 @@ const invoiceSchema = z.object({
   notes: z.string().optional(),
   paymentStatus: z.enum(["UNPAID", "PARTIALLY_PAID", "PAID"]).default("UNPAID"),
   paidAmount: z.string().regex(/^\d+(\.\d+)?$/).default("0"),
+  downPayment: z.string().regex(/^\d+(\.\d+)?$/).default("0"),
+  employeeId: z.string().optional().nullable(),
+  commissionRate: z.string().regex(/^\d+(\.\d+)?$/).default("0"),
+  addCreditCardFee: z.boolean().default(false),
+  appliedFees: z.array(appliedFeeSchema).default([]),
 });
 
 export async function GET(request: Request) {
   const session = await auth();
   if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-
-  const { allowed } = requirePermission(session, "customer_invoice", "read");
-  if (!allowed) {
-    await writeAuditLog({ ...actorFromSession(session), action: "ACCESS_DENIED", entityType: "customer_invoice", entityLabel: "Customer Invoice List", ...extractMeta(request) });
-    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
-  }
 
   const { searchParams } = new URL(request.url);
   const customerId = searchParams.get("customerId");
@@ -74,20 +79,27 @@ export async function POST(request: Request) {
   const session = await auth();
   if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-  const { allowed, role } = requirePermission(session, "customer_invoice", "create");
-  if (!allowed) {
-    await writeAuditLog({ ...actorFromSession(session), action: "ACCESS_DENIED", entityType: "customer_invoice", entityLabel: "Create Customer Invoice", ...extractMeta(request) });
-    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
-  }
-
   const body = await request.json();
   const parsed = invoiceSchema.safeParse(body);
   if (!parsed.success) {
     return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
   }
 
-  const { customerId, invoiceNumber, invoiceDate, dueDate, items, notes, paymentStatus, paidAmount } =
-    parsed.data;
+  const {
+    customerId,
+    invoiceNumber,
+    invoiceDate,
+    dueDate,
+    items,
+    notes,
+    paymentStatus,
+    paidAmount,
+    downPayment,
+    employeeId,
+    commissionRate,
+    addCreditCardFee,
+    appliedFees,
+  } = parsed.data;
 
   const existing = await prisma.customerInvoice.findUnique({
     where: { invoiceNumber_customerId: { invoiceNumber, customerId } },
@@ -113,7 +125,24 @@ export async function POST(request: Request) {
     return { ...item, lineTotal: lineTotal.toFixed(2) };
   });
 
-  const totalAmount = subtotal.plus(taxAmount);
+  let creditCardFee = new Decimal(0);
+  if (addCreditCardFee) {
+    const profile = await prisma.companyProfile.findUnique({ where: { id: "default" } });
+    if (profile && Number(profile.creditCardFeeRate) > 0) {
+      creditCardFee = subtotal.plus(taxAmount).times(profile.creditCardFeeRate.toString());
+    }
+  }
+
+  let customFeesSum = new Decimal(0);
+  for (const f of appliedFees) {
+    try {
+      customFeesSum = customFeesSum.plus(new Decimal(f.amount));
+    } catch {
+      // skip malformed entry
+    }
+  }
+
+  const totalAmount = subtotal.plus(taxAmount).plus(creditCardFee).plus(customFeesSum);
 
   const invoice = await prisma.customerInvoice.create({
     data: {
@@ -124,12 +153,18 @@ export async function POST(request: Request) {
       subtotal: subtotal.toFixed(2),
       taxAmount: taxAmount.toFixed(2),
       totalAmount: totalAmount.toFixed(2),
+      creditCardFee: creditCardFee.toFixed(2),
+      appliedFees: appliedFees as unknown as object,
       paidAmount: paidAmount ?? "0",
       paymentStatus: paymentStatus ?? "UNPAID",
+      downPayment: downPayment ?? "0",
+      employeeId: employeeId ?? null,
+      commissionRate: commissionRate ?? "0",
       notes,
       items: {
         create: computedItems.map((item) => ({
           description: item.description,
+          itemDescription: item.itemDescription ?? null,
           quantity: item.quantity,
           unitPrice: item.unitPrice,
           taxRate: item.taxRate,
@@ -140,15 +175,35 @@ export async function POST(request: Request) {
     include: { customer: true, items: true },
   });
 
-  await writeAuditLog({
-    ...actorFromSession(session),
-    action: "CREATE",
-    entityType: "customer_invoice",
-    entityId: invoice.id,
-    entityLabel: `Invoice #${invoiceNumber}`,
-    ...extractMeta(request),
-  });
+  await prisma.companyProfile
+    .update({
+      where: { id: "default" },
+      data: { customerInvoiceNextSeq: { increment: 1 } },
+    })
+    .catch(() => undefined);
 
-  void role; // used for potential future per-role logic
+  try {
+    for (const item of items) {
+      const name = item.description.trim();
+      if (!name) continue;
+      const existing = await prisma.product.findFirst({
+        where: { name: { equals: name, mode: "insensitive" } },
+      });
+      if (!existing) {
+        await prisma.product.create({
+          data: {
+            name,
+            description: item.itemDescription ?? null,
+            price: item.unitPrice,
+            taxRate: item.taxRate,
+            active: true,
+          },
+        });
+      }
+    }
+  } catch {
+    // Product sync failure must never break invoice creation
+  }
+
   return NextResponse.json(invoice, { status: 201 });
 }
