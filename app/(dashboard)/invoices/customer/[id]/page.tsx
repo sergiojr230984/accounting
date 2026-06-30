@@ -76,11 +76,22 @@ export default function CustomerInvoiceDetailPage() {
   const [sendMessage, setSendMessage] = useState<{ kind: "success" | "error"; text: string } | null>(null);
   const [linkCopied, setLinkCopied] = useState(false);
   const [employees, setEmployees] = useState<EmployeeOpt[]>([]);
+
+  // Record new payment
   const [showPaymentForm, setShowPaymentForm] = useState(false);
   const [paymentForm, setPaymentForm] = useState({ amount: "", paymentDate: new Date().toISOString().split("T")[0], notes: "" });
   const [paymentSubmitting, setPaymentSubmitting] = useState(false);
   const [paymentError, setPaymentError] = useState("");
+
+  // Edit existing payment
+  const [editingPaymentId, setEditingPaymentId] = useState<string | null>(null);
+  const [editPaymentForm, setEditPaymentForm] = useState({ amount: "", paymentDate: "", notes: "" });
+  const [editPaymentSubmitting, setEditPaymentSubmitting] = useState(false);
+  const [editPaymentError, setEditPaymentError] = useState("");
+
+  // Remove payment
   const [deletingPaymentId, setDeletingPaymentId] = useState<string | null>(null);
+  const [confirmDeletePaymentId, setConfirmDeletePaymentId] = useState<string | null>(null);
 
   // Preview state
   const [showPreview, setShowPreview] = useState(false);
@@ -226,11 +237,51 @@ export default function CustomerInvoiceDetailPage() {
     }
   }
 
+  function startEditPayment(p: InvoiceDetail["payments"][0]) {
+    setEditingPaymentId(p.id);
+    setEditPaymentForm({
+      amount: p.amount,
+      paymentDate: new Date(p.paymentDate).toISOString().split("T")[0],
+      notes: p.notes ?? "",
+    });
+    setEditPaymentError("");
+    setConfirmDeletePaymentId(null);
+  }
+
+  async function handleEditPayment(e: React.FormEvent) {
+    e.preventDefault();
+    if (!editPaymentForm.amount || parseFloat(editPaymentForm.amount) <= 0) {
+      setEditPaymentError("Please enter a valid amount");
+      return;
+    }
+    setEditPaymentSubmitting(true);
+    setEditPaymentError("");
+    try {
+      const res = await fetch(`/api/invoices/customer/${id}/payments/${editingPaymentId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(editPaymentForm),
+      });
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}));
+        setEditPaymentError(d.error ?? "Failed to update payment");
+        return;
+      }
+      setEditingPaymentId(null);
+      await load();
+    } finally {
+      setEditPaymentSubmitting(false);
+    }
+  }
+
   async function handleDeletePayment(paymentId: string) {
     setDeletingPaymentId(paymentId);
     try {
       const res = await fetch(`/api/invoices/customer/${id}/payments/${paymentId}`, { method: "DELETE" });
-      if (res.ok) await load();
+      if (res.ok) {
+        setConfirmDeletePaymentId(null);
+        await load();
+      }
     } finally {
       setDeletingPaymentId(null);
     }
@@ -274,7 +325,6 @@ export default function CustomerInvoiceDetailPage() {
       const vals = getValues();
       const company = await fetchCompany();
 
-      // Compute totals from the form's current line items
       let subtotal = new Decimal(0);
       let taxAmount = new Decimal(0);
       const computedItems = (vals.items ?? invoice.items).map((item) => {
@@ -654,28 +704,30 @@ export default function CustomerInvoiceDetailPage() {
               </div>
             </div>
 
+            {/* Payments section */}
             <div className="card">
               <div className="flex items-center justify-between mb-4">
                 <h2 className="font-semibold text-gray-800">Payments</h2>
                 {!showPaymentForm && (
-                  <button onClick={() => setShowPaymentForm(true)} className="btn-primary text-xs py-1 px-3">
+                  <button
+                    onClick={() => { setShowPaymentForm(true); setEditingPaymentId(null); }}
+                    className="btn-primary text-xs py-1 px-3"
+                  >
                     <Plus className="w-3 h-3" />
                     Record payment
                   </button>
                 )}
               </div>
 
+              {/* New payment form */}
               {showPaymentForm && (
                 <form onSubmit={handleRecordPayment} className="mb-4 p-4 bg-blue-50 rounded-lg border border-blue-100">
+                  <p className="text-xs font-semibold text-blue-700 uppercase tracking-wide mb-3">New payment</p>
                   <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                     <div>
                       <label className="label">Amount ($)</label>
                       <input
-                        type="number"
-                        step="0.01"
-                        min="0"
-                        className="input"
-                        placeholder="0.00"
+                        type="number" step="0.01" min="0" className="input" placeholder="0.00"
                         value={paymentForm.amount}
                         onChange={(e) => setPaymentForm((prev) => ({ ...prev, amount: e.target.value }))}
                       />
@@ -683,8 +735,7 @@ export default function CustomerInvoiceDetailPage() {
                     <div>
                       <label className="label">Payment date</label>
                       <input
-                        type="date"
-                        className="input"
+                        type="date" className="input"
                         value={paymentForm.paymentDate}
                         onChange={(e) => setPaymentForm((prev) => ({ ...prev, paymentDate: e.target.value }))}
                       />
@@ -692,21 +743,15 @@ export default function CustomerInvoiceDetailPage() {
                     <div>
                       <label className="label">Notes</label>
                       <input
-                        className="input"
-                        placeholder="e.g. Check #1234, Cash"
+                        className="input" placeholder="e.g. Check #1234, Cash"
                         value={paymentForm.notes}
-                        onChange={(e) => setPaymentForm((prev) => ({ ...prev, notes: e.target.value }))
-                        }
+                        onChange={(e) => setPaymentForm((prev) => ({ ...prev, notes: e.target.value }))}
                       />
                     </div>
                   </div>
                   {paymentError && <p className="text-red-600 text-sm mt-2">{paymentError}</p>}
                   <div className="flex justify-end gap-2 mt-3">
-                    <button
-                      type="button"
-                      onClick={() => { setShowPaymentForm(false); setPaymentError(""); }}
-                      className="btn-secondary"
-                    >
+                    <button type="button" onClick={() => { setShowPaymentForm(false); setPaymentError(""); }} className="btn-secondary">
                       <X className="w-4 h-4" /> Cancel
                     </button>
                     <button type="submit" disabled={paymentSubmitting} className="btn-primary">
@@ -717,38 +762,97 @@ export default function CustomerInvoiceDetailPage() {
                 </form>
               )}
 
+              {/* Payment list */}
               {invoice.payments.length > 0 ? (
-                <table className="w-full text-sm">
-                  <thead className="border-b">
-                    <tr className="text-left text-gray-500">
-                      <th className="pb-2">Date</th>
-                      <th className="pb-2 text-right">Amount</th>
-                      <th className="pb-2">Notes</th>
-                      <th className="pb-2" />
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-gray-50">
-                    {invoice.payments.map((p) => (
-                      <tr key={p.id}>
-                        <td className="py-2">{format(new Date(p.paymentDate), "MMM d, yyyy")}</td>
-                        <td className="py-2 text-right font-medium text-green-700">{formatCurrency(p.amount)}</td>
-                        <td className="py-2 text-gray-500">{p.notes}</td>
-                        <td className="py-2 text-right">
-                          <button
-                            onClick={() => handleDeletePayment(p.id)}
-                            disabled={deletingPaymentId === p.id}
-                            className="p-1 text-gray-300 hover:text-red-500 hover:bg-red-50 rounded transition-colors disabled:opacity-40"
-                            title="Remove payment"
-                          >
-                            {deletingPaymentId === p.id
-                              ? <Loader2 className="w-3 h-3 animate-spin" />
-                              : <Trash2 className="w-3 h-3" />}
-                          </button>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+                <div className="divide-y divide-gray-100">
+                  {invoice.payments.map((p) => (
+                    <div key={p.id}>
+                      {editingPaymentId === p.id ? (
+                        /* Inline edit form */
+                        <form onSubmit={handleEditPayment} className="py-3 px-4 bg-amber-50 rounded-lg border border-amber-100 my-2">
+                          <p className="text-xs font-semibold text-amber-700 uppercase tracking-wide mb-3">Edit payment</p>
+                          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                            <div>
+                              <label className="label">Amount ($)</label>
+                              <input
+                                type="number" step="0.01" min="0" className="input"
+                                value={editPaymentForm.amount}
+                                onChange={(e) => setEditPaymentForm((prev) => ({ ...prev, amount: e.target.value }))}
+                              />
+                            </div>
+                            <div>
+                              <label className="label">Payment date</label>
+                              <input
+                                type="date" className="input"
+                                value={editPaymentForm.paymentDate}
+                                onChange={(e) => setEditPaymentForm((prev) => ({ ...prev, paymentDate: e.target.value }))}
+                              />
+                            </div>
+                            <div>
+                              <label className="label">Notes</label>
+                              <input
+                                className="input" placeholder="e.g. Check #1234, Cash"
+                                value={editPaymentForm.notes}
+                                onChange={(e) => setEditPaymentForm((prev) => ({ ...prev, notes: e.target.value }))}
+                              />
+                            </div>
+                          </div>
+                          {editPaymentError && <p className="text-red-600 text-sm mt-2">{editPaymentError}</p>}
+                          <div className="flex justify-end gap-2 mt-3">
+                            <button type="button" onClick={() => { setEditingPaymentId(null); setEditPaymentError(""); }} className="btn-secondary">
+                              <X className="w-4 h-4" /> Cancel
+                            </button>
+                            <button type="submit" disabled={editPaymentSubmitting} className="btn-primary">
+                              {editPaymentSubmitting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Check className="w-4 h-4" />}
+                              {editPaymentSubmitting ? "Saving…" : "Save changes"}
+                            </button>
+                          </div>
+                        </form>
+                      ) : (
+                        /* Display row */
+                        <div className="py-3 flex items-start justify-between gap-4">
+                          <div className="text-sm">
+                            <span className="font-semibold text-green-700">{formatCurrency(p.amount)}</span>
+                            <span className="text-gray-500 ml-2">— {format(new Date(p.paymentDate), "MMM d, yyyy")}</span>
+                            {p.notes && <span className="text-gray-400 ml-2">· {p.notes}</span>}
+                          </div>
+                          <div className="text-xs text-gray-500 flex items-center gap-1 shrink-0">
+                            {confirmDeletePaymentId === p.id ? (
+                              <>
+                                <span className="text-red-600">Remove payment?</span>
+                                <button
+                                  onClick={() => handleDeletePayment(p.id)}
+                                  disabled={deletingPaymentId === p.id}
+                                  className="text-red-600 font-semibold hover:underline ml-1"
+                                >
+                                  {deletingPaymentId === p.id ? <Loader2 className="w-3 h-3 animate-spin inline" /> : "Yes"}
+                                </button>
+                                <span>·</span>
+                                <button onClick={() => setConfirmDeletePaymentId(null)} className="hover:underline">No</button>
+                              </>
+                            ) : (
+                              <>
+                                <button
+                                  onClick={() => startEditPayment(p)}
+                                  className="text-brand-600 hover:underline"
+                                >
+                                  Edit payment
+                                </button>
+                                <span>·</span>
+                                <button
+                                  onClick={() => setConfirmDeletePaymentId(p.id)}
+                                  className="text-red-500 hover:underline"
+                                >
+                                  Remove payment
+                                </button>
+                              </>
+                            )}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
               ) : (
                 <p className="text-sm text-gray-400 text-center py-4">No payments recorded yet — click &ldquo;Record payment&rdquo; above to add one</p>
               )}
