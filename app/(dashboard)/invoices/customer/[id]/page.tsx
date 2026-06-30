@@ -290,7 +290,7 @@ export default function CustomerInvoiceDetailPage() {
       const paid = new Decimal(vals.paidAmount || "0");
       const down = new Decimal(vals.downPayment || "0");
 
-      const emp = employees.find((e) => e.id === (vals.employeeId || invoice.employeeId ?? ""));
+      const emp = employees.find((e) => e.id === (vals.employeeId || (invoice.employeeId ?? "")));
 
       const doc = generateInvoicePDF({
         invoiceNumber: vals.invoiceNumber || invoice.invoiceNumber,
