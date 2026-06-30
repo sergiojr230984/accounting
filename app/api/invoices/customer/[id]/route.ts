@@ -82,29 +82,42 @@ export async function PATCH(
   if (data.employeeId !== undefined) updateData.employeeId = data.employeeId;
   if (data.commissionRate !== undefined) updateData.commissionRate = data.commissionRate;
 
-  // Only touch line items if the client actually sent some. An empty array
-  // (which happens when the form's items field array desyncs and the user
-  // only meant to change status / paidAmount / etc.) used to wipe every
-  // line item AND zero out the totals — leaving "PAID" invoices with no
-  // items to print. Treat empty/undefined items as "leave them alone".
+  // Only touch line items if the client actually sent a non-empty array.
+  // IMPORTANT: compute and validate items BEFORE any destructive DB operation
+  // so that a bad value can never leave the invoice with no items.
   if (data.items && data.items.length > 0) {
     let subtotal = new Decimal(0);
     let taxAmount = new Decimal(0);
+    let computedItems: { description: string; quantity: string; unitPrice: string; taxRate: string; lineTotal: string }[];
 
-    const computedItems = data.items.map((item) => {
-      const qty = new Decimal(item.quantity);
-      const price = new Decimal(item.unitPrice);
-      const rate = new Decimal(item.taxRate);
-      const lineTotal = qty.times(price);
-      subtotal = subtotal.plus(lineTotal);
-      taxAmount = taxAmount.plus(lineTotal.times(rate));
-      return { ...item, lineTotal: lineTotal.toFixed(2) };
-    });
+    try {
+      computedItems = data.items.map((item) => {
+        const qty = new Decimal(item.quantity || "0");
+        const price = new Decimal(item.unitPrice || "0");
+        const rate = new Decimal(item.taxRate || "0");
+        const lineTotal = qty.times(price);
+        subtotal = subtotal.plus(lineTotal);
+        taxAmount = taxAmount.plus(lineTotal.times(rate));
+        return {
+          description: item.description,
+          quantity: item.quantity,
+          unitPrice: item.unitPrice,
+          taxRate: item.taxRate,
+          lineTotal: lineTotal.toFixed(2),
+        };
+      });
+    } catch {
+      return NextResponse.json(
+        { error: "Invalid item values — please check quantities and prices" },
+        { status: 400 }
+      );
+    }
 
     updateData.subtotal = subtotal.toFixed(2);
     updateData.taxAmount = taxAmount.toFixed(2);
     updateData.totalAmount = subtotal.plus(taxAmount).toFixed(2);
 
+    // Delete existing items only AFTER successful computation
     await prisma.customerInvoiceItem.deleteMany({ where: { invoiceId: id } });
     updateData.items = {
       create: computedItems.map((item) => ({
@@ -140,7 +153,6 @@ export async function PATCH(
   if ((data.paidAmount !== undefined || data.downPayment !== undefined) && data.paymentStatus === undefined) {
     const newPaid = new Decimal(data.paidAmount ?? existing.paidAmount.toString());
     const newDown = new Decimal(data.downPayment ?? existing.downPayment.toString());
-    // If items were recalculated above, use the new total; otherwise the existing one.
     const effectiveTotal = updateData.totalAmount !== undefined
       ? new Decimal(updateData.totalAmount as string)
       : new Decimal(existing.totalAmount.toString());
