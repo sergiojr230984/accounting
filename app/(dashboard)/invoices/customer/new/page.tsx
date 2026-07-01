@@ -145,24 +145,19 @@ export default function NewCustomerInvoicePage() {
     fetch("/api/settings")
       .then((r) => (r.ok ? r.json() : null))
       .then(
-        (
-          p: {
-            creditCardFeeRate: string;
-            customerInvoicePrefix?: string;
-            customerInvoiceNextSeq?: number;
-            customFees?: { id: string; label: string; rate: number }[];
-          } | null
-        ) => {
+        (p: { creditCardFeeRate: string; customFees?: { id: string; label: string; rate: number }[] } | null) => {
           if (!p) return;
           setCcFeeRate(p.creditCardFeeRate);
           if (Array.isArray(p.customFees) && p.customFees.length > 0) {
             setCustomFees(p.customFees);
           }
-          const prefix = p.customerInvoicePrefix ?? "INV-2026-";
-          const seq = p.customerInvoiceNextSeq ?? 1001;
-          setInvoiceNumber(`${prefix}${String(seq).padStart(4, "0")}`);
         }
       )
+      .catch(() => {});
+    // Use the real max invoice number from the DB so manually-entered numbers are respected
+    fetch("/api/invoices/customer/next-number")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d: { nextNumber?: string } | null) => { if (d?.nextNumber) setInvoiceNumber(d.nextNumber); })
       .catch(() => {});
   }, []);
 
@@ -691,9 +686,7 @@ export default function NewCustomerInvoicePage() {
                         </td>
                         <td className="px-2 py-1">
                           <input
-                            type="number"
-                            step="0.01"
-                            min="0"
+                            type="number" step="0.01" min="0"
                             className="w-full px-2 py-1.5 border-0 focus:outline-none focus:bg-brand-50 rounded text-sm text-right"
                             value={item.quantity}
                             onChange={(e) => updateItem(idx, "quantity", e.target.value)}
@@ -701,9 +694,7 @@ export default function NewCustomerInvoicePage() {
                         </td>
                         <td className="px-2 py-1">
                           <input
-                            type="number"
-                            step="0.01"
-                            min="0"
+                            type="number" step="0.01" min="0"
                             className="w-full px-2 py-1.5 border-0 focus:outline-none focus:bg-brand-50 rounded text-sm text-right"
                             value={item.unitPrice}
                             onChange={(e) => updateItem(idx, "unitPrice", e.target.value)}
@@ -725,10 +716,7 @@ export default function NewCustomerInvoicePage() {
                             </select>
                           ) : (
                             <input
-                              type="number"
-                              step="0.0001"
-                              min="0"
-                              max="1"
+                              type="number" step="0.0001" min="0" max="1"
                               className="w-full px-2 py-1.5 border-0 focus:outline-none focus:bg-brand-50 rounded text-sm text-right"
                               value={item.taxRate}
                               onChange={(e) => updateItem(idx, "taxRate", e.target.value)}
@@ -868,10 +856,7 @@ export default function NewCustomerInvoicePage() {
               <div>
                 <label className="label">Down payment ($)</label>
                 <input
-                  type="number"
-                  step="0.01"
-                  min="0"
-                  className="input"
+                  type="number" step="0.01" min="0" className="input"
                   value={downPayment}
                   onChange={(e) => setDownPayment(e.target.value)}
                 />
@@ -908,11 +893,7 @@ export default function NewCustomerInvoicePage() {
               <div>
                 <label className="label">Commission rate (decimal)</label>
                 <input
-                  type="number"
-                  step="0.0001"
-                  min="0"
-                  max="1"
-                  className="input"
+                  type="number" step="0.0001" min="0" max="1" className="input"
                   value={commissionRate}
                   onChange={(e) => setCommissionRate(e.target.value)}
                   disabled={!employeeId}
