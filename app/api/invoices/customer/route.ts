@@ -63,13 +63,13 @@ export async function GET(request: Request) {
   // SALES employees only see their own invoices
   if (role === "SALES") {
     if (!userEmail) {
-      return NextResponse.json({ invoices: [], total: 0, page, limit });
+      return NextResponse.json({ invoices: [], total: 0, page, limit, notLinked: true });
     }
     const employee = await prisma.employee.findFirst({
-      where: { email: userEmail },
+      where: { email: { equals: userEmail, mode: "insensitive" } },
     });
     if (!employee) {
-      return NextResponse.json({ invoices: [], total: 0, page, limit });
+      return NextResponse.json({ invoices: [], total: 0, page, limit, notLinked: true });
     }
     where.employeeId = employee.id;
   }
@@ -123,7 +123,9 @@ export async function POST(request: Request) {
 
   // SALES employees are always linked to their own employee record
   if (role === "SALES" && userEmail) {
-    const employee = await prisma.employee.findFirst({ where: { email: userEmail } });
+    const employee = await prisma.employee.findFirst({
+      where: { email: { equals: userEmail, mode: "insensitive" } },
+    });
     if (employee) {
       employeeId = employee.id;
       if (!commissionRate || commissionRate === "0") {

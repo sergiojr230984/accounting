@@ -55,6 +55,7 @@ const financialNav: NavItem[] = [
 const adminNav: NavItem[] = [
   { href: "/admin", label: "Admin Dashboard", icon: ShieldCheck },
   { href: "/admin/users", label: "Users", icon: UserCog },
+  { href: "/admin/employees", label: "Employees", icon: UsersRound },
   { href: "/admin/audit-log", label: "Audit Log", icon: ScrollText },
   { href: "/admin/backups", label: "Backups", icon: DatabaseBackup },
   { href: "/admin/1099", label: "1099 Contractors", icon: FileSpreadsheet },
