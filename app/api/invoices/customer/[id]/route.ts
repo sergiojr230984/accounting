@@ -29,6 +29,17 @@ const updateSchema = z.object({
     .optional(),
 });
 
+function deriveStatus(
+  total: Decimal,
+  paid: Decimal,
+  down: Decimal
+): "UNPAID" | "PARTIALLY_PAID" | "PAID" {
+  const balance = total.minus(paid).minus(down);
+  if (balance.lte(0)) return "PAID";
+  if (paid.gt(0) || down.gt(0)) return "PARTIALLY_PAID";
+  return "UNPAID";
+}
+
 async function resolveEmployeeForSales(
   userEmail: string | null | undefined
 ): Promise<{ id: string } | null> {
@@ -104,7 +115,6 @@ export async function PATCH(
   if (data.invoiceDate) updateData.invoiceDate = new Date(data.invoiceDate);
   if (data.dueDate) updateData.dueDate = new Date(data.dueDate);
   if (data.notes !== undefined) updateData.notes = data.notes;
-  if (data.paymentStatus) updateData.paymentStatus = data.paymentStatus;
   if (data.paidAmount !== undefined) updateData.paidAmount = data.paidAmount;
   if (data.downPayment !== undefined) updateData.downPayment = data.downPayment;
   if (data.employeeId !== undefined) updateData.employeeId = data.employeeId;
@@ -186,26 +196,14 @@ export async function PATCH(
     }
   }
 
-  if (
-    (data.paidAmount !== undefined || data.downPayment !== undefined) &&
-    data.paymentStatus === undefined
-  ) {
-    const newPaid = new Decimal(data.paidAmount ?? existing.paidAmount.toString());
-    const newDown = new Decimal(data.downPayment ?? existing.downPayment.toString());
-    const effectiveTotal =
-      updateData.totalAmount !== undefined
-        ? new Decimal(updateData.totalAmount as string)
-        : new Decimal(existing.totalAmount.toString());
-    const balance = effectiveTotal.minus(newPaid).minus(newDown);
-
-    if (balance.lte(0)) {
-      updateData.paymentStatus = "PAID";
-    } else if (newPaid.gt(0) || newDown.gt(0)) {
-      updateData.paymentStatus = "PARTIALLY_PAID";
-    } else {
-      updateData.paymentStatus = "UNPAID";
-    }
-  }
+  // Always recompute paymentStatus from actual numbers — never trust the client value
+  const newPaid = new Decimal(data.paidAmount ?? existing.paidAmount.toString());
+  const newDown = new Decimal(data.downPayment ?? existing.downPayment.toString());
+  const effectiveTotal =
+    updateData.totalAmount !== undefined
+      ? new Decimal(updateData.totalAmount as string)
+      : new Decimal(existing.totalAmount.toString());
+  updateData.paymentStatus = deriveStatus(effectiveTotal, newPaid, newDown);
 
   const updated = await prisma.customerInvoice.update({
     where: { id },

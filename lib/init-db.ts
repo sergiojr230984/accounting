@@ -207,6 +207,28 @@ export async function initializeDatabase() {
   }
   console.log("[init-db] Schema ready");
 
+  // Fix any invoices where paymentStatus doesn't match the actual paid/down amounts
+  try {
+    const fixed = await prisma.$executeRawUnsafe(`
+      UPDATE "CustomerInvoice"
+      SET "paymentStatus" = CASE
+        WHEN "totalAmount" - "paidAmount" - "downPayment" <= 0 THEN 'PAID'::"PaymentStatus"
+        WHEN "paidAmount" > 0 OR "downPayment" > 0             THEN 'PARTIALLY_PAID'::"PaymentStatus"
+        ELSE 'UNPAID'::"PaymentStatus"
+      END
+      WHERE "paymentStatus" IS DISTINCT FROM CASE
+        WHEN "totalAmount" - "paidAmount" - "downPayment" <= 0 THEN 'PAID'::"PaymentStatus"
+        WHEN "paidAmount" > 0 OR "downPayment" > 0             THEN 'PARTIALLY_PAID'::"PaymentStatus"
+        ELSE 'UNPAID'::"PaymentStatus"
+      END
+    `);
+    if (fixed > 0) {
+      console.log(`[init-db] Corrected paymentStatus on ${fixed} invoice(s)`);
+    }
+  } catch (e) {
+    console.error("[init-db] paymentStatus backfill failed:", e);
+  }
+
   const HARD_CODED_ADMINS = [
     "admin@lacuevita.com",
   ];

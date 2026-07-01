@@ -35,6 +35,17 @@ const invoiceSchema = z.object({
   appliedFees: z.array(appliedFeeSchema).default([]),
 });
 
+function deriveStatus(
+  total: Decimal,
+  paid: Decimal,
+  down: Decimal
+): "UNPAID" | "PARTIALLY_PAID" | "PAID" {
+  const balance = total.minus(paid).minus(down);
+  if (balance.lte(0)) return "PAID";
+  if (paid.gt(0) || down.gt(0)) return "PARTIALLY_PAID";
+  return "UNPAID";
+}
+
 export async function GET(request: Request) {
   const session = await auth();
   if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -112,7 +123,6 @@ export async function POST(request: Request) {
     dueDate,
     items,
     notes,
-    paymentStatus,
     paidAmount,
     downPayment,
     employeeId,
@@ -176,6 +186,9 @@ export async function POST(request: Request) {
   }
 
   const totalAmount = subtotal.plus(taxAmount).plus(creditCardFee).plus(customFeesSum);
+  const paidDec = new Decimal(paidAmount ?? "0");
+  const downDec = new Decimal(downPayment ?? "0");
+  const paymentStatus = deriveStatus(totalAmount, paidDec, downDec);
 
   const invoice = await prisma.customerInvoice.create({
     data: {
@@ -189,7 +202,7 @@ export async function POST(request: Request) {
       creditCardFee: creditCardFee.toFixed(2),
       appliedFees: appliedFees as unknown as object,
       paidAmount: paidAmount ?? "0",
-      paymentStatus: paymentStatus ?? "UNPAID",
+      paymentStatus,
       downPayment: downPayment ?? "0",
       employeeId: employeeId ?? null,
       commissionRate: commissionRate ?? "0",
