@@ -64,7 +64,21 @@ export default function NewCustomerInvoicePage() {
     return list as Customer[];
   }
 
-  useEffect(() => { loadCustomers(); }, []);
+  async function suggestNextNumber() {
+    try {
+      const res = await fetch("/api/invoices/customer/next-number");
+      if (!res.ok) return;
+      const data = await res.json();
+      if (data.nextNumber) setValue("invoiceNumber", data.nextNumber);
+    } catch {
+      // user can type manually
+    }
+  }
+
+  useEffect(() => {
+    loadCustomers();
+    suggestNextNumber();
+  }, []);
 
   // Called when AI extraction completes — pre-fill the form
   async function handleExtracted(data: {
@@ -203,7 +217,7 @@ export default function NewCustomerInvoicePage() {
 
             <div>
               <label className="label">Invoice Number *</label>
-              <input className="input" placeholder="INV-2024-001" {...register("invoiceNumber")} />
+              <input className="input" placeholder="INV-2026-001" {...register("invoiceNumber")} />
               {errors.invoiceNumber && <p className="text-red-500 text-xs mt-1">{errors.invoiceNumber.message}</p>}
             </div>
 
