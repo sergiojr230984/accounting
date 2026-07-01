@@ -18,6 +18,7 @@ import {
   DatabaseBackup,
   FileSpreadsheet,
   UserCog,
+  TrendingUp,
 } from "lucide-react";
 
 type NavItem = { href: string; label: string; icon: typeof LayoutDashboard };
@@ -31,18 +32,30 @@ const crmAdminNav: NavItem[] = [
   { href: "/crm/team", label: "Vendedoras", icon: UsersRound },
 ];
 
-const accountingNav: NavItem[] = [
-  { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
+// Employee (SALES) can only see their own invoices and customers
+const salesNav: NavItem[] = [
+  { href: "/invoices/customer", label: "My Invoices", icon: FileText },
+  { href: "/customers", label: "Customers", icon: Users },
+];
+
+// AP/AR work — ADMIN and MANAGER
+const apArNav: NavItem[] = [
   { href: "/invoices/customer", label: "Customer Invoices", icon: FileText },
   { href: "/invoices/supplier", label: "Supplier Bills", icon: ShoppingCart },
   { href: "/customers", label: "Customers", icon: Users },
   { href: "/suppliers", label: "Suppliers", icon: Truck },
+];
+
+// Financial pages — ADMIN only
+const financialNav: NavItem[] = [
+  { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
   { href: "/reports", label: "Reports", icon: BarChart3 },
 ];
 
 const adminNav: NavItem[] = [
   { href: "/admin", label: "Admin Dashboard", icon: ShieldCheck },
   { href: "/admin/users", label: "Users", icon: UserCog },
+  { href: "/admin/employees", label: "Employees", icon: UsersRound },
   { href: "/admin/audit-log", label: "Audit Log", icon: ScrollText },
   { href: "/admin/backups", label: "Backups", icon: DatabaseBackup },
   { href: "/admin/1099", label: "1099 Contractors", icon: FileSpreadsheet },
@@ -65,10 +78,15 @@ function NavLink({ href, label, icon: Icon, active }: NavItem & { active: boolea
 export default function Sidebar({ role }: { role?: string }) {
   const pathname = usePathname();
   const isActive = (href: string) =>
-    pathname === href || (href !== "/dashboard" && href !== "/crm/dashboard" && href !== "/admin" && pathname.startsWith(href));
+    pathname === href ||
+    (href !== "/dashboard" &&
+      href !== "/crm/dashboard" &&
+      href !== "/admin" &&
+      pathname.startsWith(href));
 
-  const canManage = role === "ADMIN" || role === "MANAGER";
   const isAdmin = role === "ADMIN";
+  const isManager = role === "MANAGER";
+  const isSales = role === "SALES";
 
   return (
     <aside className="w-60 bg-brand-900 text-white flex flex-col flex-shrink-0">
@@ -96,18 +114,46 @@ export default function Sidebar({ role }: { role?: string }) {
             <NavLink key={item.href} {...item} active={isActive(item.href)} />
           ))}
 
-        {canManage && (
+        {/* SALES employees: own invoices + customers */}
+        {isSales && (
           <>
             <p className="px-3 pt-5 pb-2 text-[10px] font-semibold uppercase tracking-wider text-brand-400 flex items-center gap-1.5">
-              <BookOpen className="w-3 h-3" />
-              Contabilidad
+              <TrendingUp className="w-3 h-3" />
+              My Sales
             </p>
-            {accountingNav.map((item) => (
+            {salesNav.map((item) => (
               <NavLink key={item.href} {...item} active={isActive(item.href)} />
             ))}
           </>
         )}
 
+        {/* AP/AR section: Admin + Manager */}
+        {(isAdmin || isManager) && (
+          <>
+            <p className="px-3 pt-5 pb-2 text-[10px] font-semibold uppercase tracking-wider text-brand-400 flex items-center gap-1.5">
+              <BookOpen className="w-3 h-3" />
+              Contabilidad
+            </p>
+            {apArNav.map((item) => (
+              <NavLink key={item.href} {...item} active={isActive(item.href)} />
+            ))}
+          </>
+        )}
+
+        {/* Financials: Admin only */}
+        {isAdmin && (
+          <>
+            <p className="px-3 pt-5 pb-2 text-[10px] font-semibold uppercase tracking-wider text-brand-400 flex items-center gap-1.5">
+              <BarChart3 className="w-3 h-3" />
+              Financials
+            </p>
+            {financialNav.map((item) => (
+              <NavLink key={item.href} {...item} active={isActive(item.href)} />
+            ))}
+          </>
+        )}
+
+        {/* Admin tools: Admin only */}
         {isAdmin && (
           <>
             <p className="px-3 pt-5 pb-2 text-[10px] font-semibold uppercase tracking-wider text-amber-400 flex items-center gap-1.5">
