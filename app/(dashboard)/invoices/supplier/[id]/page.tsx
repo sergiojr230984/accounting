@@ -6,13 +6,14 @@ import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import Link from "next/link";
-import { ArrowLeft, Edit2, Save, X, Trash2, Loader2 } from "lucide-react";
+import { ArrowLeft, Edit2, Save, X, Trash2, Loader2, Printer } from "lucide-react";
 import { format } from "date-fns";
 import PaymentBadge from "@/components/PaymentBadge";
 import CategoryBadge from "@/components/CategoryBadge";
 import FileUpload from "@/components/FileUpload";
 import InvoiceItemsEditor from "@/components/InvoiceItemsEditor";
 import { formatCurrency } from "@/lib/money";
+import { generateInvoicePDF } from "@/lib/invoice-pdf";
 
 const editSchema = z.object({
   invoiceNumber: z.string().min(1),
@@ -26,6 +27,7 @@ const editSchema = z.object({
   items: z.array(
     z.object({
       description: z.string().min(1),
+      itemDescription: z.string().optional(),
       quantity: z.string(),
       unitCost: z.string(),
       taxRate: z.string().default("0"),
@@ -47,8 +49,8 @@ interface InvoiceDetail {
   category: "COGS" | "SERVICES_EXPENSE" | "OPERATING_EXPENSE" | "OTHER";
   notes: string | null;
   customerInvoiceRef: string | null;
-  supplier: { id: string; name: string; email: string | null; phone: string | null };
-  items: { id: string; description: string; quantity: string; unitCost: string; taxRate: string; lineTotal: string }[];
+  supplier: { id: string; name: string; email: string | null; phone: string | null; address: string | null; zelle: string | null };
+  items: { id: string; description: string; itemDescription: string | null; quantity: string; unitCost: string; taxRate: string; lineTotal: string }[];
   payments: { id: string; amount: string; paymentDate: string; notes: string | null }[];
   files: { id: string; originalName: string; mimeType: string }[];
 }
@@ -83,6 +85,7 @@ export default function SupplierInvoiceDetailPage() {
       customerInvoiceRef: data.customerInvoiceRef ?? "",
       items: data.items.map((item: InvoiceDetail["items"][0]) => ({
         description: item.description,
+        itemDescription: item.itemDescription ?? "",
         quantity: item.quantity,
         unitCost: item.unitCost,
         taxRate: item.taxRate,
@@ -119,6 +122,62 @@ export default function SupplierInvoiceDetailPage() {
     router.push("/invoices/supplier");
   }
 
+  async function fetchCompany() {
+    try {
+      const res = await fetch("/api/settings");
+      if (res.ok) return await res.json();
+    } catch {
+      // ignore
+    }
+    return null;
+  }
+
+  async function buildPdf() {
+    if (!invoice) return null;
+    const company = await fetchCompany();
+    return generateInvoicePDF({
+      invoiceNumber: invoice.invoiceNumber,
+      invoiceDate: invoice.invoiceDate,
+      dueDate: invoice.dueDate,
+      subtotal: invoice.subtotal,
+      taxAmount: invoice.taxAmount,
+      totalAmount: invoice.totalAmount,
+      paidAmount: invoice.paidAmount,
+      notes: invoice.notes,
+      customer: {
+        name: invoice.supplier.name,
+        email: invoice.supplier.email,
+        phone: invoice.supplier.phone,
+        address: invoice.supplier.address,
+        zelle: invoice.supplier.zelle,
+      },
+      items: invoice.items.map((i) => ({
+        description: i.description,
+        itemDescription: i.itemDescription ?? undefined,
+        quantity: i.quantity,
+        unitCost: i.unitCost,
+        taxRate: i.taxRate,
+        lineTotal: i.lineTotal,
+      })),
+      company,
+      kind: "supplier",
+    });
+  }
+
+  async function printPDF() {
+    const doc = await buildPdf();
+    if (!doc) return;
+    const url = doc.output("bloburl");
+    window.open(url, "_blank");
+  }
+
+  async function downloadPDF() {
+    if (!invoice) return;
+    const doc = await buildPdf();
+    if (!doc) return;
+    doc.save(`${invoice.invoiceNumber}.pdf`);
+  }
+
   if (!invoice) {
     return <div className="flex items-center justify-center h-48"><Loader2 className="w-6 h-6 animate-spin text-brand-500" /></div>;
   }
@@ -140,6 +199,14 @@ export default function SupplierInvoiceDetailPage() {
         <div className="flex items-center gap-2">
           {!editing ? (
             <>
+              <button onClick={printPDF} className="btn-primary" title="Print or save as PDF">
+                <Printer className="w-4 h-4" />
+                Print
+              </button>
+              <button onClick={downloadPDF} className="btn-secondary" title="Download PDF">
+                <Save className="w-4 h-4" />
+                PDF
+              </button>
               <button onClick={() => setEditing(true)} className="btn-secondary">
                 <Edit2 className="w-4 h-4" /> Edit
               </button>
@@ -214,11 +281,7 @@ export default function SupplierInvoiceDetailPage() {
               </div>
               <div className="col-span-2">
                 <label className="label">Customer Invoice # (for profitability)</label>
-                <input
-                  className="input"
-                  placeholder="e.g. INV-2026-1001"
-                  {...register("customerInvoiceRef")}
-                />
+                <input className="input" placeholder="e.g. INV-2026-1001" {...register("customerInvoiceRef")} />
                 <p className="text-xs text-gray-400 mt-0.5">Links this cost to a customer invoice for the profitability report</p>
               </div>
             </div>
@@ -228,7 +291,7 @@ export default function SupplierInvoiceDetailPage() {
             </div>
           </div>
           <div className="card">
-            <InvoiceItemsEditor control={control} type="supplier" />
+            <InvoiceItemsEditor control={control} register={register} type="supplier" />
           </div>
         </form>
       ) : (
@@ -290,7 +353,12 @@ export default function SupplierInvoiceDetailPage() {
               <tbody className="divide-y divide-gray-50">
                 {invoice.items.map((item) => (
                   <tr key={item.id}>
-                    <td className="py-2">{item.description}</td>
+                    <td className="py-2">
+                      <div>{item.description}</div>
+                      {item.itemDescription && (
+                        <div className="text-xs text-gray-400 mt-0.5">{item.itemDescription}</div>
+                      )}
+                    </td>
                     <td className="py-2 text-right">{item.quantity}</td>
                     <td className="py-2 text-right">{formatCurrency(item.unitCost)}</td>
                     <td className="py-2 text-right">{(parseFloat(item.taxRate) * 100).toFixed(0)}%</td>
