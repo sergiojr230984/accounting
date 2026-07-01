@@ -1,7 +1,7 @@
 import { auth } from "@/lib/auth";
 import { NextResponse } from "next/server";
 
-const PUBLIC_PATHS = ["/login", "/api/auth", "/api/crm/webhook", "/pay"];
+const PUBLIC_PATHS = ["/login", "/api/auth", "/api/crm/webhook", "/pay", "/api/health", "/api/debug"];
 
 // ADMIN-only: financial dashboard, reports, admin tools, team management
 const ADMIN_ONLY_PATHS = [

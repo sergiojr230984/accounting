@@ -17,14 +17,17 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
   callbacks: {
     async jwt({ token, user }) {
       if (user) {
+        // Set sub so NextAuth v5 populates session.user correctly
+        token.sub = user.id;
         token.id = user.id;
         token.role = (user as { role?: string }).role;
       }
       return token;
     },
     async session({ session, token }) {
-      if (token) {
-        session.user.id = token.id as string;
+      // Guard against session.user being null/undefined (NextAuth v5 beta edge case)
+      if (token && session?.user) {
+        session.user.id = (token.id ?? token.sub) as string;
         (session.user as { role?: string }).role = token.role as string;
       }
       return session;
