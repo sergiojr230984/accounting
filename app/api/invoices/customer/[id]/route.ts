@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
-import { requireRole } from "@/lib/api";
+import { isAdmin } from "@/lib/permissions";
 import { z } from "zod";
 import Decimal from "decimal.js";
 
@@ -29,6 +29,13 @@ const updateSchema = z.object({
     .optional(),
 });
 
+async function resolveEmployeeForSales(
+  userEmail: string | null | undefined
+): Promise<{ id: string } | null> {
+  if (!userEmail) return null;
+  return prisma.employee.findFirst({ where: { email: userEmail } });
+}
+
 export async function GET(
   _request: Request,
   { params }: { params: Promise<{ id: string }> }
@@ -37,6 +44,7 @@ export async function GET(
   if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   const { id } = await params;
+  const role = (session.user as { role?: string }).role;
 
   const invoice = await prisma.customerInvoice.findUnique({
     where: { id },
@@ -45,11 +53,20 @@ export async function GET(
       items: true,
       payments: { orderBy: { paymentDate: "desc" } },
       files: true,
-      employee: { select: { id: true, name: true } },
+      employee: { select: { id: true, name: true, email: true } },
     },
   });
 
   if (!invoice) return NextResponse.json({ error: "Not found" }, { status: 404 });
+
+  // SALES employees can only view their own invoices
+  if (role === "SALES") {
+    const employee = await resolveEmployeeForSales(session.user?.email);
+    if (!employee || invoice.employeeId !== employee.id) {
+      return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+    }
+  }
+
   return NextResponse.json(invoice);
 }
 
@@ -61,6 +78,8 @@ export async function PATCH(
   if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   const { id } = await params;
+  const role = (session.user as { role?: string }).role;
+
   const body = await request.json();
   const parsed = updateSchema.safeParse(body);
   if (!parsed.success) {
@@ -69,6 +88,14 @@ export async function PATCH(
 
   const existing = await prisma.customerInvoice.findUnique({ where: { id } });
   if (!existing) return NextResponse.json({ error: "Not found" }, { status: 404 });
+
+  // SALES employees can only update their own invoices
+  if (role === "SALES") {
+    const employee = await resolveEmployeeForSales(session.user?.email);
+    if (!employee || existing.employeeId !== employee.id) {
+      return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+    }
+  }
 
   const data = parsed.data;
   const updateData: Record<string, unknown> = {};
@@ -86,7 +113,14 @@ export async function PATCH(
   if (data.items && data.items.length > 0) {
     let subtotal = new Decimal(0);
     let taxAmount = new Decimal(0);
-    let computedItems: { description: string; itemDescription?: string; quantity: string; unitPrice: string; taxRate: string; lineTotal: string }[];
+    let computedItems: {
+      description: string;
+      itemDescription?: string;
+      quantity: string;
+      unitPrice: string;
+      taxRate: string;
+      lineTotal: string;
+    }[];
 
     try {
       computedItems = data.items.map((item) => {
@@ -152,12 +186,16 @@ export async function PATCH(
     }
   }
 
-  if ((data.paidAmount !== undefined || data.downPayment !== undefined) && data.paymentStatus === undefined) {
+  if (
+    (data.paidAmount !== undefined || data.downPayment !== undefined) &&
+    data.paymentStatus === undefined
+  ) {
     const newPaid = new Decimal(data.paidAmount ?? existing.paidAmount.toString());
     const newDown = new Decimal(data.downPayment ?? existing.downPayment.toString());
-    const effectiveTotal = updateData.totalAmount !== undefined
-      ? new Decimal(updateData.totalAmount as string)
-      : new Decimal(existing.totalAmount.toString());
+    const effectiveTotal =
+      updateData.totalAmount !== undefined
+        ? new Decimal(updateData.totalAmount as string)
+        : new Decimal(existing.totalAmount.toString());
     const balance = effectiveTotal.minus(newPaid).minus(newDown);
 
     if (balance.lte(0)) {
@@ -182,8 +220,9 @@ export async function DELETE(
   _request: Request,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  const guard = await requireRole("ADMIN");
-  if (guard instanceof NextResponse) return guard;
+  const session = await auth();
+  if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  if (!isAdmin(session)) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
 
   const { id } = await params;
   await prisma.customerInvoice.delete({ where: { id } });

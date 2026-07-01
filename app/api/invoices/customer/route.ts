@@ -47,6 +47,9 @@ export async function GET(request: Request) {
   const page = parseInt(searchParams.get("page") ?? "1");
   const limit = parseInt(searchParams.get("limit") ?? "20");
 
+  const role = (session.user as { role?: string }).role;
+  const userEmail = session.user?.email;
+
   const where: Record<string, unknown> = {};
   if (customerId) where.customerId = customerId;
   if (status) where.paymentStatus = status;
@@ -55,6 +58,20 @@ export async function GET(request: Request) {
       ...(from ? { gte: new Date(from) } : {}),
       ...(to ? { lte: new Date(to) } : {}),
     };
+  }
+
+  // SALES employees only see their own invoices
+  if (role === "SALES") {
+    if (!userEmail) {
+      return NextResponse.json({ invoices: [], total: 0, page, limit });
+    }
+    const employee = await prisma.employee.findFirst({
+      where: { email: userEmail },
+    });
+    if (!employee) {
+      return NextResponse.json({ invoices: [], total: 0, page, limit });
+    }
+    where.employeeId = employee.id;
   }
 
   const [invoices, total] = await Promise.all([
@@ -85,7 +102,10 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
   }
 
-  const {
+  const role = (session.user as { role?: string }).role;
+  const userEmail = session.user?.email;
+
+  let {
     customerId,
     invoiceNumber,
     invoiceDate,
@@ -100,6 +120,17 @@ export async function POST(request: Request) {
     addCreditCardFee,
     appliedFees,
   } = parsed.data;
+
+  // SALES employees are always linked to their own employee record
+  if (role === "SALES" && userEmail) {
+    const employee = await prisma.employee.findFirst({ where: { email: userEmail } });
+    if (employee) {
+      employeeId = employee.id;
+      if (!commissionRate || commissionRate === "0") {
+        commissionRate = employee.commissionRate.toString();
+      }
+    }
+  }
 
   const existing = await prisma.customerInvoice.findUnique({
     where: { invoiceNumber_customerId: { invoiceNumber, customerId } },
