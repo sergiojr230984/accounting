@@ -25,9 +25,6 @@ const editSchema = z.object({
   employeeId: z.string().default(""),
   commissionRate: z.string().default("0"),
   notes: z.string().optional(),
-  customerAddress: z.string().optional(),
-  customerPhone: z.string().optional(),
-  customerEmail: z.string().optional(),
   items: z.array(
     z.object({
       description: z.string().min(1),
@@ -73,7 +70,6 @@ export default function CustomerInvoiceDetailPage() {
   const [invoice, setInvoice] = useState<InvoiceDetail | null>(null);
   const [editing, setEditing] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [saveSuccess, setSaveSuccess] = useState(false);
   const [error, setError] = useState("");
   const [deleting, setDeleting] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
@@ -121,9 +117,6 @@ export default function CustomerInvoiceDetailPage() {
       employeeId: data.employeeId ?? "",
       commissionRate: data.commissionRate ?? "0",
       notes: data.notes ?? "",
-      customerAddress: data.customer.address ?? "",
-      customerPhone: data.customer.phone ?? "",
-      customerEmail: data.customer.email ?? "",
       items: data.items.map((item: InvoiceDetail["items"][0]) => ({
         description: item.description,
         itemDescription: item.itemDescription ?? "",
@@ -162,13 +155,12 @@ export default function CustomerInvoiceDetailPage() {
       }
       setValue("paymentStatus", status, { shouldValidate: false });
     } catch {
-      // Ignore Decimal parse errors on incomplete / empty input
+      // ignore
     }
   }, [watchedPaid, watchedDown, editing, invoice, setValue]);
 
   async function onSave(data: EditForm) {
     setSaving(true);
-    setSaveSuccess(false);
     setError("");
     try {
       const res = await fetch(`/api/invoices/customer/${id}`, {
@@ -181,25 +173,8 @@ export default function CustomerInvoiceDetailPage() {
         setError(d.error ?? "Save failed");
         return;
       }
-
-      // Update customer address / contact if changed
-      if (invoice && (data.customerAddress !== undefined || data.customerPhone !== undefined || data.customerEmail !== undefined)) {
-        await fetch(`/api/customers/${invoice.customer.id}`, {
-          method: "PATCH",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            name: invoice.customer.name,
-            address: data.customerAddress ?? invoice.customer.address ?? "",
-            phone: data.customerPhone ?? invoice.customer.phone ?? "",
-            email: data.customerEmail ?? invoice.customer.email ?? "",
-          }),
-        });
-      }
-
       await load();
       setEditing(false);
-      setSaveSuccess(true);
-      setTimeout(() => setSaveSuccess(false), 4000);
     } finally {
       setSaving(false);
     }
@@ -508,13 +483,6 @@ export default function CustomerInvoiceDetailPage() {
           <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg text-sm">{error}</div>
         )}
 
-        {saveSuccess && (
-          <div className="bg-green-50 border border-green-200 text-green-800 px-4 py-3 rounded-lg text-sm flex items-center gap-2">
-            <Check className="w-4 h-4 text-green-600 shrink-0" />
-            Invoice saved successfully.
-          </div>
-        )}
-
         {editing && Object.keys(errors).length > 0 && (
           <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg text-sm space-y-1">
             <p className="font-semibold">Please fix the highlighted fields before saving:</p>
@@ -525,10 +493,7 @@ export default function CustomerInvoiceDetailPage() {
               {errors.paidAmount && <li>Amount paid must be a number</li>}
               {errors.downPayment && <li>Down payment must be a number</li>}
               {errors.items && (
-                <li>
-                  One or more line items are missing a description, quantity, or price.
-                  Open the Line Items section and fill in every row, or remove empty rows.
-                </li>
+                <li>One or more line items are missing a description, quantity, or price.</li>
               )}
             </ul>
           </div>
@@ -554,29 +519,6 @@ export default function CustomerInvoiceDetailPage() {
 
         {editing ? (
           <form className="space-y-6">
-            <div className="card space-y-4">
-              <h2 className="font-semibold">Bill To / Customer</h2>
-              <p className="text-xs text-gray-400">Changes here update the customer record permanently.</p>
-              <div className="grid grid-cols-2 gap-4">
-                <div className="col-span-2">
-                  <label className="label">Address</label>
-                  <input
-                    className="input"
-                    placeholder="Street, City, State, ZIP"
-                    {...register("customerAddress")}
-                  />
-                </div>
-                <div>
-                  <label className="label">Phone</label>
-                  <input className="input" placeholder="Phone number" {...register("customerPhone")} />
-                </div>
-                <div>
-                  <label className="label">Email</label>
-                  <input type="email" className="input" placeholder="Email address" {...register("customerEmail")} />
-                </div>
-              </div>
-            </div>
-
             <div className="card space-y-4">
               <h2 className="font-semibold">Edit Invoice</h2>
               <div className="grid grid-cols-2 gap-4">
@@ -678,9 +620,7 @@ export default function CustomerInvoiceDetailPage() {
                   <p className="font-medium">{invoice.customer.name}</p>
                   {invoice.customer.email && <p className="text-gray-500">{invoice.customer.email}</p>}
                   {invoice.customer.phone && <p className="text-gray-500">{invoice.customer.phone}</p>}
-                  {invoice.customer.address && (
-                    <p className="text-gray-500">{invoice.customer.address}</p>
-                  )}
+                  {invoice.customer.address && <p className="text-gray-500">{invoice.customer.address}</p>}
                   {(invoice.customer.emergencyContactName || invoice.customer.emergencyContactPhone) && (
                     <div className="pt-2 border-t border-gray-100">
                       <p className="text-[10px] font-semibold uppercase text-gray-400 tracking-wide">Emergency contact</p>
