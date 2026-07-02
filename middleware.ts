@@ -1,7 +1,18 @@
-import { auth } from "@/lib/auth";
+import NextAuth from "next-auth";
+import { authConfig } from "./auth.config";
 import { NextResponse } from "next/server";
 
-const PUBLIC_PATHS = ["/login", "/api/auth", "/api/crm/webhook", "/pay", "/api/health", "/api/debug"];
+// Lightweight NextAuth instance — no bcrypt or Prisma, safe for middleware runtime
+const { auth } = NextAuth(authConfig);
+
+const PUBLIC_PATHS = [
+  "/login",
+  "/api/auth",
+  "/api/crm/webhook",
+  "/pay",
+  "/api/health",
+  "/api/debug",
+];
 
 // ADMIN-only: financial dashboard, reports, admin tools, team management
 const ADMIN_ONLY_PATHS = [

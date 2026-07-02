@@ -3,6 +3,7 @@ import Credentials from "next-auth/providers/credentials";
 import bcrypt from "bcryptjs";
 import { prisma } from "@/lib/prisma";
 import { z } from "zod";
+import { authConfig } from "@/auth.config";
 
 const loginSchema = z.object({
   email: z.string().email(),
@@ -10,29 +11,7 @@ const loginSchema = z.object({
 });
 
 export const { handlers, auth, signIn, signOut } = NextAuth({
-  session: { strategy: "jwt" },
-  pages: {
-    signIn: "/login",
-  },
-  callbacks: {
-    async jwt({ token, user }) {
-      if (user) {
-        // Set sub so NextAuth v5 populates session.user correctly
-        token.sub = user.id;
-        token.id = user.id;
-        token.role = (user as { role?: string }).role;
-      }
-      return token;
-    },
-    async session({ session, token }) {
-      // Guard against session.user being null/undefined (NextAuth v5 beta edge case)
-      if (token && session?.user) {
-        session.user.id = (token.id ?? token.sub) as string;
-        (session.user as { role?: string }).role = token.role as string;
-      }
-      return session;
-    },
-  },
+  ...authConfig,
   providers: [
     Credentials({
       async authorize(credentials) {
@@ -44,7 +23,6 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
         });
         if (!user) return null;
 
-        // Disabled accounts cannot log in
         if (!user.active) return null;
 
         const valid = await bcrypt.compare(parsed.data.password, user.password);
