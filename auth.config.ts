@@ -11,6 +11,8 @@ export const authConfig = {
     signIn: "/login",
   },
   callbacks: {
+    // Disable NextAuth's built-in auto-redirect; our middleware callback handles all routing.
+    authorized: () => true,
     async jwt({ token, user }) {
       if (user) {
         token.sub = user.id;
