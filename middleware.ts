@@ -1,6 +1,6 @@
 import NextAuth from "next-auth";
 import { authConfig } from "./auth.config";
-import { NextResponse } from "next/server";
+import { NextResponse, type NextRequest, type NextFetchEvent } from "next/server";
 
 // Lightweight NextAuth instance — no bcrypt or Prisma, safe for middleware runtime
 const { auth } = NextAuth(authConfig);
@@ -34,7 +34,8 @@ const MANAGER_PLUS_PATHS = [
   "/api/suppliers",
 ];
 
-export default auth((req) => {
+// Build the NextAuth middleware handler separately so we can catch its exceptions
+const authMiddleware = auth((req) => {
   const { pathname } = req.nextUrl;
 
   const isPublic = PUBLIC_PATHS.some((p) => pathname.startsWith(p));
@@ -70,6 +71,24 @@ export default auth((req) => {
 
   return NextResponse.next();
 });
+
+// Exported middleware wraps the NextAuth handler in try-catch.
+// If NextAuth throws for any reason (missing AUTH_SECRET, JWT error, etc.)
+// we fall back to a safe redirect instead of crashing the entire app.
+export default async function middleware(req: NextRequest, event: NextFetchEvent) {
+  const { pathname } = req.nextUrl;
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    return await (authMiddleware as any)(req, event);
+  } catch (err) {
+    console.error("[middleware] unhandled exception — falling back to /login redirect:", err);
+    const isPublic = PUBLIC_PATHS.some((p) => pathname.startsWith(p));
+    if (!isPublic) {
+      return NextResponse.redirect(new URL("/login", req.url));
+    }
+    return NextResponse.next();
+  }
+}
 
 export const config = {
   matcher: ["/((?!_next/static|_next/image|favicon.ico|public/).*)"],
