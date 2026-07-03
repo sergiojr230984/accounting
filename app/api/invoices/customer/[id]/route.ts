@@ -15,6 +15,7 @@ const updateSchema = z.object({
   downPayment: z.string().optional(),
   employeeId: z.string().nullable().optional(),
   commissionRate: z.string().optional(),
+  customerAddress: z.string().optional().nullable(),
   items: z
     .array(
       z.object({
@@ -78,6 +79,13 @@ export async function PATCH(
   if (data.dueDate) updateData.dueDate = new Date(data.dueDate);
   if (data.notes !== undefined) updateData.notes = data.notes;
   if (data.paymentStatus) updateData.paymentStatus = data.paymentStatus;
+
+  if (data.customerAddress !== undefined) {
+    await prisma.customer.update({
+      where: { id: existing.customerId },
+      data: { address: data.customerAddress },
+    }).catch(() => undefined);
+  }
   if (data.paidAmount !== undefined) updateData.paidAmount = data.paidAmount;
   if (data.downPayment !== undefined) updateData.downPayment = data.downPayment;
   if (data.employeeId !== undefined) updateData.employeeId = data.employeeId;

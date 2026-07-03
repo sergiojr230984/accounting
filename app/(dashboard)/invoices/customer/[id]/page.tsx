@@ -25,6 +25,7 @@ const editSchema = z.object({
   employeeId: z.string().default(""),
   commissionRate: z.string().default("0"),
   notes: z.string().optional(),
+  customerAddress: z.string().optional(),
   items: z.array(
     z.object({
       description: z.string().min(1),
@@ -121,6 +122,7 @@ export default function CustomerInvoiceDetailPage() {
       employeeId: data.employeeId ?? "",
       commissionRate: data.commissionRate ?? "0",
       notes: data.notes ?? "",
+      customerAddress: data.customer.address ?? "",
       items: data.items.map((item: InvoiceDetail["items"][0]) => ({
         description: item.description,
         quantity: item.quantity,
@@ -577,6 +579,11 @@ export default function CustomerInvoiceDetailPage() {
               <div>
                 <label className="label">Notes</label>
                 <textarea className="input" rows={2} {...register("notes")} />
+              </div>
+              <div>
+                <label className="label">Customer Address</label>
+                <input className="input" placeholder="Street, City, State ZIP" {...register("customerAddress")} />
+                <p className="text-xs text-gray-400 mt-1">Updates the customer record</p>
               </div>
             </div>
             <div className="card">

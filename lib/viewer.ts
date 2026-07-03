@@ -54,7 +54,7 @@ export async function resolveViewer(): Promise<{
   signedIn: boolean;
   isAdmin: boolean;
   email: string | null;
-  role: "ADMIN" | "MANAGER" | null;
+  role: "ADMIN" | "MANAGER" | "SALES" | null;
   userId: string | null;
 }> {
   const payload = await getJwtPayload();
@@ -111,7 +111,12 @@ export async function resolveViewer(): Promise<{
           dbUser.id
         );
       }
-      const finalRole = isHardCoded || dbUser.role === "ADMIN" ? "ADMIN" : "MANAGER";
+      const finalRole =
+        isHardCoded || dbUser.role === "ADMIN"
+          ? "ADMIN"
+          : dbUser.role === "SALES"
+          ? "SALES"
+          : "MANAGER";
       return {
         signedIn: true,
         isAdmin: finalRole === "ADMIN",
@@ -128,7 +133,7 @@ export async function resolveViewer(): Promise<{
     signedIn: true,
     isAdmin: false,
     email: payloadEmail || null,
-    role: (payloadRole as "ADMIN" | "MANAGER" | null) ?? "MANAGER",
+    role: (payloadRole as "ADMIN" | "MANAGER" | "SALES" | null) ?? "MANAGER",
     userId: payloadId,
   };
 }

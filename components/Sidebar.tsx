@@ -16,21 +16,36 @@ import {
   Package,
 } from "lucide-react";
 
-type LeafItem = { href: string; label: string; icon?: React.ComponentType<{ className?: string }> };
-type GroupItem = { label: string; icon: React.ComponentType<{ className?: string }>; children: LeafItem[] };
+type Role = "ADMIN" | "MANAGER" | "SALES";
+
+type LeafItem = {
+  href: string;
+  label: string;
+  icon?: React.ComponentType<{ className?: string }>;
+  roles?: Role[];
+};
+type GroupItem = {
+  label: string;
+  icon: React.ComponentType<{ className?: string }>;
+  children: LeafItem[];
+  roles?: Role[];
+};
 type NavItem = LeafItem | GroupItem;
 
-type NavItemWithRole = NavItem & { adminOnly?: boolean };
+function isLeaf(item: NavItem): item is LeafItem {
+  return (item as LeafItem).href !== undefined;
+}
 
-const navItems: NavItemWithRole[] = [
-  { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
+// roles: if defined, only those roles see this item. Undefined = all roles.
+const navItems: NavItem[] = [
+  { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard, roles: ["ADMIN"] },
   {
     label: "Sales & Payments",
     icon: FileText,
     children: [
       { href: "/invoices/customer", label: "Invoices" },
       { href: "/customers", label: "Customers" },
-      { href: "/products", label: "Products & Services", icon: Package },
+      { href: "/products", label: "Products & Services", icon: Package, roles: ["ADMIN", "SALES"] },
     ],
   },
   {
@@ -44,24 +59,34 @@ const navItems: NavItemWithRole[] = [
   {
     label: "Team",
     icon: Users,
+    roles: ["ADMIN"],
     children: [
       { href: "/employees", label: "Employees" },
       { href: "/performance", label: "Performance" },
     ],
   },
-  { href: "/reports", label: "Reports", icon: BarChart3 },
-  { href: "/settings", label: "Settings", icon: Settings },
+  { href: "/reports", label: "Reports", icon: BarChart3, roles: ["ADMIN", "MANAGER"] },
+  { href: "/settings", label: "Settings", icon: Settings, roles: ["ADMIN"] },
 ];
 
-function isLeaf(item: NavItem): item is LeafItem {
-  return (item as LeafItem).href !== undefined;
+function filterByRole(items: NavItem[], role: Role): NavItem[] {
+  return items
+    .filter((item) => !item.roles || item.roles.includes(role))
+    .map((item) => {
+      if (isLeaf(item)) return item;
+      return {
+        ...item,
+        children: item.children.filter((c) => !c.roles || c.roles.includes(role)),
+      };
+    })
+    .filter((item) => isLeaf(item) || item.children.length > 0);
 }
 
 export default function Sidebar({ role }: { role?: string }) {
   const pathname = usePathname();
-  // Admin-only items disappear from the sidebar entirely for managers; they
-  // can't even see Settings exists.
-  const visibleNav = navItems.filter((item) => !item.adminOnly || role === "ADMIN");
+  const effectiveRole: Role = role === "ADMIN" ? "ADMIN" : role === "SALES" ? "SALES" : "MANAGER";
+  const visibleNav = filterByRole(navItems, effectiveRole);
+
   const [openGroups, setOpenGroups] = useState<Record<string, boolean>>(() => {
     const initial: Record<string, boolean> = {};
     for (const item of visibleNav) {
@@ -76,7 +101,7 @@ export default function Sidebar({ role }: { role?: string }) {
     <aside className="w-60 bg-white border-r border-gray-200 flex flex-col flex-shrink-0">
       {/* Brand */}
       <div className="px-5 py-5">
-        <Link href="/dashboard" className="flex items-center gap-2.5">
+        <Link href="/invoices/customer" className="flex items-center gap-2.5">
           <div className="w-8 h-8 bg-brand-600 rounded-lg flex items-center justify-center flex-shrink-0">
             <BookOpen className="w-4 h-4 text-white" />
           </div>

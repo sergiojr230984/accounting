@@ -141,28 +141,24 @@ export default function NewCustomerInvoicePage() {
       .then((r) => (r.ok ? r.json() : []))
       .then((list: Product[]) => setProducts(list.filter((p) => p.active)))
       .catch(() => {});
-    fetch("/api/settings")
-      .then((r) => (r.ok ? r.json() : null))
-      .then(
-        (
-          p: {
-            creditCardFeeRate: string;
-            customerInvoicePrefix?: string;
-            customerInvoiceNextSeq?: number;
-            customFees?: { id: string; label: string; rate: number }[];
-          } | null
-        ) => {
-          if (!p) return;
-          setCcFeeRate(p.creditCardFeeRate);
-          if (Array.isArray(p.customFees) && p.customFees.length > 0) {
-            setCustomFees(p.customFees);
-          }
-          const prefix = p.customerInvoicePrefix ?? "INV-2026-";
-          const seq = p.customerInvoiceNextSeq ?? 1001;
-          setInvoiceNumber(`${prefix}${String(seq).padStart(4, "0")}`);
+    Promise.all([
+      fetch("/api/settings").then((r) => (r.ok ? r.json() : null)).catch(() => null),
+      fetch("/api/invoices/customer/next-number").then((r) => (r.ok ? r.json() : null)).catch(() => null),
+    ]).then(([settings, nextNum]) => {
+      if (settings) {
+        setCcFeeRate(settings.creditCardFeeRate);
+        if (Array.isArray(settings.customFees) && settings.customFees.length > 0) {
+          setCustomFees(settings.customFees);
         }
-      )
-      .catch(() => {});
+      }
+      if (nextNum?.nextNumber) {
+        setInvoiceNumber(nextNum.nextNumber);
+      } else if (settings) {
+        const prefix = settings.customerInvoicePrefix ?? "INV-2026-";
+        const seq = settings.customerInvoiceNextSeq ?? 1001;
+        setInvoiceNumber(`${prefix}${String(seq).padStart(4, "0")}`);
+      }
+    });
   }, []);
 
   useEffect(() => {
@@ -418,7 +414,7 @@ export default function NewCustomerInvoicePage() {
           employeeId: employeeId || null,
           commissionRate: commissionRate || "0",
           paidAmount: "0",
-          paymentStatus: "UNPAID",
+          paymentStatus: totals.balance.lte(0) ? "PAID" : totals.downPayment.gt(0) ? "PARTIALLY_PAID" : "UNPAID",
           appliedFees: totals.appliedFees,
         }),
       });
