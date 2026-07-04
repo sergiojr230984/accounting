@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { cookies } from "next/headers";
 import { auth } from "@/lib/auth";
 import { resolveViewer } from "@/lib/viewer";
 import { prisma } from "@/lib/prisma";
@@ -44,6 +45,10 @@ export async function GET() {
   const authSecretSet = !!process.env.AUTH_SECRET;
   const authSecretLength = process.env.AUTH_SECRET?.length ?? 0;
 
+  // List all cookie names so we can see exactly what NextAuth set
+  const cookieStore = await cookies();
+  const allCookieNames = cookieStore.getAll().map((c) => c.name);
+
   return NextResponse.json(
     {
       // Whether auth() returned a session at all
@@ -70,6 +75,7 @@ export async function GET() {
         authSecretSet,
         authSecretLength,
       },
+      allCookieNames,
       hint: viewer.signedIn
         ? `resolveViewer sees you as ${viewer.role} (${viewer.email}). This is what the dashboard uses.`
         : "resolveViewer could not decode the JWT — AUTH_SECRET may be wrong or cookie is missing.",

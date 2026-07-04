@@ -26,19 +26,8 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
       return token;
     },
     async session({ session, token }) {
-      // Force-rebuild session.user from the JWT every call. NextAuth v5-beta
-      // sometimes hands back a session without (or with an immutable empty)
-      // user object, so we return a brand-new object rather than mutating.
       if (!token) return session;
 
-      // Re-read the role from the database every time so role promotions /
-      // demotions take effect immediately, without needing the user to sign
-      // out and back in. Cheap query, small table, internal tool — the
-      // ~1ms overhead is fine. Falls back to the token's cached role if
-      // the lookup fails for any reason. We deliberately do NOT enforce the
-      // `active` flag here: authorize() already rejects deactivated users
-      // at sign-in, and the boolean has produced false-negatives that strip
-      // session.user from legitimately-active accounts.
       let role = (token.role as string) ?? "MANAGER";
       const id = (token.id as string) ?? (token.sub as string) ?? "";
       const tokenEmail = ((token.email as string) ?? "").toLowerCase().trim();
@@ -49,9 +38,6 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
       ]);
 
       try {
-        // Try id first, fall back to case-insensitive email lookup so we
-        // find the row even when the JWT id is stale or the DB email has
-        // unexpected casing.
         let dbUser: { id: string; role: string; email: string } | null = null;
         if (id) {
           dbUser = await prisma.user.findUnique({
@@ -67,9 +53,6 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
         }
         if (dbUser?.role) role = dbUser.role;
 
-        // Safety net: auto-promote built-in admins on every session
-        // resolution. Catches accounts that init-db missed and takes
-        // effect on the user's next request — no server restart needed.
         const dbEmail = (dbUser?.email ?? tokenEmail).toLowerCase().trim();
         if (dbUser && role !== "ADMIN" && BUILT_IN_ADMINS.has(dbEmail)) {
           await prisma.user
@@ -81,14 +64,16 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
         console.error("[auth] session role lookup failed:", e);
       }
 
-      const user = {
-        id,
-        name: (token.name as string | null | undefined) ?? null,
-        email: (token.email as string | null | undefined) ?? null,
-        image: null,
-        role,
-      };
-      return { ...session, user } as unknown as typeof session;
+      // Mutate session.user in-place — the NextAuth v5-beta App Router path
+      // discards a returned replacement object and only picks up mutations on
+      // the existing session reference.
+      const u = session.user as unknown as Record<string, unknown>;
+      u.id    = id;
+      u.email = tokenEmail || null;
+      u.name  = (token.name as string | null | undefined) ?? null;
+      u.image = null;
+      u.role  = role;
+      return session;
     },
   },
   providers: [
