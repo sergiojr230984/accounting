@@ -1,43 +1,39 @@
 import { NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
+import { resolveViewer } from "@/lib/viewer";
 import { prisma } from "@/lib/prisma";
 
 export const dynamic = "force-dynamic";
 
 /**
- * Returns the current viewer's session so the frontend (and you) can verify
- * who is logged in and what role they hold. No body, just hit the URL.
+ * Diagnostic endpoint. Visit /api/me while logged in to see exactly what
+ * NextAuth's auth() returns vs what resolveViewer() (direct JWT decode) sees.
+ * Useful for debugging role/session issues on Railway.
  */
 export async function GET() {
-  const session = await auth();
-  if (!session?.user) {
-    return NextResponse.json(
-      { authenticated: false, hint: "No session cookie or it expired. Sign in again." },
-      { status: 200, headers: { "Cache-Control": "no-store" } }
-    );
-  }
-  const u = session.user as {
+  const [session, viewer] = await Promise.all([auth(), resolveViewer()]);
+
+  const u = session?.user as {
     id?: string;
     name?: string | null;
     email?: string | null;
     role?: string;
-  };
+  } | undefined;
 
-  // Look up the DB row directly so we can compare what NextAuth sees vs
-  // what's actually persisted. Helps diagnose why a built-in admin is
-  // still showing as MANAGER in the sidebar.
-  let dbById: { id: string; email: string; role: string } | null = null;
-  let dbByEmail: { id: string; email: string; role: string } | null = null;
+  // DB lookup using whichever identity source we have
+  const lookupId = viewer.userId || u?.id || "";
+  const lookupEmail = viewer.email || u?.email || "";
+  let dbUser: { id: string; email: string; role: string } | null = null;
   try {
-    if (u.id) {
-      dbById = await prisma.user.findUnique({
-        where: { id: u.id },
+    if (lookupId) {
+      dbUser = await prisma.user.findUnique({
+        where: { id: lookupId },
         select: { id: true, email: true, role: true },
       });
     }
-    if (u.email) {
-      dbByEmail = await prisma.user.findFirst({
-        where: { email: { equals: u.email, mode: "insensitive" } },
+    if (!dbUser && lookupEmail) {
+      dbUser = await prisma.user.findFirst({
+        where: { email: { equals: lookupEmail, mode: "insensitive" } },
         select: { id: true, email: true, role: true },
       });
     }
@@ -45,23 +41,38 @@ export async function GET() {
     // ignore — diagnostic only
   }
 
+  const authSecretSet = !!process.env.AUTH_SECRET;
+  const authSecretLength = process.env.AUTH_SECRET?.length ?? 0;
+
   return NextResponse.json(
     {
-      authenticated: true,
-      session: {
-        id: u.id ?? null,
-        name: u.name ?? null,
-        email: u.email ?? null,
-        role: u.role ?? null,
+      // Whether auth() returned a session at all
+      sessionExists: !!session,
+      // What auth() put in session.user (often stripped in NextAuth v5-beta)
+      sessionUser: {
+        id: u?.id ?? null,
+        name: u?.name ?? null,
+        email: u?.email ?? null,
+        role: u?.role ?? null,
       },
-      dbLookupById: dbById,
-      dbLookupByEmail: dbByEmail,
-      hint:
-        u.role === "ADMIN"
-          ? "You are an admin. Settings, taxes, employees, and invoice delete will all work."
-          : u.role
-            ? "You are not an admin. Settings/taxes/credit-card-fee changes require an ADMIN role."
-            : "Your session has no role attached — sign out and back in to refresh the JWT.",
+      // What resolveViewer() got by decoding the JWT cookie directly
+      viewer: {
+        signedIn: viewer.signedIn,
+        email: viewer.email,
+        role: viewer.role,
+        isAdmin: viewer.isAdmin,
+        userId: viewer.userId,
+      },
+      // DB row found with the best available identity
+      dbUser,
+      // Env diagnostics
+      env: {
+        authSecretSet,
+        authSecretLength,
+      },
+      hint: viewer.signedIn
+        ? `resolveViewer sees you as ${viewer.role} (${viewer.email}). This is what the dashboard uses.`
+        : "resolveViewer could not decode the JWT — AUTH_SECRET may be wrong or cookie is missing.",
     },
     { headers: { "Cache-Control": "no-store" } }
   );
