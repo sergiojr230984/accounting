@@ -2,7 +2,6 @@ import { auth } from "@/lib/auth";
 import { redirect } from "next/navigation";
 import Providers from "@/components/Providers";
 import DashboardShell from "@/components/DashboardShell";
-import { resolveViewer } from "@/lib/viewer";
 import { prisma } from "@/lib/prisma";
 
 export const dynamic = "force-dynamic";
@@ -22,47 +21,41 @@ export default async function DashboardLayout({
   const session = await auth();
   if (!session) redirect("/login");
 
-  // Cast session.user to access role and email fields that NextAuth v5-beta
-  // sometimes strips from the inferred type but still populates at runtime.
-  const su = session.user as { role?: string; email?: string } | undefined;
-  const sessionRole = su?.role;
+  const su = session.user as { id?: string; email?: string; role?: string } | undefined;
+  const userId = su?.id ?? "";
   const sessionEmail = (su?.email ?? "").toLowerCase().trim();
 
-  let role: string;
+  // Always look up the DB directly — session.user.role is unreliable in
+  // NextAuth v5-beta (often stripped or missing). session.user.id is the
+  // one field NextAuth reliably carries.
+  let role = "MANAGER";
+  try {
+    let dbUser: { role: string; email: string } | null = null;
 
-  // 1. session.user.role — set by auth.ts session callback with DB lookup
-  if (sessionRole && sessionRole !== "MANAGER") {
-    role = sessionRole;
-  }
-  // 2. Known admin email — works even if session fields are stripped
-  else if (sessionEmail && ADMIN_EMAILS.has(sessionEmail)) {
-    role = "ADMIN";
-  }
-  // 3. resolveViewer() — decodes JWT cookie directly
-  else {
-    const viewer = await resolveViewer();
-    if (viewer.role && viewer.role !== "MANAGER") {
-      role = viewer.role;
+    if (userId) {
+      dbUser = await prisma.user.findUnique({
+        where: { id: userId },
+        select: { role: true, email: true },
+      });
     }
-    // 4. DB lookup by email as final fallback
-    else if (sessionEmail) {
-      try {
-        const dbUser = await prisma.user.findFirst({
-          where: { email: { equals: sessionEmail, mode: "insensitive" } },
-          select: { role: true, email: true },
-        });
-        if (dbUser) {
-          const dbEmail = dbUser.email.toLowerCase().trim();
-          role = ADMIN_EMAILS.has(dbEmail) ? "ADMIN" : (dbUser.role ?? "MANAGER");
-        } else {
-          role = viewer.role ?? sessionRole ?? "MANAGER";
-        }
-      } catch {
-        role = viewer.role ?? sessionRole ?? "MANAGER";
-      }
-    } else {
-      role = viewer.role ?? sessionRole ?? "MANAGER";
+    if (!dbUser && sessionEmail) {
+      dbUser = await prisma.user.findFirst({
+        where: { email: { equals: sessionEmail, mode: "insensitive" } },
+        select: { role: true, email: true },
+      });
     }
+
+    if (dbUser) {
+      const dbEmail = dbUser.email.toLowerCase().trim();
+      // ADMIN_EMAILS is the override — these addresses are always ADMIN
+      role = ADMIN_EMAILS.has(dbEmail) ? "ADMIN" : (dbUser.role ?? "MANAGER");
+    } else if (sessionEmail && ADMIN_EMAILS.has(sessionEmail)) {
+      // No DB row found but email is a known admin — still grant ADMIN
+      role = "ADMIN";
+    }
+  } catch {
+    // DB lookup failed — fall back to session email check
+    if (sessionEmail && ADMIN_EMAILS.has(sessionEmail)) role = "ADMIN";
   }
 
   return (
