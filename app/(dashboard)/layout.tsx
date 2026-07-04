@@ -20,21 +20,16 @@ export default async function DashboardLayout({
   children: React.ReactNode;
 }) {
   const session = await auth();
+  if (!session) redirect("/login");
 
   // resolveViewer() decodes the JWT cookie directly — immune to the NextAuth
   // v5-beta bug where auth() returns a truthy but empty session object.
   const viewer = await resolveViewer();
-  const su = session?.user as { id?: string; email?: string; role?: string } | undefined;
+  const su = session.user as { id?: string; email?: string; role?: string } | undefined;
 
   // Collect the best available identity from either source
   const userId = viewer.userId || su?.id || "";
   const userEmail = (viewer.email || su?.email || "").toLowerCase().trim();
-
-  // Neither auth() nor the JWT cookie produced any identity — the cookie is
-  // missing, expired, or signed with a stale secret. Force re-login.
-  if (!viewer.signedIn && !userId && !userEmail) {
-    redirect("/login");
-  }
 
   const sessionUser = session?.user ?? {};
 

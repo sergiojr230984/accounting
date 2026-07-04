@@ -1,4 +1,4 @@
-import { cookies } from "next/headers";
+import { headers } from "next/headers";
 import { prisma } from "@/lib/prisma";
 
 const HARD_CODED_ADMINS = new Set([
@@ -7,40 +7,39 @@ const HARD_CODED_ADMINS = new Set([
 ]);
 
 /**
- * Decode the NextAuth JWT cookie directly. We bypass auth()/session()
- * because the session callback chain in v5-beta has been stripping
- * fields (id, email) inconsistently, which broke every downstream
- * role/admin check. The raw JWT payload is the source of truth.
+ * Decode the NextAuth session JWT directly from the request cookies.
+ * Uses next-auth/jwt's getToken which mirrors NextAuth's own cookie/salt
+ * logic exactly — so it works regardless of whether Railway uses the
+ * __Secure- prefix (HTTPS) or the plain name (HTTP behind a proxy).
  */
 async function getJwtPayload(): Promise<Record<string, unknown> | null> {
-  // Collect all candidate secrets — support both the v5 and v4 env var names,
-  // and also allow a comma-separated list (NextAuth supports multiple secrets
-  // for rotation). Deduplicate to avoid redundant decode attempts.
-  const rawSecrets = [
+  const secrets = [
     process.env.AUTH_SECRET,
     process.env.NEXTAUTH_SECRET,
   ].filter(Boolean) as string[];
-  const secrets = [...new Set(rawSecrets)];
   if (secrets.length === 0) return null;
 
   try {
-    const { decode } = await import("@auth/core/jwt");
-    const cookieStore = await cookies();
-    const cookieNames = [
-      "__Secure-authjs.session-token",
-      "authjs.session-token",
-      "__Secure-next-auth.session-token",
-      "next-auth.session-token",
-    ];
-    for (const name of cookieNames) {
-      const c = cookieStore.get(name);
-      if (!c?.value) continue;
-      for (const secret of secrets) {
+    const { getToken } = await import("next-auth/jwt");
+
+    // Build a Request-compatible object from the incoming Cookie header.
+    // getToken reads the cookie header to find the session token, then
+    // decodes it with the same salt logic NextAuth uses internally.
+    const headerStore = await headers();
+    const cookieHeader = headerStore.get("cookie") ?? "";
+    const req = { headers: { cookie: cookieHeader } } as unknown as Request;
+
+    // Try every combination of secret × secureCookie flag.
+    // Railway terminates TLS at its proxy, so the Next.js process may see the
+    // request as HTTP even though clients connect over HTTPS. NextAuth picks
+    // the cookie name based on this flag, so we must try both.
+    for (const secret of secrets) {
+      for (const secureCookie of [true, false]) {
         try {
-          const decoded = await decode({ token: c.value, secret, salt: name });
-          if (decoded) return decoded as Record<string, unknown>;
+          const token = await getToken({ req, secret, secureCookie });
+          if (token) return token as Record<string, unknown>;
         } catch {
-          // try next secret / cookie name
+          // try next combination
         }
       }
     }
@@ -50,16 +49,6 @@ async function getJwtPayload(): Promise<Record<string, unknown> | null> {
   return null;
 }
 
-/**
- * Returns true if the currently signed-in viewer should have admin
- * privileges. Checks (in order):
- *   1. JWT payload role === "ADMIN"
- *   2. JWT payload email in HARD_CODED_ADMINS (case-insensitive)
- *   3. DB row found by payload sub/id has role=ADMIN OR admin email
- *      (and force-promotes if it's an admin email but role isn't)
- *
- * Returns the resolved role and whether the viewer is admin.
- */
 export async function resolveViewer(): Promise<{
   signedIn: boolean;
   isAdmin: boolean;
@@ -77,7 +66,7 @@ export async function resolveViewer(): Promise<{
   const payloadId =
     (payload.sub as string) ?? (payload.id as string) ?? null;
 
-  // Quick wins
+  // Quick wins — hard-coded admin email or ADMIN role in the JWT
   if (payloadRole === "ADMIN") {
     return {
       signedIn: true,
@@ -97,7 +86,7 @@ export async function resolveViewer(): Promise<{
     };
   }
 
-  // DB lookup
+  // DB lookup for role
   try {
     let dbUser: { id: string; email: string; role: string } | null = null;
     if (payloadId) {
