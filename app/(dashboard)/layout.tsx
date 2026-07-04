@@ -14,46 +14,6 @@ const ADMIN_EMAILS = new Set([
   "admin@bizledger.com",
 ]);
 
-async function resolveRole(session: Awaited<ReturnType<typeof auth>>): Promise<string> {
-  // 1. Try session.user.role (set by auth.ts session callback)
-  const sessionUser = session?.user as { role?: string; email?: string; id?: string } | undefined;
-  if (sessionUser?.role && sessionUser.role !== "MANAGER") {
-    return sessionUser.role;
-  }
-
-  // 2. Check email against known admin list (works even if session is stripped)
-  const email = (sessionUser?.email ?? "").toLowerCase().trim();
-  if (email && ADMIN_EMAILS.has(email)) return "ADMIN";
-
-  // 3. Try resolveViewer() which decodes the JWT cookie directly
-  try {
-    const viewer = await resolveViewer();
-    if (viewer.role) return viewer.role;
-  } catch {
-    // ignore
-  }
-
-  // 4. DB lookup by email as final fallback
-  if (email) {
-    try {
-      const dbUser = await prisma.user.findFirst({
-        where: { email: { equals: email, mode: "insensitive" } },
-        select: { role: true, email: true },
-      });
-      if (dbUser) {
-        const dbEmail = dbUser.email.toLowerCase().trim();
-        if (ADMIN_EMAILS.has(dbEmail)) return "ADMIN";
-        return dbUser.role ?? "MANAGER";
-      }
-    } catch {
-      // ignore
-    }
-  }
-
-  // 5. Use session role even if it's MANAGER, or default
-  return sessionUser?.role ?? "MANAGER";
-}
-
 export default async function DashboardLayout({
   children,
 }: {
@@ -62,7 +22,48 @@ export default async function DashboardLayout({
   const session = await auth();
   if (!session) redirect("/login");
 
-  const role = await resolveRole(session);
+  // Cast session.user to access role and email fields that NextAuth v5-beta
+  // sometimes strips from the inferred type but still populates at runtime.
+  const su = session.user as { role?: string; email?: string } | undefined;
+  const sessionRole = su?.role;
+  const sessionEmail = (su?.email ?? "").toLowerCase().trim();
+
+  let role: string;
+
+  // 1. session.user.role — set by auth.ts session callback with DB lookup
+  if (sessionRole && sessionRole !== "MANAGER") {
+    role = sessionRole;
+  }
+  // 2. Known admin email — works even if session fields are stripped
+  else if (sessionEmail && ADMIN_EMAILS.has(sessionEmail)) {
+    role = "ADMIN";
+  }
+  // 3. resolveViewer() — decodes JWT cookie directly
+  else {
+    const viewer = await resolveViewer();
+    if (viewer.role && viewer.role !== "MANAGER") {
+      role = viewer.role;
+    }
+    // 4. DB lookup by email as final fallback
+    else if (sessionEmail) {
+      try {
+        const dbUser = await prisma.user.findFirst({
+          where: { email: { equals: sessionEmail, mode: "insensitive" } },
+          select: { role: true, email: true },
+        });
+        if (dbUser) {
+          const dbEmail = dbUser.email.toLowerCase().trim();
+          role = ADMIN_EMAILS.has(dbEmail) ? "ADMIN" : (dbUser.role ?? "MANAGER");
+        } else {
+          role = viewer.role ?? sessionRole ?? "MANAGER";
+        }
+      } catch {
+        role = viewer.role ?? sessionRole ?? "MANAGER";
+      }
+    } else {
+      role = viewer.role ?? sessionRole ?? "MANAGER";
+    }
+  }
 
   return (
     <Providers>
