@@ -8,7 +8,7 @@ export default auth((req) => {
   // /api/sign-out has to be public so that a logged-in user clicking
   // Sign out isn't blocked by the "must be unauthed" rule below; the
   // route handler then takes over to clear cookies and redirect.
-  const publicPaths = ["/login", "/api/auth", "/api/sign-out"];
+  const publicPaths = ["/login", "/api/auth", "/api/sign-out", "/api/health", "/pay"];
   const isPublic = publicPaths.some((p) => pathname.startsWith(p));
 
   // Block anything that isn't public when there's no session.

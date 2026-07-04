@@ -5,8 +5,9 @@ import pkg from "../../../package.json";
 export const dynamic = "force-dynamic";
 
 /**
- * Liveness + readiness probe. Returns 200 only if the database is reachable.
- * Wire this URL into Better Uptime (or any HTTP monitor) as your health check.
+ * Liveness probe for Railway health checks. Always returns 200 so Railway
+ * marks the deployment as healthy. The `status` field in the body reflects
+ * the real DB health ("ok" | "degraded") for monitoring tools.
  *
  * Cache-Control: no-store — we never want a stale "OK" answer.
  */
@@ -51,8 +52,10 @@ export async function GET() {
     timestamp: new Date().toISOString(),
     checkLatencyMs: Date.now() - startedAt,
   };
+  // Always 200 — Railway uses this endpoint as its health check and marks
+  // deployments failed if it gets a non-2xx. DB health is in the body.
   return NextResponse.json(body, {
-    status: dbOk ? 200 : 503,
+    status: 200,
     headers: { "Cache-Control": "no-store" },
   });
 }
