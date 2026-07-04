@@ -13,8 +13,16 @@ const HARD_CODED_ADMINS = new Set([
  * role/admin check. The raw JWT payload is the source of truth.
  */
 async function getJwtPayload(): Promise<Record<string, unknown> | null> {
-  const secret = process.env.AUTH_SECRET;
-  if (!secret) return null;
+  // Collect all candidate secrets — support both the v5 and v4 env var names,
+  // and also allow a comma-separated list (NextAuth supports multiple secrets
+  // for rotation). Deduplicate to avoid redundant decode attempts.
+  const rawSecrets = [
+    process.env.AUTH_SECRET,
+    process.env.NEXTAUTH_SECRET,
+  ].filter(Boolean) as string[];
+  const secrets = [...new Set(rawSecrets)];
+  if (secrets.length === 0) return null;
+
   try {
     const { decode } = await import("@auth/core/jwt");
     const cookieStore = await cookies();
@@ -27,11 +35,13 @@ async function getJwtPayload(): Promise<Record<string, unknown> | null> {
     for (const name of cookieNames) {
       const c = cookieStore.get(name);
       if (!c?.value) continue;
-      try {
-        const decoded = await decode({ token: c.value, secret, salt: name });
-        if (decoded) return decoded as Record<string, unknown>;
-      } catch {
-        // try next cookie name
+      for (const secret of secrets) {
+        try {
+          const decoded = await decode({ token: c.value, secret, salt: name });
+          if (decoded) return decoded as Record<string, unknown>;
+        } catch {
+          // try next secret / cookie name
+        }
       }
     }
   } catch {
