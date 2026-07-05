@@ -1,8 +1,7 @@
 import { NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
-import { requirePermission } from "@/lib/permissions";
-import { writeAuditLog, extractMeta, actorFromSession, diffChanges } from "@/lib/audit";
+import { isAdmin } from "@/lib/permissions";
 import { z } from "zod";
 import Decimal from "decimal.js";
 
@@ -49,23 +48,11 @@ async function resolveEmployeeForSales(
 }
 
 export async function GET(
-  request: Request,
+  _request: Request,
   { params }: { params: Promise<{ id: string }> }
 ) {
   const session = await auth();
   if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-
-  const { allowed } = requirePermission(session, "customer_invoice", "read");
-  if (!allowed) {
-    await writeAuditLog({
-      ...actorFromSession(session),
-      action: "ACCESS_DENIED",
-      entityType: "customer_invoice",
-      entityLabel: "View Invoice",
-      ...extractMeta(request),
-    });
-    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
-  }
 
   const { id } = await params;
   const role = (session.user as { role?: string }).role;
@@ -101,18 +88,6 @@ export async function PATCH(
   const session = await auth();
   if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-  const { allowed } = requirePermission(session, "customer_invoice", "update");
-  if (!allowed) {
-    await writeAuditLog({
-      ...actorFromSession(session),
-      action: "ACCESS_DENIED",
-      entityType: "customer_invoice",
-      entityLabel: "Update Invoice",
-      ...extractMeta(request),
-    });
-    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
-  }
-
   const { id } = await params;
   const role = (session.user as { role?: string }).role;
 
@@ -132,14 +107,6 @@ export async function PATCH(
       return NextResponse.json({ error: "Forbidden" }, { status: 403 });
     }
   }
-
-  const beforeSnapshot = {
-    invoiceNumber: existing.invoiceNumber,
-    paymentStatus: existing.paymentStatus,
-    paidAmount: existing.paidAmount.toString(),
-    totalAmount: existing.totalAmount.toString(),
-    notes: existing.notes,
-  };
 
   const data = parsed.data;
   const updateData: Record<string, unknown> = {};
@@ -209,10 +176,10 @@ export async function PATCH(
       for (const item of data.items) {
         const name = item.description.trim();
         if (!name) continue;
-        const existingProduct = await prisma.product.findFirst({
+        const existing = await prisma.product.findFirst({
           where: { name: { equals: name, mode: "insensitive" } },
         });
-        if (!existingProduct) {
+        if (!existing) {
           await prisma.product.create({
             data: {
               name,
@@ -244,60 +211,18 @@ export async function PATCH(
     include: { customer: true, items: true },
   });
 
-  const afterSnapshot = {
-    invoiceNumber: updated.invoiceNumber,
-    paymentStatus: updated.paymentStatus,
-    paidAmount: updated.paidAmount.toString(),
-    totalAmount: updated.totalAmount.toString(),
-    notes: updated.notes,
-  };
-
-  await writeAuditLog({
-    ...actorFromSession(session),
-    action: "UPDATE",
-    entityType: "customer_invoice",
-    entityId: id,
-    entityLabel: `Invoice #${updated.invoiceNumber}`,
-    changes: diffChanges(beforeSnapshot, afterSnapshot),
-    ...extractMeta(request),
-  });
-
   return NextResponse.json(updated);
 }
 
 export async function DELETE(
-  request: Request,
+  _request: Request,
   { params }: { params: Promise<{ id: string }> }
 ) {
   const session = await auth();
   if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-
-  const { allowed } = requirePermission(session, "customer_invoice", "delete");
-  if (!allowed) {
-    await writeAuditLog({
-      ...actorFromSession(session),
-      action: "ACCESS_DENIED",
-      entityType: "customer_invoice",
-      entityLabel: "Delete Invoice",
-      ...extractMeta(request),
-    });
-    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
-  }
+  if (!isAdmin(session)) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
 
   const { id } = await params;
-  const existing = await prisma.customerInvoice.findUnique({ where: { id } });
-  if (!existing) return NextResponse.json({ error: "Not found" }, { status: 404 });
-
   await prisma.customerInvoice.delete({ where: { id } });
-
-  await writeAuditLog({
-    ...actorFromSession(session),
-    action: "DELETE",
-    entityType: "customer_invoice",
-    entityId: id,
-    entityLabel: `Invoice #${existing.invoiceNumber}`,
-    ...extractMeta(request),
-  });
-
   return NextResponse.json({ ok: true });
 }

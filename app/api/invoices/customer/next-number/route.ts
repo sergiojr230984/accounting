@@ -8,7 +8,6 @@ export async function GET() {
 
   const year = new Date().getFullYear();
 
-  // Find the real max sequence from all existing INV-YYYY-NNNN invoice numbers
   const result = await prisma.$queryRaw<{ max_seq: number | null }[]>`
     SELECT MAX(
       CAST(SPLIT_PART("invoiceNumber", '-', 3) AS INTEGER)

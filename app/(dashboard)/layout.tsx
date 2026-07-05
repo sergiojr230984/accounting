@@ -8,8 +8,13 @@ export default async function DashboardLayout({
 }: {
   children: React.ReactNode;
 }) {
-  const session = await auth();
-  if (!session) redirect("/login");
+  let session;
+  try {
+    session = await auth();
+  } catch {
+    redirect("/login");
+  }
+  if (!session?.user) redirect("/login");
 
   const role = (session.user as { role?: string }).role;
 

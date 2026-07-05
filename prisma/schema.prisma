@@ -10,43 +10,7 @@ datasource db {
 enum Role {
   ADMIN
   MANAGER
-  SALES   // = Employee in the permission matrix
-}
-
-// ── CRM enums ──────────────────────────────────────────────────────────────
-
-enum LeadStatus {
-  NEW
-  CONTACTED
-  FOLLOW_UP
-  CLOSED
-  LOST
-}
-
-enum LeadPriority {
-  LOW
-  MEDIUM
-  HIGH
-}
-
-enum LeadSource {
-  WHATSAPP
-  MANUAL
-  REFERRAL
-  FACEBOOK
-  INSTAGRAM
-  WEBSITE
-  OTHER
-}
-
-enum MessageDirection {
-  INBOUND
-  OUTBOUND
-}
-
-enum AssignmentMode {
-  MANUAL
-  ROUND_ROBIN
+  SALES
 }
 
 enum PaymentStatus {
@@ -63,124 +27,128 @@ enum SupplierCategory {
 }
 
 model User {
-  id        String   @id @default(cuid())
+  id        String    @id @default(cuid())
   name      String
-  email     String   @unique
+  email     String    @unique
   password  String
-  role      Role     @default(MANAGER)
-  active    Boolean  @default(true)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  whatsappNumber        String?
-  whatsappPhoneNumberId String? @unique
-
-  assignedLeads       Lead[]           @relation("AssignedLeads")
-  assignmentsReceived LeadAssignment[] @relation("AssignmentTo")
-  assignmentsMade     LeadAssignment[] @relation("AssignmentBy")
+  role      Role      @default(MANAGER)
+  active    Boolean   @default(true)
+  lastLogin DateTime?
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
 }
 
 model Customer {
-  id        String            @id @default(cuid())
-  name      String
-  email     String?
-  phone     String?
-  address   String?
-  createdAt DateTime          @default(now())
-  updatedAt DateTime          @updatedAt
-  invoices  CustomerInvoice[]
+  id                    String            @id @default(cuid())
+  name                  String
+  email                 String?
+  phone                 String?
+  address               String?
+  emergencyContactName  String?
+  emergencyContactPhone String?
+  createdAt             DateTime          @default(now())
+  updatedAt             DateTime          @updatedAt
+  invoices              CustomerInvoice[]
 }
 
 model Supplier {
-  id        String            @id @default(cuid())
-  name      String
-  email     String?
-  phone     String?
-  address   String?
-  createdAt DateTime          @default(now())
-  updatedAt DateTime          @updatedAt
-  invoices  SupplierInvoice[]
-
-  // ── 1099 contractor fields ──
-  is1099Contractor Boolean @default(false)
-  taxId            String? // AES-256-GCM encrypted at application layer
-  taxIdType        String? // SSN | EIN
-  legalName        String?
-  businessAddress  String?
-  w9OnFile         Boolean @default(false)
-  w9FilePath       String?
-  default1099Box   String? @default("NEC_BOX_1")
+  id                  String            @id @default(cuid())
+  name                String
+  email               String?
+  phone               String?
+  address             String?
+  paymentTermsDays    Int               @default(30)
+  defaultCategory     SupplierCategory?
+  bankName            String?
+  bankAccountNumber   String?
+  bankRouting         String?
+  zelle               String?
+  paymentInstructions String?
+  createdAt           DateTime          @default(now())
+  updatedAt           DateTime          @updatedAt
+  invoices            SupplierInvoice[]
 }
 
 model CustomerInvoice {
-  id            String                @id @default(cuid())
-  invoiceNumber String
-  customerId    String
-  customer      Customer              @relation(fields: [customerId], references: [id])
-  invoiceDate   DateTime
-  dueDate       DateTime
-  subtotal      Decimal               @db.Decimal(15, 2)
-  taxAmount     Decimal               @default(0) @db.Decimal(15, 2)
-  totalAmount   Decimal               @db.Decimal(15, 2)
-  paidAmount    Decimal               @default(0) @db.Decimal(15, 2)
-  paymentStatus PaymentStatus         @default(UNPAID)
-  notes         String?
-  createdAt     DateTime              @default(now())
-  updatedAt     DateTime              @updatedAt
-  items         CustomerInvoiceItem[]
-  payments      Payment[]
-  files         UploadedFile[]
+  id             String                @id @default(cuid())
+  invoiceNumber  String
+  customerId     String
+  customer       Customer              @relation(fields: [customerId], references: [id])
+  invoiceDate    DateTime
+  dueDate        DateTime
+  subtotal       Decimal               @db.Decimal(15, 2)
+  taxAmount      Decimal               @db.Decimal(15, 2) @default(0)
+  totalAmount    Decimal               @db.Decimal(15, 2)
+  paidAmount     Decimal               @db.Decimal(15, 2) @default(0)
+  downPayment    Decimal               @db.Decimal(15, 2) @default(0)
+  creditCardFee  Decimal               @db.Decimal(15, 2) @default(0)
+  appliedFees    Json                  @default("[]")
+  paymentStatus  PaymentStatus         @default(UNPAID)
+  notes          String?
+  viewToken      String?               @unique
+  sentAt         DateTime?
+  employeeId     String?
+  employee       Employee?             @relation(fields: [employeeId], references: [id])
+  commissionRate Decimal               @db.Decimal(5, 4) @default(0)
+  createdAt      DateTime              @default(now())
+  updatedAt      DateTime              @updatedAt
+  items          CustomerInvoiceItem[]
+  payments       Payment[]
+  files          UploadedFile[]
 
   @@unique([invoiceNumber, customerId])
 }
 
 model CustomerInvoiceItem {
-  id          String          @id @default(cuid())
-  invoiceId   String
-  invoice     CustomerInvoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
-  description String
-  quantity    Decimal         @db.Decimal(15, 4)
-  unitPrice   Decimal         @db.Decimal(15, 2)
-  taxRate     Decimal         @default(0) @db.Decimal(5, 4)
-  lineTotal   Decimal         @db.Decimal(15, 2)
-  createdAt   DateTime        @default(now())
-  updatedAt   DateTime        @updatedAt
+  id              String          @id @default(cuid())
+  invoiceId       String
+  invoice         CustomerInvoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  description     String
+  itemDescription String?
+  quantity        Decimal         @db.Decimal(15, 4)
+  unitPrice       Decimal         @db.Decimal(15, 2)
+  taxRate         Decimal         @db.Decimal(5, 4) @default(0)
+  lineTotal       Decimal         @db.Decimal(15, 2)
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
 }
 
 model SupplierInvoice {
-  id            String                @id @default(cuid())
-  invoiceNumber String
-  supplierId    String
-  supplier      Supplier              @relation(fields: [supplierId], references: [id])
-  invoiceDate   DateTime
-  dueDate       DateTime?
-  category      SupplierCategory
-  subtotal      Decimal               @db.Decimal(15, 2)
-  taxAmount     Decimal               @default(0) @db.Decimal(15, 2)
-  totalAmount   Decimal               @db.Decimal(15, 2)
-  paidAmount    Decimal               @default(0) @db.Decimal(15, 2)
-  paymentStatus PaymentStatus         @default(UNPAID)
-  notes         String?
-  createdAt     DateTime              @default(now())
-  updatedAt     DateTime              @updatedAt
-  items         SupplierInvoiceItem[]
-  payments      Payment[]
-  files         UploadedFile[]
+  id                 String                @id @default(cuid())
+  invoiceNumber      String
+  supplierId         String
+  supplier           Supplier              @relation(fields: [supplierId], references: [id])
+  invoiceDate        DateTime
+  dueDate            DateTime?
+  category           SupplierCategory
+  subtotal           Decimal               @db.Decimal(15, 2)
+  taxAmount          Decimal               @db.Decimal(15, 2) @default(0)
+  totalAmount        Decimal               @db.Decimal(15, 2)
+  paidAmount         Decimal               @db.Decimal(15, 2) @default(0)
+  paymentStatus      PaymentStatus         @default(UNPAID)
+  notes              String?
+  customerInvoiceRef String?
+  createdAt          DateTime              @default(now())
+  updatedAt          DateTime              @updatedAt
+  items              SupplierInvoiceItem[]
+  payments           Payment[]
+  files              UploadedFile[]
 
   @@unique([invoiceNumber, supplierId])
 }
 
 model SupplierInvoiceItem {
-  id          String          @id @default(cuid())
-  invoiceId   String
-  invoice     SupplierInvoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
-  description String
-  quantity    Decimal         @db.Decimal(15, 4)
-  unitCost    Decimal         @db.Decimal(15, 2)
-  taxRate     Decimal         @default(0) @db.Decimal(5, 4)
-  lineTotal   Decimal         @db.Decimal(15, 2)
-  createdAt   DateTime        @default(now())
-  updatedAt   DateTime        @updatedAt
+  id              String          @id @default(cuid())
+  invoiceId       String
+  invoice         SupplierInvoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  description     String
+  itemDescription String?
+  quantity        Decimal         @db.Decimal(15, 4)
+  unitCost        Decimal         @db.Decimal(15, 2)
+  taxRate         Decimal         @db.Decimal(5, 4) @default(0)
+  lineTotal       Decimal         @db.Decimal(15, 2)
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
 }
 
 model Payment {
@@ -188,13 +156,63 @@ model Payment {
   amount            Decimal          @db.Decimal(15, 2)
   paymentDate       DateTime
   notes             String?
-  paymentMethod     String?          // cash | check | bank_transfer | card
   customerInvoiceId String?
   customerInvoice   CustomerInvoice? @relation(fields: [customerInvoiceId], references: [id])
   supplierInvoiceId String?
   supplierInvoice   SupplierInvoice? @relation(fields: [supplierInvoiceId], references: [id])
   createdAt         DateTime         @default(now())
   updatedAt         DateTime         @updatedAt
+}
+
+model CompanyProfile {
+  id                     String   @id @default("default")
+  name                   String?
+  logo                   String?
+  address                String?
+  email                  String?
+  phone                  String?
+  creditCardFeeRate      Decimal  @db.Decimal(5, 4) @default(0)
+  creditCardFeeLabel     String   @default("Credit card processing fee")
+  customFees             Json     @default("[]")
+  customerInvoicePrefix  String   @default("INV-2026-")
+  customerInvoiceNextSeq Int      @default(1001)
+  supplierInvoicePrefix  String   @default("PO-2026-")
+  supplierInvoiceNextSeq Int      @default(1001)
+  createdAt              DateTime @default(now())
+  updatedAt              DateTime @updatedAt
+}
+
+model TaxRate {
+  id        String   @id @default(cuid())
+  name      String
+  rate      Decimal  @db.Decimal(5, 4)
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Product {
+  id            String   @id @default(cuid())
+  name          String
+  description   String?
+  price         Decimal  @db.Decimal(15, 2) @default(0)
+  taxRate       Decimal  @db.Decimal(5, 4) @default(0)
+  incomeAccount String?
+  active        Boolean  @default(true)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+}
+
+model Employee {
+  id             String            @id @default(cuid())
+  name           String
+  email          String?           @unique
+  phone          String?
+  commissionRate Decimal           @db.Decimal(5, 4) @default(0)
+  active         Boolean           @default(true)
+  createdAt      DateTime          @default(now())
+  updatedAt      DateTime          @updatedAt
+  invoices       CustomerInvoice[]
 }
 
 model UploadedFile {
@@ -209,115 +227,4 @@ model UploadedFile {
   supplierInvoiceId String?
   supplierInvoice   SupplierInvoice? @relation(fields: [supplierInvoiceId], references: [id])
   createdAt         DateTime         @default(now())
-}
-
-// ── Audit log (append-only) ────────────────────────────────────────────────
-// The app DB user has INSERT + SELECT only on this table (see README).
-
-model AuditLog {
-  id          String   @id @default(cuid())
-  timestamp   DateTime @default(now())
-  actorUserId String?
-  actorName   String
-  actorRole   String
-  action      String   // AuditAction enum values
-  entityType  String
-  entityId    String?
-  entityLabel String
-  changes     Json?
-  ipAddress   String
-  userAgent   String
-
-  @@index([timestamp])
-  @@index([actorUserId])
-  @@index([entityType])
-  @@index([action])
-}
-
-// ── Backup log ─────────────────────────────────────────────────────────────
-
-model BackupLog {
-  id            String    @id @default(cuid())
-  startedAt     DateTime  @default(now())
-  finishedAt    DateTime?
-  status        String    // RUNNING | SUCCESS | FAILED
-  type          String    // SCHEDULED | MANUAL
-  sizeBytes     BigInt?
-  location      String?
-  errorMessage  String?
-  triggeredById String?
-
-  @@index([startedAt])
-  @@index([status])
-}
-
-// ── CRM: Leads de WhatsApp ──────────────────────────────────────────────────
-
-model Lead {
-  id    String @id @default(cuid())
-  name  String
-  phone String @unique
-
-  status   LeadStatus   @default(NEW)
-  priority LeadPriority @default(MEDIUM)
-  source   LeadSource   @default(WHATSAPP)
-
-  assignedToId String?
-  assignedTo   User?   @relation("AssignedLeads", fields: [assignedToId], references: [id])
-
-  notes           String?
-  entryDate       DateTime  @default(now())
-  lastMessageAt   DateTime?
-  lastMessageText String?
-  nextFollowUpAt  DateTime?
-
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  messages    LeadMessage[]
-  assignments LeadAssignment[]
-
-  @@index([assignedToId])
-  @@index([status])
-  @@index([entryDate])
-}
-
-model LeadMessage {
-  id          String           @id @default(cuid())
-  leadId      String
-  lead        Lead             @relation(fields: [leadId], references: [id], onDelete: Cascade)
-  direction   MessageDirection
-  body        String
-  waMessageId String?          @unique
-  fromNumber  String?
-  toNumber    String?
-  timestamp   DateTime         @default(now())
-  createdAt   DateTime         @default(now())
-
-  @@index([leadId])
-}
-
-model LeadAssignment {
-  id     String @id @default(cuid())
-  leadId String
-  lead   Lead   @relation(fields: [leadId], references: [id], onDelete: Cascade)
-
-  fromUserName String?
-  toUserId     String
-  toUser       User    @relation("AssignmentTo", fields: [toUserId], references: [id])
-
-  changedById String?
-  changedBy   User?   @relation("AssignmentBy", fields: [changedById], references: [id])
-
-  reason    String?
-  createdAt DateTime @default(now())
-
-  @@index([leadId])
-}
-
-model CrmSetting {
-  id                String         @id @default("singleton")
-  assignmentMode    AssignmentMode @default(ROUND_ROBIN)
-  lastRotationIndex Int            @default(0)
-  updatedAt         DateTime       @updatedAt
 }

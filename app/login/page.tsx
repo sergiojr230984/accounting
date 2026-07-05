@@ -99,10 +99,6 @@ export default function LoginPage() {
             </button>
           </form>
 
-          <div className="mt-6 p-4 bg-gray-50 rounded-lg text-xs text-gray-500">
-            <p className="font-medium mb-1">Credenciales:</p>
-            <p>Admin: admin@lacuevita.com / admin123</p>
-          </div>
         </div>
       </div>
     </div>
