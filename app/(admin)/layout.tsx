@@ -4,13 +4,8 @@ import Sidebar from "@/components/Sidebar";
 import TopBar from "@/components/TopBar";
 
 export default async function AdminLayout({ children }: { children: React.ReactNode }) {
-  let session;
-  try {
-    session = await auth();
-  } catch {
-    redirect("/login");
-  }
-  if (!session?.user) redirect("/login");
+  const session = await auth();
+  if (!session) redirect("/login");
 
   const role = (session.user as { role?: string }).role;
   if (role !== "ADMIN") redirect("/crm/dashboard");

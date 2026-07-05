@@ -27,28 +27,28 @@ enum SupplierCategory {
 }
 
 model User {
-  id        String   @id @default(cuid())
+  id        String    @id @default(cuid())
   name      String
-  email     String   @unique
+  email     String    @unique
   password  String
-  role      Role     @default(MANAGER)
-  active    Boolean  @default(true)
+  role      Role      @default(MANAGER)
+  active    Boolean   @default(true)
   lastLogin DateTime?
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
 }
 
 model Customer {
-  id                     String            @id @default(cuid())
-  name                   String
-  email                  String?
-  phone                  String?
-  address                String?
-  emergencyContactName   String?
-  emergencyContactPhone  String?
-  createdAt              DateTime          @default(now())
-  updatedAt              DateTime          @updatedAt
-  invoices               CustomerInvoice[]
+  id                    String            @id @default(cuid())
+  name                  String
+  email                 String?
+  phone                 String?
+  address               String?
+  emergencyContactName  String?
+  emergencyContactPhone String?
+  createdAt             DateTime          @default(now())
+  updatedAt             DateTime          @updatedAt
+  invoices              CustomerInvoice[]
 }
 
 model Supplier {
@@ -70,31 +70,31 @@ model Supplier {
 }
 
 model CustomerInvoice {
-  id            String                @id @default(cuid())
-  invoiceNumber String
-  customerId    String
-  customer      Customer              @relation(fields: [customerId], references: [id])
-  invoiceDate   DateTime
-  dueDate       DateTime
-  subtotal      Decimal               @db.Decimal(15, 2)
-  taxAmount     Decimal               @db.Decimal(15, 2) @default(0)
-  totalAmount   Decimal               @db.Decimal(15, 2)
-  paidAmount    Decimal               @db.Decimal(15, 2) @default(0)
-  downPayment   Decimal               @db.Decimal(15, 2) @default(0)
-  creditCardFee Decimal               @db.Decimal(15, 2) @default(0)
-  appliedFees   Json                  @default("[]")
-  paymentStatus PaymentStatus         @default(UNPAID)
-  notes         String?
-  viewToken     String?               @unique
-  sentAt        DateTime?
-  employeeId    String?
-  employee      Employee?             @relation(fields: [employeeId], references: [id])
-  commissionRate Decimal              @db.Decimal(5, 4) @default(0)
-  createdAt     DateTime              @default(now())
-  updatedAt     DateTime              @updatedAt
-  items         CustomerInvoiceItem[]
-  payments      Payment[]
-  files         UploadedFile[]
+  id             String                @id @default(cuid())
+  invoiceNumber  String
+  customerId     String
+  customer       Customer              @relation(fields: [customerId], references: [id])
+  invoiceDate    DateTime
+  dueDate        DateTime
+  subtotal       Decimal               @db.Decimal(15, 2)
+  taxAmount      Decimal               @db.Decimal(15, 2) @default(0)
+  totalAmount    Decimal               @db.Decimal(15, 2)
+  paidAmount     Decimal               @db.Decimal(15, 2) @default(0)
+  downPayment    Decimal               @db.Decimal(15, 2) @default(0)
+  creditCardFee  Decimal               @db.Decimal(15, 2) @default(0)
+  appliedFees    Json                  @default("[]")
+  paymentStatus  PaymentStatus         @default(UNPAID)
+  notes          String?
+  viewToken      String?               @unique
+  sentAt         DateTime?
+  employeeId     String?
+  employee       Employee?             @relation(fields: [employeeId], references: [id])
+  commissionRate Decimal               @db.Decimal(5, 4) @default(0)
+  createdAt      DateTime              @default(now())
+  updatedAt      DateTime              @updatedAt
+  items          CustomerInvoiceItem[]
+  payments       Payment[]
+  files          UploadedFile[]
 
   @@unique([invoiceNumber, customerId])
 }
@@ -165,21 +165,21 @@ model Payment {
 }
 
 model CompanyProfile {
-  id                 String   @id @default("default")
-  name               String?
-  logo               String?
-  address            String?
-  email              String?
-  phone              String?
-  creditCardFeeRate  Decimal  @db.Decimal(5, 4) @default(0)
-  creditCardFeeLabel String   @default("Credit card processing fee")
-  customFees         Json     @default("[]")
-  customerInvoicePrefix   String  @default("INV-2026-")
-  customerInvoiceNextSeq  Int     @default(1001)
-  supplierInvoicePrefix   String  @default("PO-2026-")
-  supplierInvoiceNextSeq  Int     @default(1001)
-  createdAt          DateTime @default(now())
-  updatedAt          DateTime @updatedAt
+  id                     String   @id @default("default")
+  name                   String?
+  logo                   String?
+  address                String?
+  email                  String?
+  phone                  String?
+  creditCardFeeRate      Decimal  @db.Decimal(5, 4) @default(0)
+  creditCardFeeLabel     String   @default("Credit card processing fee")
+  customFees             Json     @default("[]")
+  customerInvoicePrefix  String   @default("INV-2026-")
+  customerInvoiceNextSeq Int      @default(1001)
+  supplierInvoicePrefix  String   @default("PO-2026-")
+  supplierInvoiceNextSeq Int      @default(1001)
+  createdAt              DateTime @default(now())
+  updatedAt              DateTime @updatedAt
 }
 
 model TaxRate {

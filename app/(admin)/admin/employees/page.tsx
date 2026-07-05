@@ -335,7 +335,7 @@ export default function EmployeesPage() {
         <p className="font-medium mb-1">How employee login linking works</p>
         <ol className="list-decimal list-inside space-y-1 text-xs text-blue-700">
           <li>Create a <strong>User</strong> account (Admin → Users) with role <strong>Employee</strong> and a login email, e.g. <code>cuevitasw@gmail.com</code></li>
-          <li>Find the matching <strong>Employee</strong> record in this table (e.g. "Ali-SW")</li>
+          <li>Find the matching <strong>Employee</strong> record in this table (e.g. “Ali-SW”)</li>
           <li>Click the pencil icon and set the email to exactly <code>cuevitasw@gmail.com</code></li>
           <li>That employee will now see only their own invoices when they log in</li>
         </ol>

@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
+import { requirePermission } from "@/lib/permissions";
+import { writeAuditLog, extractMeta, actorFromSession, diffChanges } from "@/lib/audit";
 import { z } from "zod";
 import Decimal from "decimal.js";
 
@@ -28,11 +30,17 @@ const updateSchema = z.object({
 });
 
 export async function GET(
-  _request: Request,
+  request: Request,
   { params }: { params: Promise<{ id: string }> }
 ) {
   const session = await auth();
   if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
+  const { allowed } = requirePermission(session, "supplier_invoice", "read");
+  if (!allowed) {
+    await writeAuditLog({ ...actorFromSession(session), action: "ACCESS_DENIED", entityType: "supplier_invoice", entityLabel: "View Bill", ...extractMeta(request) });
+    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  }
 
   const { id } = await params;
 
@@ -57,6 +65,12 @@ export async function PATCH(
   const session = await auth();
   if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
+  const { allowed } = requirePermission(session, "supplier_invoice", "update");
+  if (!allowed) {
+    await writeAuditLog({ ...actorFromSession(session), action: "ACCESS_DENIED", entityType: "supplier_invoice", entityLabel: "Update Bill", ...extractMeta(request) });
+    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  }
+
   const { id } = await params;
   const body = await request.json();
   const parsed = updateSchema.safeParse(body);
@@ -66,6 +80,15 @@ export async function PATCH(
 
   const existing = await prisma.supplierInvoice.findUnique({ where: { id } });
   if (!existing) return NextResponse.json({ error: "Not found" }, { status: 404 });
+
+  const beforeSnapshot = {
+    invoiceNumber: existing.invoiceNumber,
+    paymentStatus: existing.paymentStatus,
+    paidAmount: existing.paidAmount.toString(),
+    totalAmount: existing.totalAmount.toString(),
+    category: existing.category,
+    notes: existing.notes,
+  };
 
   const data = parsed.data;
   const updateData: Record<string, unknown> = {};
@@ -147,17 +170,55 @@ export async function PATCH(
     include: { supplier: true, items: true },
   });
 
+  const afterSnapshot = {
+    invoiceNumber: updated.invoiceNumber,
+    paymentStatus: updated.paymentStatus,
+    paidAmount: updated.paidAmount.toString(),
+    totalAmount: updated.totalAmount.toString(),
+    category: updated.category,
+    notes: updated.notes,
+  };
+
+  await writeAuditLog({
+    ...actorFromSession(session),
+    action: "UPDATE",
+    entityType: "supplier_invoice",
+    entityId: id,
+    entityLabel: `Bill #${updated.invoiceNumber}`,
+    changes: diffChanges(beforeSnapshot, afterSnapshot),
+    ...extractMeta(request),
+  });
+
   return NextResponse.json(updated);
 }
 
 export async function DELETE(
-  _request: Request,
+  request: Request,
   { params }: { params: Promise<{ id: string }> }
 ) {
   const session = await auth();
   if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
+  const { allowed } = requirePermission(session, "supplier_invoice", "delete");
+  if (!allowed) {
+    await writeAuditLog({ ...actorFromSession(session), action: "ACCESS_DENIED", entityType: "supplier_invoice", entityLabel: "Delete Bill", ...extractMeta(request) });
+    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  }
+
   const { id } = await params;
+  const existing = await prisma.supplierInvoice.findUnique({ where: { id } });
+  if (!existing) return NextResponse.json({ error: "Not found" }, { status: 404 });
+
   await prisma.supplierInvoice.delete({ where: { id } });
+
+  await writeAuditLog({
+    ...actorFromSession(session),
+    action: "DELETE",
+    entityType: "supplier_invoice",
+    entityId: id,
+    entityLabel: `Bill #${existing.invoiceNumber}`,
+    ...extractMeta(request),
+  });
+
   return NextResponse.json({ ok: true });
 }
