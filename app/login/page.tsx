@@ -33,7 +33,7 @@ export default function LoginPage() {
     if (result?.error) {
       setError("Invalid email or password");
     } else {
-      router.push("/crm/dashboard");
+      router.push("/invoices/customer");
       router.refresh();
     }
   }

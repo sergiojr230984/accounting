@@ -2,11 +2,6 @@ import {
   PrismaClient,
   PaymentStatus,
   SupplierCategory,
-  Role,
-  LeadStatus,
-  LeadPriority,
-  LeadSource,
-  MessageDirection,
 } from "@prisma/client";
 import bcrypt from "bcryptjs";
 import { Decimal } from "@prisma/client/runtime/library";
@@ -16,12 +11,12 @@ const prisma = new PrismaClient();
 async function main() {
   // Users
   const adminPassword = await bcrypt.hash("admin123", 12);
-  const admin = await prisma.user.upsert({
-    where: { email: "admin@bizledger.com" },
+  await prisma.user.upsert({
+    where: { email: "admin@lacuevita.com" },
     update: {},
     create: {
       name: "Admin User",
-      email: "admin@bizledger.com",
+      email: "admin@lacuevita.com",
       password: adminPassword,
       role: "ADMIN",
     },
@@ -29,11 +24,11 @@ async function main() {
 
   const managerPassword = await bcrypt.hash("manager123", 12);
   await prisma.user.upsert({
-    where: { email: "manager@bizledger.com" },
+    where: { email: "manager@lacuevita.com" },
     update: {},
     create: {
-      name: "Jane Manager",
-      email: "manager@bizledger.com",
+      name: "Manager",
+      email: "manager@lacuevita.com",
       password: managerPassword,
       role: "MANAGER",
     },
@@ -179,35 +174,6 @@ async function main() {
     },
   });
 
-  const ci3 = await prisma.customerInvoice.upsert({
-    where: { id: "ci-003" },
-    update: {},
-    create: {
-      id: "ci-003",
-      invoiceNumber: "INV-2024-003",
-      customerId: initech.id,
-      invoiceDate: new Date("2024-03-10"),
-      dueDate: new Date("2024-04-10"),
-      subtotal: new Decimal("3200.00"),
-      taxAmount: new Decimal("256.00"),
-      totalAmount: new Decimal("3456.00"),
-      paidAmount: new Decimal("0.00"),
-      paymentStatus: PaymentStatus.UNPAID,
-      notes: "March maintenance contract",
-      items: {
-        create: [
-          {
-            description: "System Maintenance",
-            quantity: new Decimal("1"),
-            unitPrice: new Decimal("3200.00"),
-            taxRate: new Decimal("0.08"),
-            lineTotal: new Decimal("3200.00"),
-          },
-        ],
-      },
-    },
-  });
-
   const ci4 = await prisma.customerInvoice.upsert({
     where: { id: "ci-004" },
     update: {},
@@ -236,6 +202,9 @@ async function main() {
       },
     },
   });
+
+  // ci3 referenced but unused — skip in seed
+  void initech;
 
   // Supplier Invoices
   await prisma.supplierInvoice.upsert({
@@ -383,139 +352,9 @@ async function main() {
     ],
   });
 
-  // ── CRM: La Cuevita Furniture ───────────────────────────────────────────
-
-  // Administrador del CRM
-  await prisma.user.upsert({
-    where: { email: "admin@lacuevita.com" },
-    update: {},
-    create: {
-      name: "Administrador",
-      email: "admin@lacuevita.com",
-      password: await bcrypt.hash("admin123", 12),
-      role: Role.ADMIN,
-    },
-  });
-
-  // Las 3 vendedoras (cada una con su número de WhatsApp y phone_number_id de Meta)
-  const vendedoras = [
-    { id: "sp-ana", name: "Ana Torres", email: "ana@lacuevita.com", wa: "+5215511110001", pid: "PHONE_ID_ANA" },
-    { id: "sp-brenda", name: "Brenda Ruiz", email: "brenda@lacuevita.com", wa: "+5215511110002", pid: "PHONE_ID_BRENDA" },
-    { id: "sp-carla", name: "Carla Méndez", email: "carla@lacuevita.com", wa: "+5215511110003", pid: "PHONE_ID_CARLA" },
-  ];
-  const salesPassword = await bcrypt.hash("ventas123", 12);
-  for (const v of vendedoras) {
-    await prisma.user.upsert({
-      where: { email: v.email },
-      update: { whatsappNumber: v.wa, whatsappPhoneNumberId: v.pid },
-      create: {
-        id: v.id,
-        name: v.name,
-        email: v.email,
-        password: salesPassword,
-        role: Role.SALES,
-        whatsappNumber: v.wa,
-        whatsappPhoneNumberId: v.pid,
-      },
-    });
-  }
-
-  // Configuración del CRM (rotación automática activada)
-  await prisma.crmSetting.upsert({
-    where: { id: "singleton" },
-    update: {},
-    create: { id: "singleton", assignmentMode: "ROUND_ROBIN" },
-  });
-
-  // Leads de ejemplo con conversación
-  const daysAgo = (n: number) => new Date(Date.now() - n * 86400000);
-
-  const leadSeed = [
-    {
-      // Número real de prueba (E.164). Úsalo para probar el envío/recepción de
-      // WhatsApp. Ajusta el código de país si no es +1.
-      id: "lead-test", name: "Número de prueba", phone: "+17863163774", assignedToId: "sp-ana",
-      status: LeadStatus.NEW, priority: LeadPriority.HIGH, source: LeadSource.WHATSAPP, days: 0,
-      msgs: [{ dir: MessageDirection.INBOUND, body: "Hola, este es un mensaje de prueba 👋" }],
-    },
-    {
-      id: "lead-1", name: "Mariana López", phone: "+5215522220001", assignedToId: "sp-ana",
-      status: LeadStatus.NEW, priority: LeadPriority.HIGH, source: LeadSource.WHATSAPP, days: 0,
-      msgs: [{ dir: MessageDirection.INBOUND, body: "Hola, vi una sala modular en su catálogo. ¿Tienen disponible?" }],
-    },
-    {
-      id: "lead-2", name: "Jorge Ramírez", phone: "+5215522220002", assignedToId: "sp-brenda",
-      status: LeadStatus.CONTACTED, priority: LeadPriority.MEDIUM, source: LeadSource.WHATSAPP, days: 1,
-      msgs: [
-        { dir: MessageDirection.INBOUND, body: "Buenas, ¿cuánto cuesta el comedor de 6 sillas?" },
-        { dir: MessageDirection.OUTBOUND, body: "¡Hola Jorge! El comedor de 6 sillas está en $12,500. ¿Te comparto fotos?" },
-      ],
-    },
-    {
-      id: "lead-3", name: "Sofía Hernández", phone: "+5215522220003", assignedToId: "sp-carla",
-      status: LeadStatus.FOLLOW_UP, priority: LeadPriority.HIGH, source: LeadSource.INSTAGRAM, days: 3,
-      msgs: [
-        { dir: MessageDirection.INBOUND, body: "Me interesa la recámara king size" },
-        { dir: MessageDirection.OUTBOUND, body: "Claro, tenemos en color nogal y blanco. ¿Cuál prefieres?" },
-        { dir: MessageDirection.INBOUND, body: "Nogal. ¿Hacen envíos a Puebla?" },
-      ],
-    },
-    {
-      id: "lead-4", name: "Diego Castro", phone: "+5215522220004", assignedToId: "sp-ana",
-      status: LeadStatus.CLOSED, priority: LeadPriority.MEDIUM, source: LeadSource.REFERRAL, days: 7,
-      msgs: [
-        { dir: MessageDirection.INBOUND, body: "Quiero el librero de pino" },
-        { dir: MessageDirection.OUTBOUND, body: "¡Perfecto! Te lo aparto. ¿Pasas a recogerlo o lo enviamos?" },
-        { dir: MessageDirection.INBOUND, body: "Lo recojo el sábado. Gracias!" },
-      ],
-    },
-    {
-      id: "lead-5", name: "Paola Núñez", phone: "+5215522220005", assignedToId: "sp-brenda",
-      status: LeadStatus.LOST, priority: LeadPriority.LOW, source: LeadSource.FACEBOOK, days: 10,
-      msgs: [
-        { dir: MessageDirection.INBOUND, body: "Precio del sillón reclinable?" },
-        { dir: MessageDirection.OUTBOUND, body: "Hola Paola, está en $8,900." },
-        { dir: MessageDirection.INBOUND, body: "Está fuera de mi presupuesto, gracias." },
-      ],
-    },
-  ];
-
-  for (const l of leadSeed) {
-    const entry = daysAgo(l.days);
-    const last = l.msgs[l.msgs.length - 1];
-    await prisma.lead.upsert({
-      where: { id: l.id },
-      update: {},
-      create: {
-        id: l.id,
-        name: l.name,
-        phone: l.phone,
-        status: l.status,
-        priority: l.priority,
-        source: l.source,
-        assignedToId: l.assignedToId,
-        entryDate: entry,
-        lastMessageAt: entry,
-        lastMessageText: last.body,
-        messages: {
-          create: l.msgs.map((m, i) => ({
-            direction: m.dir,
-            body: m.body,
-            timestamp: new Date(entry.getTime() + i * 600000), // 10 min entre mensajes
-          })),
-        },
-        assignments: {
-          create: { toUserId: l.assignedToId, reason: "whatsapp_inbound" },
-        },
-      },
-    });
-  }
-
   console.log("✅ Seed complete");
-  console.log("  Accounting Admin: admin@bizledger.com / admin123");
-  console.log("  Accounting Manager: manager@bizledger.com / manager123");
-  console.log("  CRM Admin: admin@lacuevita.com / admin123");
-  console.log("  CRM Vendedoras: ana@lacuevita.com, brenda@lacuevita.com, carla@lacuevita.com / ventas123");
+  console.log("  Admin: admin@lacuevita.com / admin123");
+  console.log("  Manager: manager@lacuevita.com / manager123");
 }
 
 main()

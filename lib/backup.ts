@@ -24,11 +24,6 @@ export async function runBackup(backupDir: string): Promise<BackupResult> {
     supplierInvoiceItems,
     payments,
     uploadedFiles,
-    auditLogs,
-    leads,
-    leadMessages,
-    leadAssignments,
-    crmSettings,
   ] = await Promise.all([
     prisma.user.findMany({
       select: { id: true, name: true, email: true, role: true, active: true, createdAt: true },
@@ -41,11 +36,6 @@ export async function runBackup(backupDir: string): Promise<BackupResult> {
     prisma.supplierInvoiceItem.findMany(),
     prisma.payment.findMany(),
     prisma.uploadedFile.findMany(),
-    prisma.auditLog.findMany({ orderBy: { timestamp: "asc" } }),
-    prisma.lead.findMany(),
-    prisma.leadMessage.findMany(),
-    prisma.leadAssignment.findMany(),
-    prisma.crmSetting.findMany(),
   ]);
 
   const payload = {
@@ -56,8 +46,7 @@ export async function runBackup(backupDir: string): Promise<BackupResult> {
         "users", "customers", "suppliers",
         "customerInvoices", "customerInvoiceItems",
         "supplierInvoices", "supplierInvoiceItems",
-        "payments", "uploadedFiles", "auditLogs",
-        "leads", "leadMessages", "leadAssignments", "crmSettings",
+        "payments", "uploadedFiles",
       ],
       fileCount: uploadedFiles.length,
     },
@@ -65,8 +54,7 @@ export async function runBackup(backupDir: string): Promise<BackupResult> {
       users, customers, suppliers,
       customerInvoices, customerInvoiceItems,
       supplierInvoices, supplierInvoiceItems,
-      payments, uploadedFiles, auditLogs,
-      leads, leadMessages, leadAssignments, crmSettings,
+      payments, uploadedFiles,
     },
   };
 
