@@ -112,6 +112,9 @@ export default function NewCustomerInvoicePage() {
   const [saving, setSaving] = useState<"idle" | "save" | "print" | "send">("idle");
   const [error, setError] = useState("");
 
+  const [userRole, setUserRole] = useState<string | null>(null);
+  const canSeeCommission = userRole === "ADMIN" || userRole === "MANAGER";
+
   // Preview modal state
   const [showPreview, setShowPreview] = useState(false);
   const [previewUrl, setPreviewUrl] = useState("");
@@ -127,6 +130,10 @@ export default function NewCustomerInvoicePage() {
 
   useEffect(() => {
     loadCustomers();
+    fetch("/api/me")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d: { viewer?: { role?: string } } | null) => setUserRole(d?.viewer?.role ?? null))
+      .catch(() => {});
     fetch("/api/employees")
       .then((r) => (r.ok ? r.json() : []))
       .then((list: Employee[]) => setEmployees(list.filter((e) => e.active)))
@@ -882,49 +889,51 @@ export default function NewCustomerInvoicePage() {
               </div>
             </div>
 
-            <div className="card space-y-3">
-              <h3 className="font-semibold text-gray-800 text-sm uppercase tracking-wide">Sales rep</h3>
-              <div>
-                <label className="label">Employee</label>
-                <select
-                  className="input"
-                  value={employeeId}
-                  onChange={(e) => {
-                    const id = e.target.value;
-                    setEmployeeId(id);
-                    const match = employees.find((emp) => emp.id === id);
-                    if (match) setCommissionRate(match.commissionRate);
-                    if (!id) setCommissionRate("0");
-                  }}
-                >
-                  <option value="">— None —</option>
-                  {employees.map((emp) => (
-                    <option key={emp.id} value={emp.id}>
-                      {emp.name} ({(parseFloat(emp.commissionRate) * 100).toFixed(1)}%)
-                    </option>
-                  ))}
-                </select>
-              </div>
-              <div>
-                <label className="label">Commission rate (decimal)</label>
-                <input
-                  type="number"
-                  step="0.0001"
-                  min="0"
-                  max="1"
-                  className="input"
-                  value={commissionRate}
-                  onChange={(e) => setCommissionRate(e.target.value)}
-                  disabled={!employeeId}
-                />
-              </div>
-              {employeeId && (
-                <div className="flex justify-between text-sm pt-1 border-t">
-                  <span className="text-gray-500">Commission earned</span>
-                  <span className="font-bold text-green-700">{formatCurrency(totals.commission.toFixed(2))}</span>
+            {canSeeCommission && (
+              <div className="card space-y-3">
+                <h3 className="font-semibold text-gray-800 text-sm uppercase tracking-wide">Sales rep</h3>
+                <div>
+                  <label className="label">Employee</label>
+                  <select
+                    className="input"
+                    value={employeeId}
+                    onChange={(e) => {
+                      const id = e.target.value;
+                      setEmployeeId(id);
+                      const match = employees.find((emp) => emp.id === id);
+                      if (match) setCommissionRate(match.commissionRate);
+                      if (!id) setCommissionRate("0");
+                    }}
+                  >
+                    <option value="">— None —</option>
+                    {employees.map((emp) => (
+                      <option key={emp.id} value={emp.id}>
+                        {emp.name} ({(parseFloat(emp.commissionRate) * 100).toFixed(1)}%)
+                      </option>
+                    ))}
+                  </select>
                 </div>
-              )}
-            </div>
+                <div>
+                  <label className="label">Commission rate (decimal)</label>
+                  <input
+                    type="number"
+                    step="0.0001"
+                    min="0"
+                    max="1"
+                    className="input"
+                    value={commissionRate}
+                    onChange={(e) => setCommissionRate(e.target.value)}
+                    disabled={!employeeId}
+                  />
+                </div>
+                {employeeId && (
+                  <div className="flex justify-between text-sm pt-1 border-t">
+                    <span className="text-gray-500">Commission earned</span>
+                    <span className="font-bold text-green-700">{formatCurrency(totals.commission.toFixed(2))}</span>
+                  </div>
+                )}
+              </div>
+            )}
 
             <div className="space-y-2">
               <button

@@ -1,7 +1,21 @@
-import { auth } from "@/lib/auth";
-import { NextResponse } from "next/server";
+import { NextResponse, type NextRequest } from "next/server";
 
-export default auth((req) => {
+// Cookie-existence check only — the previous `auth((req) => ...)` wrapper
+// ran the full NextAuth config (including Prisma/bcrypt calls in the
+// session callback) inside Next.js Edge Middleware, which crashed every
+// request with "PrismaClient is not configured to run in ... Edge
+// Middleware". Prisma needs the Node.js runtime, so we don't invoke
+// NextAuth here at all — just check for its session cookie.
+function hasSession(req: NextRequest): boolean {
+  return (
+    req.cookies.has("next-auth.session-token") ||
+    req.cookies.has("__Secure-next-auth.session-token") ||
+    req.cookies.has("authjs.session-token") ||
+    req.cookies.has("__Secure-authjs.session-token")
+  );
+}
+
+export default function middleware(req: NextRequest) {
   const { pathname } = req.nextUrl;
 
   // Public paths anyone can reach, signed in or not.
@@ -12,7 +26,7 @@ export default auth((req) => {
   const isPublic = publicPaths.some((p) => pathname.startsWith(p));
 
   // Block anything that isn't public when there's no session.
-  if (!req.auth && !isPublic) {
+  if (!hasSession(req) && !isPublic) {
     return NextResponse.redirect(new URL("/login", req.url));
   }
 
@@ -25,7 +39,7 @@ export default auth((req) => {
   // else or just navigate to /dashboard manually.
 
   return NextResponse.next();
-});
+}
 
 export const config = {
   matcher: ["/((?!_next/static|_next/image|favicon.ico|public/).*)"],
