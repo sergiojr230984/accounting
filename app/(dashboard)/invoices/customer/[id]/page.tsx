@@ -95,6 +95,9 @@ export default function CustomerInvoiceDetailPage() {
   const [previewUrl, setPreviewUrl] = useState("");
   const [previewing, setPreviewing] = useState(false);
 
+  const [userRole, setUserRole] = useState<string | null>(null);
+  const canSeeCommission = userRole === "ADMIN" || userRole === "MANAGER";
+
   const { register, handleSubmit, control, reset, getValues, setValue, watch, formState: { errors } } = useForm<EditForm>({
     resolver: zodResolver(editSchema),
   });
@@ -135,6 +138,10 @@ export default function CustomerInvoiceDetailPage() {
       .then((list: { id: string; name: string; commissionRate: string; active: boolean }[]) =>
         setEmployees(list.filter((e) => e.active).map((e) => ({ id: e.id, name: e.name, commissionRate: e.commissionRate })))
       )
+      .catch(() => {});
+    fetch("/api/auth/session")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((s: { user?: { role?: string } } | null) => setUserRole(s?.user?.role ?? null))
       .catch(() => {});
   }, []);
 
@@ -552,19 +559,23 @@ export default function CustomerInvoiceDetailPage() {
                   <label className="label">Down payment ($)</label>
                   <input type="number" step="0.01" min="0" className="input" {...register("downPayment")} />
                 </div>
-                <div>
-                  <label className="label">Sales rep</label>
-                  <select className="input" {...register("employeeId")}>
-                    <option value="">— None —</option>
-                    {employees.map((e) => (
-                      <option key={e.id} value={e.id}>{e.name}</option>
-                    ))}
-                  </select>
-                </div>
-                <div>
-                  <label className="label">Commission rate (decimal)</label>
-                  <input type="number" step="0.0001" min="0" max="1" className="input" {...register("commissionRate")} />
-                </div>
+                {canSeeCommission && (
+                  <>
+                    <div>
+                      <label className="label">Sales rep</label>
+                      <select className="input" {...register("employeeId")}>
+                        <option value="">— None —</option>
+                        {employees.map((e) => (
+                          <option key={e.id} value={e.id}>{e.name}</option>
+                        ))}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="label">Commission rate (decimal)</label>
+                      <input type="number" step="0.0001" min="0" max="1" className="input" {...register("commissionRate")} />
+                    </div>
+                  </>
+                )}
               </div>
               <div>
                 <label className="label">Notes</label>
@@ -593,7 +604,7 @@ export default function CustomerInvoiceDetailPage() {
                     <span className="text-gray-500">Status</span>
                     <PaymentBadge status={invoice.paymentStatus} />
                   </div>
-                  {invoice.employeeId && (
+                  {canSeeCommission && invoice.employeeId && (
                     <div className="flex justify-between pt-2 border-t">
                       <span className="text-gray-500">Sales rep</span>
                       <span className="font-medium">
