@@ -139,7 +139,7 @@ const SCHEMA_STATEMENTS: string[] = [
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updatedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP
   );`,
-  `INSERT INTO "CompanyProfile" ("id") VALUES ('default') ON CONFLICT DO NOTHING;`,
+  `INSERT INTO "CompanyProfile" ("id", "createdAt", "updatedAt") VALUES ('default', NOW(), NOW()) ON CONFLICT DO NOTHING;`,
   `ALTER TABLE "CompanyProfile" ADD COLUMN IF NOT EXISTS "customerInvoicePrefix" TEXT NOT NULL DEFAULT 'INV-2026-';`,
   `ALTER TABLE "CompanyProfile" ADD COLUMN IF NOT EXISTS "customerInvoiceNextSeq" INTEGER NOT NULL DEFAULT 1001;`,
   `ALTER TABLE "CompanyProfile" ADD COLUMN IF NOT EXISTS "supplierInvoicePrefix" TEXT NOT NULL DEFAULT 'PO-2026-';`,
