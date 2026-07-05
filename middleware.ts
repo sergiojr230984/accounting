@@ -3,7 +3,6 @@ import { NextResponse, type NextRequest } from "next/server";
 const PUBLIC_PATHS = [
   "/login",
   "/api/auth",
-  "/api/crm/webhook",
   "/pay",
   "/api/health",
   "/api/debug",
@@ -32,7 +31,7 @@ export default function middleware(req: NextRequest) {
 
   if (loggedIn && pathname === "/login") {
     const url = req.nextUrl.clone();
-    url.pathname = "/crm/dashboard";
+    url.pathname = "/invoices/customer";
     return NextResponse.redirect(url);
   }
 

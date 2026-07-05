@@ -8,7 +8,7 @@ export default async function AdminLayout({ children }: { children: React.ReactN
   if (!session) redirect("/login");
 
   const role = (session.user as { role?: string }).role;
-  if (role !== "ADMIN") redirect("/crm/dashboard");
+  if (role !== "ADMIN") redirect("/invoices/customer");
 
   return (
     <div className="flex h-screen overflow-hidden">
