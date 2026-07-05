@@ -65,7 +65,15 @@ const navItems: NavItem[] = [
       { href: "/performance", label: "Performance" },
     ],
   },
-  { href: "/reports", label: "Reports", icon: BarChart3, roles: ["ADMIN", "MANAGER"] },
+  {
+    label: "Reports",
+    icon: BarChart3,
+    roles: ["ADMIN", "MANAGER"],
+    children: [
+      { href: "/reports", label: "Financial Reports" },
+      { href: "/reports/frequency", label: "Product Frequency", roles: ["ADMIN"] },
+    ],
+  },
   { href: "/settings", label: "Settings", icon: Settings, roles: ["ADMIN"] },
 ];
 
