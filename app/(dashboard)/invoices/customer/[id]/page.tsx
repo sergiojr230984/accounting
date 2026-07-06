@@ -569,22 +569,20 @@ export default function CustomerInvoiceDetailPage() {
                   <label className="label">Down payment ($)</label>
                   <input type="number" step="0.01" min="0" className="input" {...register("downPayment")} />
                 </div>
+                <div>
+                  <label className="label">Sales rep</label>
+                  <select className="input" {...register("employeeId")}>
+                    <option value="">— None —</option>
+                    {employees.map((e) => (
+                      <option key={e.id} value={e.id}>{e.name}</option>
+                    ))}
+                  </select>
+                </div>
                 {canSeeCommission && (
-                  <>
-                    <div>
-                      <label className="label">Sales rep</label>
-                      <select className="input" {...register("employeeId")}>
-                        <option value="">— None —</option>
-                        {employees.map((e) => (
-                          <option key={e.id} value={e.id}>{e.name}</option>
-                        ))}
-                      </select>
-                    </div>
-                    <div>
-                      <label className="label">Commission rate (decimal)</label>
-                      <input type="number" step="0.0001" min="0" max="1" className="input" {...register("commissionRate")} />
-                    </div>
-                  </>
+                  <div>
+                    <label className="label">Commission rate (decimal)</label>
+                    <input type="number" step="0.0001" min="0" max="1" className="input" {...register("commissionRate")} />
+                  </div>
                 )}
               </div>
               <div>
@@ -619,12 +617,12 @@ export default function CustomerInvoiceDetailPage() {
                     <span className="text-gray-500">Status</span>
                     <PaymentBadge status={invoice.paymentStatus} />
                   </div>
-                  {canSeeCommission && invoice.employeeId && (
+                  {invoice.employeeId && (
                     <div className="flex justify-between pt-2 border-t">
                       <span className="text-gray-500">Sales rep</span>
                       <span className="font-medium">
                         {employees.find((e) => e.id === invoice.employeeId)?.name ?? "—"}
-                        {parseFloat(invoice.commissionRate) > 0 && (
+                        {canSeeCommission && parseFloat(invoice.commissionRate) > 0 && (
                           <span className="text-green-700 text-xs ml-2">
                             ({(parseFloat(invoice.commissionRate) * 100).toFixed(1)}% = {formatCurrency((parseFloat(invoice.totalAmount) * parseFloat(invoice.commissionRate)).toFixed(2))})
                           </span>
