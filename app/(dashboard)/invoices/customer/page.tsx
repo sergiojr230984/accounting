@@ -3,9 +3,9 @@
 import { useState, useEffect, useCallback } from "react";
 import Link from "next/link";
 import { Plus, Search, Filter, AlertTriangle } from "lucide-react";
-import { format } from "date-fns";
 import PaymentBadge from "@/components/PaymentBadge";
 import { formatCurrency } from "@/lib/money";
+import { formatDateOnly } from "@/lib/date";
 
 interface Invoice {
   id: string;
@@ -147,8 +147,8 @@ export default function CustomerInvoicesPage() {
                   <tr key={inv.id} className="hover:bg-gray-50 transition-colors">
                     <td className="px-5 py-3 font-medium text-brand-600">{inv.invoiceNumber}</td>
                     <td className="px-5 py-3 text-gray-700">{inv.customer.name}</td>
-                    <td className="px-5 py-3 text-gray-500">{format(new Date(inv.invoiceDate), "MMM d, yyyy")}</td>
-                    <td className="px-5 py-3 text-gray-500">{format(new Date(inv.dueDate), "MMM d, yyyy")}</td>
+                    <td className="px-5 py-3 text-gray-500">{formatDateOnly(inv.invoiceDate)}</td>
+                    <td className="px-5 py-3 text-gray-500">{formatDateOnly(inv.dueDate)}</td>
                     <td className="px-5 py-3 text-right font-medium">{formatCurrency(inv.totalAmount)}</td>
                     <td className="px-5 py-3 text-right text-gray-500">{formatCurrency(inv.paidAmount)}</td>
                     <td className="px-5 py-3 text-center">
