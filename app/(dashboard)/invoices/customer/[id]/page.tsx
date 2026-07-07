@@ -13,6 +13,7 @@ import PaymentBadge from "@/components/PaymentBadge";
 import FileUpload from "@/components/FileUpload";
 import InvoiceItemsEditor from "@/components/InvoiceItemsEditor";
 import { formatCurrency } from "@/lib/money";
+import { formatDateOnly } from "@/lib/date";
 import Decimal from "decimal.js";
 
 const editSchema = z.object({
@@ -594,11 +595,11 @@ export default function CustomerInvoiceDetailPage() {
                 <div className="space-y-2 text-sm">
                   <div className="flex justify-between">
                     <span className="text-gray-500">Invoice Date</span>
-                    <span>{format(new Date(invoice.invoiceDate), "MMM d, yyyy")}</span>
+                    <span>{formatDateOnly(invoice.invoiceDate)}</span>
                   </div>
                   <div className="flex justify-between">
                     <span className="text-gray-500">Due Date</span>
-                    <span>{format(new Date(invoice.dueDate), "MMM d, yyyy")}</span>
+                    <span>{formatDateOnly(invoice.dueDate)}</span>
                   </div>
                   <div className="flex justify-between">
                     <span className="text-gray-500">Status</span>
@@ -817,7 +818,7 @@ export default function CustomerInvoiceDetailPage() {
                         <div className="py-3 flex items-start justify-between gap-4">
                           <div className="text-sm">
                             <span className="font-semibold text-green-700">{formatCurrency(p.amount)}</span>
-                            <span className="text-gray-500 ml-2">— {format(new Date(p.paymentDate), "MMM d, yyyy")}</span>
+                            <span className="text-gray-500 ml-2">— {formatDateOnly(p.paymentDate)}</span>
                             {p.notes && <span className="text-gray-400 ml-2">· {p.notes}</span>}
                           </div>
                           <div className="text-xs text-gray-500 flex items-center gap-1 shrink-0">
