@@ -85,7 +85,8 @@ export default function NewCustomerInvoicePage() {
         description: item.description ?? "",
         quantity: item.quantity ?? "1",
         unitPrice: item.unitPrice ?? "0",
-        taxRate: item.taxRate ?? "0",
+        // Extracted taxRate is a fraction (0.08 = 8%); the form field displays a percentage
+        taxRate: item.taxRate ? (parseFloat(item.taxRate) * 100).toString() : "0",
       })));
     }
 
@@ -127,10 +128,18 @@ export default function NewCustomerInvoicePage() {
     setSubmitting(true);
     setError("");
     try {
+      const payload = {
+        ...data,
+        // Form displays tax as a percentage; the API expects a fraction (8 -> 0.08)
+        items: data.items.map((item) => ({
+          ...item,
+          taxRate: (parseFloat(item.taxRate || "0") / 100).toString(),
+        })),
+      };
       const res = await fetch("/api/invoices/customer", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(data),
+        body: JSON.stringify(payload),
       });
       if (!res.ok) {
         const d = await res.json();

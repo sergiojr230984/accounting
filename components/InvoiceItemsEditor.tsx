@@ -23,7 +23,7 @@ function LinePreview({ quantity, price, taxRate }: { quantity: string; price: st
   try {
     const q = new Decimal(quantity || "0");
     const p = new Decimal(price || "0");
-    const r = new Decimal(taxRate || "0");
+    const r = new Decimal(taxRate || "0").dividedBy(100);
     const sub = q.times(p);
     const tax = sub.times(r);
     const total = sub.plus(tax);
@@ -97,11 +97,11 @@ export default function InvoiceItemsEditor({
             <div className="col-span-2">
               <input
                 className="input text-sm"
-                placeholder="Tax rate"
+                placeholder="Tax %"
                 type="number"
-                step="0.001"
+                step="0.01"
                 min="0"
-                max="1"
+                max="100"
                 {...control.register(`${fieldName}.${index}.taxRate`)}
               />
             </div>
@@ -129,7 +129,7 @@ export default function InvoiceItemsEditor({
 
       <div className="mt-2 grid grid-cols-12 gap-2">
         <div className="col-span-10 text-right text-xs text-gray-500 pr-2">
-          <span className="uppercase tracking-wide">Headers: Description / Qty / {priceLabel} / Tax Rate / Total</span>
+          <span className="uppercase tracking-wide">Headers: Description / Qty / {priceLabel} / Tax % / Total</span>
         </div>
       </div>
     </div>

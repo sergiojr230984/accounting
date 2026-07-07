@@ -82,7 +82,8 @@ export default function SupplierInvoiceDetailPage() {
         description: item.description,
         quantity: item.quantity,
         unitCost: item.unitCost,
-        taxRate: item.taxRate,
+        // Stored taxRate is a fraction (0.08 = 8%); the form field displays a percentage
+        taxRate: (parseFloat(item.taxRate) * 100).toString(),
       })),
     });
   }, [id, reset, router]);
@@ -93,10 +94,18 @@ export default function SupplierInvoiceDetailPage() {
     setSaving(true);
     setError("");
     try {
+      const payload = {
+        ...data,
+        // Form displays tax as a percentage; the API expects a fraction (8 -> 0.08)
+        items: data.items.map((item) => ({
+          ...item,
+          taxRate: (parseFloat(item.taxRate || "0") / 100).toString(),
+        })),
+      };
       const res = await fetch(`/api/invoices/supplier/${id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(data),
+        body: JSON.stringify(payload),
       });
       if (!res.ok) {
         const d = await res.json();

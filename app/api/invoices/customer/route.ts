@@ -8,7 +8,11 @@ const itemSchema = z.object({
   description: z.string().min(1),
   quantity: z.string().regex(/^\d+(\.\d+)?$/, "Must be a number"),
   unitPrice: z.string().regex(/^\d+(\.\d+)?$/, "Must be a number"),
-  taxRate: z.string().regex(/^\d+(\.\d+)?$/, "Must be a number").default("0"),
+  taxRate: z
+    .string()
+    .regex(/^\d+(\.\d+)?$/, "Must be a number")
+    .default("0")
+    .refine((v) => Number(v) < 10, "Tax rate must be a fraction between 0 and 10 (e.g. 0.08 for 8%)"),
 });
 
 const invoiceSchema = z.object({

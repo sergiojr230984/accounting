@@ -18,7 +18,13 @@ const updateSchema = z.object({
         description: z.string().min(1),
         quantity: z.string(),
         unitPrice: z.string(),
-        taxRate: z.string().default("0"),
+        taxRate: z
+          .string()
+          .default("0")
+          .refine((v) => {
+            const n = Number(v);
+            return Number.isFinite(n) && n >= 0 && n < 10;
+          }, "Tax rate must be a fraction between 0 and 10 (e.g. 0.08 for 8%)"),
       })
     )
     .optional(),
@@ -91,8 +97,6 @@ export async function PATCH(
     updateData.subtotal = subtotal.toFixed(2);
     updateData.taxAmount = taxAmount.toFixed(2);
     updateData.totalAmount = subtotal.plus(taxAmount).toFixed(2);
-
-    await prisma.customerInvoiceItem.deleteMany({ where: { invoiceId: id } });
     updateData.items = {
       create: computedItems.map((item) => ({
         description: item.description,
@@ -104,11 +108,22 @@ export async function PATCH(
     };
   }
 
-  const updated = await prisma.customerInvoice.update({
-    where: { id },
-    data: updateData,
-    include: { customer: true, items: true },
-  });
+  let updated;
+  try {
+    updated = await prisma.$transaction(async (tx) => {
+      if (data.items) {
+        await tx.customerInvoiceItem.deleteMany({ where: { invoiceId: id } });
+      }
+      return tx.customerInvoice.update({
+        where: { id },
+        data: updateData,
+        include: { customer: true, items: true },
+      });
+    });
+  } catch (err) {
+    console.error("[invoices/customer PATCH]", err);
+    return NextResponse.json({ error: "Failed to save invoice changes" }, { status: 500 });
+  }
 
   return NextResponse.json(updated);
 }
