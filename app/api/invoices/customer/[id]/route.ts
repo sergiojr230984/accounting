@@ -215,7 +215,7 @@ export async function DELETE(
   _request: Request,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  const guard = await requireRole("ADMIN");
+  const guard = await requireRole("ADMIN", "MANAGER", "SALES");
   if (guard instanceof NextResponse) return guard;
 
   const { id } = await params;
