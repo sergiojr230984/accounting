@@ -2,8 +2,8 @@
 
 import { useState } from "react";
 import { Download, Loader2, FileText, TrendingUp } from "lucide-react";
-import { format } from "date-fns";
 import { formatCurrency } from "@/lib/money";
+import { formatDateOnly } from "@/lib/date";
 import PaymentBadge from "@/components/PaymentBadge";
 import CategoryBadge from "@/components/CategoryBadge";
 
@@ -330,8 +330,8 @@ export default function ReportsPage() {
             <h2 className="font-semibold text-gray-800 text-lg">{getReportLabel(reportType)}</h2>
             {(from || to) && (
               <span className="text-sm text-gray-500">
-                {from ? format(new Date(from), "MMM d, yyyy") : "All time"} &mdash;{" "}
-                {to ? format(new Date(to), "MMM d, yyyy") : "present"}
+                {from ? formatDateOnly(from) : "All time"} &mdash;{" "}
+                {to ? formatDateOnly(to) : "present"}
               </span>
             )}
           </div>
@@ -383,7 +383,7 @@ export default function ReportsPage() {
                       <tr key={inv.id}>
                         <td className="py-2 font-medium">{inv.invoiceNumber}</td>
                         <td className="py-2">{inv.customer.name}</td>
-                        <td className="py-2 text-gray-500">{format(new Date(inv.invoiceDate), "MMM d, yyyy")}</td>
+                        <td className="py-2 text-gray-500">{formatDateOnly(inv.invoiceDate)}</td>
                         <td className="py-2 text-right">{formatCurrency(inv.totalAmount)}</td>
                         <td className="py-2 text-center">
                           <PaymentBadge status={inv.paymentStatus as "UNPAID" | "PARTIALLY_PAID" | "PAID"} />
@@ -428,7 +428,7 @@ export default function ReportsPage() {
                       <tr key={inv.id}>
                         <td className="py-2 font-medium">{inv.invoiceNumber}</td>
                         <td className="py-2">{inv.supplier.name}</td>
-                        <td className="py-2 text-gray-500">{format(new Date(inv.invoiceDate), "MMM d, yyyy")}</td>
+                        <td className="py-2 text-gray-500">{formatDateOnly(inv.invoiceDate)}</td>
                         <td className="py-2"><CategoryBadge category={inv.category as "COGS" | "SERVICES_EXPENSE" | "OPERATING_EXPENSE" | "OTHER"} /></td>
                         <td className="py-2 text-right">{formatCurrency(inv.totalAmount)}</td>
                         <td className="py-2 text-center">
@@ -486,7 +486,7 @@ export default function ReportsPage() {
                         <tr key={row.id}>
                           <td className="py-2 font-medium">{row.invoiceNumber}</td>
                           <td className="py-2">{row.customerName}</td>
-                          <td className="py-2 text-gray-500">{format(new Date(row.invoiceDate), "MMM d, yyyy")}</td>
+                          <td className="py-2 text-gray-500">{formatDateOnly(row.invoiceDate)}</td>
                           <td className="py-2 text-right">{formatCurrency(row.revenue)}</td>
                           <td className="py-2 text-right">
                             {row.hasCost ? formatCurrency(row.cost) : <span className="text-gray-400 text-xs">No cost linked</span>}
@@ -538,7 +538,7 @@ export default function ReportsPage() {
                       <tr key={inv.id}>
                         <td className="py-2 font-medium">{inv.invoiceNumber}</td>
                         <td className="py-2">{inv.customer?.name ?? inv.supplier?.name}</td>
-                        <td className="py-2 text-gray-500">{format(new Date(inv.invoiceDate), "MMM d, yyyy")}</td>
+                        <td className="py-2 text-gray-500">{formatDateOnly(inv.invoiceDate)}</td>
                         <td className="py-2 text-right">{formatCurrency(inv.totalAmount)}</td>
                         <td className="py-2 text-right text-green-600">{formatCurrency(inv.paidAmount)}</td>
                         <td className="py-2 text-right font-semibold text-red-600">

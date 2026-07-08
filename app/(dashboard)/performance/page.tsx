@@ -3,8 +3,8 @@
 import { useEffect, useState, useCallback } from "react";
 import Link from "next/link";
 import { Trophy, Loader2, DollarSign, FileText, Award } from "lucide-react";
-import { format } from "date-fns";
 import { formatCurrency } from "@/lib/money";
+import { formatDateOnly } from "@/lib/date";
 import PaymentBadge from "@/components/PaymentBadge";
 
 interface LeaderboardRow {
@@ -212,7 +212,7 @@ export default function PerformancePage() {
                     </Link>
                   </td>
                   <td className="px-5 py-3 text-gray-700">{inv.customerName}</td>
-                  <td className="px-5 py-3 text-gray-500">{format(new Date(inv.invoiceDate), "MMM d, yyyy")}</td>
+                  <td className="px-5 py-3 text-gray-500">{formatDateOnly(inv.invoiceDate)}</td>
                   <td className="px-5 py-3 text-right">{formatCurrency(inv.totalAmount)}</td>
                   <td className="px-5 py-3 text-right text-gray-500">{(parseFloat(inv.commissionRate) * 100).toFixed(1)}%</td>
                   <td className="px-5 py-3 text-right font-medium text-green-700">{formatCurrency(inv.commissionAmount)}</td>

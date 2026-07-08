@@ -1,6 +1,6 @@
 import { prisma } from "@/lib/prisma";
 import { formatCurrency } from "@/lib/money";
-import { format } from "date-fns";
+import { formatDateOnly } from "@/lib/date";
 import { notFound } from "next/navigation";
 import { BookOpen } from "lucide-react";
 
@@ -56,7 +56,7 @@ export default async function PublicInvoicePage({
                 <p className="text-xs font-semibold uppercase text-gray-400">Invoice</p>
                 <h1 className="text-2xl font-bold text-gray-900 mt-1">{invoice.invoiceNumber}</h1>
                 <p className="text-sm text-gray-500 mt-1">
-                  Issued {format(new Date(invoice.invoiceDate), "MMM d, yyyy")} · Due {format(new Date(invoice.dueDate), "MMM d, yyyy")}
+                  Issued {formatDateOnly(invoice.invoiceDate)} · Due {formatDateOnly(invoice.dueDate)}
                 </p>
               </div>
               <div className="text-right">

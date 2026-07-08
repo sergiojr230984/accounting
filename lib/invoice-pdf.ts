@@ -1,6 +1,6 @@
 import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
-import { format } from "date-fns";
+import { formatDateOnly } from "./date";
 
 /**
  * ASCII-only currency formatter for jsPDF text. Intl.NumberFormat can emit
@@ -225,10 +225,10 @@ export function generateInvoicePDF(invoice: InvoicePDFData): jsPDF {
   const rows: { label: string; value: string }[] = [
     { label: isPO ? "PO Number" : "Invoice Number", value: invoice.invoiceNumber },
     { label: "Sales Rep", value: rep },
-    { label: "Invoice Date", value: format(new Date(invoice.invoiceDate), "MMM d, yyyy") },
+    { label: "Invoice Date", value: formatDateOnly(invoice.invoiceDate) },
     {
       label: isPO ? "Expected" : "Payment Due",
-      value: invoice.dueDate ? format(new Date(invoice.dueDate), "MMM d, yyyy") : "On receipt",
+      value: invoice.dueDate ? formatDateOnly(invoice.dueDate) : "On receipt",
     },
   ];
 
@@ -373,7 +373,7 @@ export function generateInvoicePDF(invoice: InvoicePDFData): jsPDF {
   const paymentSum = payments.reduce((acc, p) => acc + Number(p.amount), 0);
   if (payments.length > 0) {
     for (const p of payments) {
-      const dateStr = format(new Date(p.paymentDate), "MMM d, yyyy");
+      const dateStr = formatDateOnly(p.paymentDate);
       const label = p.notes?.trim()
         ? `Payment on ${dateStr} using ${p.notes.trim()}:`
         : `Payment on ${dateStr}:`;

@@ -3,9 +3,9 @@
 import { useState, useEffect, useCallback, useMemo } from "react";
 import Link from "next/link";
 import { Plus, Search, ChevronRight, DollarSign } from "lucide-react";
-import { format } from "date-fns";
 import PaymentBadge from "@/components/PaymentBadge";
 import { formatCurrency } from "@/lib/money";
+import { formatDateOnly } from "@/lib/date";
 
 interface Invoice {
   id: string;
@@ -258,7 +258,7 @@ export default function CustomerInvoicesPage() {
                 const overdue = inv.paymentStatus !== "PAID" && due < today;
                 const balance = Math.max(parseFloat(inv.totalAmount) - parseFloat(inv.paidAmount), 0);
 
-                let dueLabel = format(due, "MMM d, yyyy");
+                let dueLabel = formatDateOnly(inv.dueDate);
                 if (overdue) dueLabel = `${days} day${days !== 1 ? "s" : ""} ago`;
                 else if (inv.paymentStatus !== "PAID") {
                   const forward = -days;
@@ -278,7 +278,7 @@ export default function CustomerInvoicesPage() {
                       )}
                     </td>
                     <td className={`px-5 py-4 ${overdue ? "text-red-600 font-medium" : "text-gray-500"}`}>{dueLabel}</td>
-                    <td className="px-5 py-4 text-gray-500">{format(new Date(inv.invoiceDate), "yyyy-MM-dd")}</td>
+                    <td className="px-5 py-4 text-gray-500">{formatDateOnly(inv.invoiceDate, "yyyy-MM-dd")}</td>
                     <td className="px-5 py-4">
                       <Link href={`/invoices/customer/${inv.id}`} className="text-brand-600 hover:underline font-medium">
                         {inv.invoiceNumber}

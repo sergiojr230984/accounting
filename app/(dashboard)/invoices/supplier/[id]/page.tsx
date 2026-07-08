@@ -7,13 +7,13 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import Link from "next/link";
 import { ArrowLeft, Edit2, Save, X, Trash2, Loader2, Printer } from "lucide-react";
-import { format } from "date-fns";
 import PaymentBadge from "@/components/PaymentBadge";
 import CategoryBadge from "@/components/CategoryBadge";
 import FileUpload from "@/components/FileUpload";
 import InvoiceItemsEditor from "@/components/InvoiceItemsEditor";
 import InvoiceDocumentPreview from "@/components/InvoiceDocumentPreview";
 import { formatCurrency } from "@/lib/money";
+import { formatDateOnly } from "@/lib/date";
 import { generateInvoicePDF } from "@/lib/invoice-pdf";
 
 const editSchema = z.object({
@@ -330,12 +330,12 @@ export default function SupplierInvoiceDetailPage() {
               <div className="space-y-2 text-sm">
                 <div className="flex justify-between">
                   <span className="text-gray-500">Invoice Date</span>
-                  <span>{format(new Date(invoice.invoiceDate), "MMM d, yyyy")}</span>
+                  <span>{formatDateOnly(invoice.invoiceDate)}</span>
                 </div>
                 {invoice.dueDate && (
                   <div className="flex justify-between">
                     <span className="text-gray-500">Due Date</span>
-                    <span>{format(new Date(invoice.dueDate), "MMM d, yyyy")}</span>
+                    <span>{formatDateOnly(invoice.dueDate)}</span>
                   </div>
                 )}
                 <div className="flex justify-between">

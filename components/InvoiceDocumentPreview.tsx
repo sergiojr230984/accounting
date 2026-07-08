@@ -1,5 +1,5 @@
 import Decimal from "decimal.js";
-import { format } from "date-fns";
+import { formatDateOnly } from "@/lib/date";
 import PaymentBadge from "@/components/PaymentBadge";
 
 interface PreviewItem {
@@ -112,9 +112,9 @@ export default function InvoiceDocumentPreview({
             <h3 className="text-xl font-bold tracking-wide text-gray-800">{docType}</h3>
             <div className="mt-2 text-sm text-gray-500 space-y-0.5">
               <p><span className="text-gray-400">Number:</span> {number || "—"}</p>
-              <p><span className="text-gray-400">Date:</span> {invoiceDate ? format(invoiceDate, "MMM d, yyyy") : "—"}</p>
+              <p><span className="text-gray-400">Date:</span> {invoiceDate ? formatDateOnly(invoiceDate) : "—"}</p>
               {dueDate !== undefined && (
-                <p><span className="text-gray-400">Due:</span> {paymentDueDate ? format(paymentDueDate, "MMM d, yyyy") : "—"}</p>
+                <p><span className="text-gray-400">Due:</span> {paymentDueDate ? formatDateOnly(paymentDueDate) : "—"}</p>
               )}
             </div>
           </div>
