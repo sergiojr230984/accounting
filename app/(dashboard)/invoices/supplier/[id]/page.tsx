@@ -11,6 +11,7 @@ import PaymentBadge from "@/components/PaymentBadge";
 import CategoryBadge from "@/components/CategoryBadge";
 import FileUpload from "@/components/FileUpload";
 import InvoiceItemsEditor from "@/components/InvoiceItemsEditor";
+import InvoiceDocumentPreview from "@/components/InvoiceDocumentPreview";
 import { formatCurrency } from "@/lib/money";
 import { generateInvoicePDF } from "@/lib/invoice-pdf";
 import { formatDateOnly } from "@/lib/date";
@@ -65,9 +66,17 @@ export default function SupplierInvoiceDetailPage() {
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [deleting, setDeleting] = useState(false);
 
-  const { register, handleSubmit, control, reset, formState: { errors } } = useForm<EditForm>({
+  const { register, handleSubmit, control, reset, watch, formState: { errors } } = useForm<EditForm>({
     resolver: zodResolver(editSchema),
   });
+
+  const watchedItems = watch("items");
+  const watchedInvoiceNumber = watch("invoiceNumber");
+  const watchedInvoiceDate = watch("invoiceDate");
+  const watchedDueDate = watch("dueDate");
+  const watchedNotes = watch("notes");
+  const watchedPaymentStatus = watch("paymentStatus");
+  const watchedPaidAmount = watch("paidAmount");
 
   const load = useCallback(async () => {
     const res = await fetch(`/api/invoices/supplier/${id}`);
@@ -293,6 +302,27 @@ export default function SupplierInvoiceDetailPage() {
           <div className="card">
             <InvoiceItemsEditor control={control} register={register} type="supplier" />
           </div>
+
+          <InvoiceDocumentPreview
+            docType="BILL"
+            number={watchedInvoiceNumber ?? ""}
+            date={watchedInvoiceDate ?? ""}
+            dueDate={watchedDueDate ?? ""}
+            partyLabel="Vendor"
+            partyName={invoice.supplier.name}
+            partyEmail={invoice.supplier.email}
+            partyPhone={invoice.supplier.phone}
+            priceLabel="Unit Cost"
+            items={(watchedItems ?? []).map((item) => ({
+              description: item.description,
+              quantity: item.quantity,
+              price: item.unitCost,
+              taxRate: item.taxRate,
+            }))}
+            notes={watchedNotes}
+            paymentStatus={watchedPaymentStatus}
+            paidAmount={watchedPaidAmount}
+          />
         </form>
       ) : (
         <>
