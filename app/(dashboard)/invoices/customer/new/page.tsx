@@ -18,6 +18,7 @@ import {
 import Decimal from "decimal.js";
 import CustomerCreateModal from "@/components/CustomerCreateModal";
 import InvoiceExtractor from "@/components/InvoiceExtractor";
+import InvoiceDocumentPreview from "@/components/InvoiceDocumentPreview";
 import { formatCurrency } from "@/lib/money";
 import { generateInvoicePDF } from "@/lib/invoice-pdf";
 
@@ -832,6 +833,30 @@ export default function NewCustomerInvoicePage() {
               onChange={(e) => setNotes(e.target.value)}
             />
           </div>
+
+          <InvoiceDocumentPreview
+            docType="INVOICE"
+            number={invoiceNumber}
+            date={invoiceDate}
+            dueDate={dueDate}
+            partyLabel="Bill To"
+            partyName={selectedCustomer?.name ?? ""}
+            partyEmail={selectedCustomer?.email}
+            partyPhone={selectedCustomer?.phone}
+            partyAddress={selectedCustomer?.address}
+            priceLabel="Unit Price"
+            items={items
+              .filter((i) => i.description.trim() !== "")
+              .map((item) => ({
+                description: item.description,
+                quantity: item.quantity,
+                price: item.unitPrice,
+                taxRate: item.taxRate,
+              }))}
+            notes={notes}
+            paymentStatus="UNPAID"
+            paidAmount="0"
+          />
 
           {error && (
             <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg text-sm">{error}</div>

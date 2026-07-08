@@ -9,6 +9,7 @@ import { ArrowLeft, Loader2 } from "lucide-react";
 import Link from "next/link";
 import InvoiceItemsEditor from "@/components/InvoiceItemsEditor";
 import InvoiceExtractor from "@/components/InvoiceExtractor";
+import InvoiceDocumentPreview from "@/components/InvoiceDocumentPreview";
 
 const schema = z.object({
   supplierId: z.string().min(1, "Select a supplier"),
@@ -31,7 +32,7 @@ const schema = z.object({
 });
 type FormData = z.infer<typeof schema>;
 
-interface Supplier { id: string; name: string }
+interface Supplier { id: string; name: string; email?: string | null; phone?: string | null; address?: string | null }
 
 export default function NewSupplierInvoicePage() {
   const router = useRouter();
@@ -41,7 +42,7 @@ export default function NewSupplierInvoicePage() {
   const [newSupplierName, setNewSupplierName] = useState("");
   const [creatingSupplier, setCreatingSupplier] = useState(false);
 
-  const { register, handleSubmit, control, setValue, formState: { errors } } = useForm<FormData>({
+  const { register, handleSubmit, control, watch, setValue, formState: { errors } } = useForm<FormData>({
     resolver: zodResolver(schema),
     defaultValues: {
       category: "COGS",
@@ -51,6 +52,16 @@ export default function NewSupplierInvoicePage() {
       items: [{ description: "", quantity: "1", unitCost: "0", taxRate: "0" }],
     },
   });
+
+  const watchedItems = watch("items");
+  const watchedSupplierId = watch("supplierId");
+  const watchedInvoiceNumber = watch("invoiceNumber");
+  const watchedInvoiceDate = watch("invoiceDate");
+  const watchedDueDate = watch("dueDate");
+  const watchedNotes = watch("notes");
+  const watchedPaymentStatus = watch("paymentStatus");
+  const watchedPaidAmount = watch("paidAmount");
+  const selectedSupplier = suppliers.find((s) => s.id === watchedSupplierId);
 
   async function loadSuppliers() {
     const res = await fetch("/api/suppliers");
@@ -278,6 +289,28 @@ export default function NewSupplierInvoicePage() {
         <div className="card">
           <InvoiceItemsEditor control={control} register={register} type="supplier" />
         </div>
+
+        <InvoiceDocumentPreview
+          docType="BILL"
+          number={watchedInvoiceNumber ?? ""}
+          date={watchedInvoiceDate ?? ""}
+          dueDate={watchedDueDate ?? ""}
+          partyLabel="Vendor"
+          partyName={selectedSupplier?.name ?? ""}
+          partyEmail={selectedSupplier?.email}
+          partyPhone={selectedSupplier?.phone}
+          partyAddress={selectedSupplier?.address}
+          priceLabel="Unit Cost"
+          items={(watchedItems ?? []).map((item) => ({
+            description: item.description,
+            quantity: item.quantity,
+            price: item.unitCost,
+            taxRate: item.taxRate,
+          }))}
+          notes={watchedNotes}
+          paymentStatus={watchedPaymentStatus}
+          paidAmount={watchedPaidAmount}
+        />
 
         {error && (
           <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg text-sm">{error}</div>

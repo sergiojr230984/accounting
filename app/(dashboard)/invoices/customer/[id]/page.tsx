@@ -12,6 +12,7 @@ import { format } from "date-fns";
 import PaymentBadge from "@/components/PaymentBadge";
 import FileUpload from "@/components/FileUpload";
 import InvoiceItemsEditor from "@/components/InvoiceItemsEditor";
+import InvoiceDocumentPreview from "@/components/InvoiceDocumentPreview";
 import { formatCurrency } from "@/lib/money";
 import Decimal from "decimal.js";
 
@@ -109,6 +110,12 @@ export default function CustomerInvoiceDetailPage() {
   // Watch paidAmount and downPayment to auto-derive paymentStatus in real-time
   const watchedPaid = watch("paidAmount");
   const watchedDown = watch("downPayment");
+  const watchedItems = watch("items");
+  const watchedInvoiceNumber = watch("invoiceNumber");
+  const watchedInvoiceDate = watch("invoiceDate");
+  const watchedDueDate = watch("dueDate");
+  const watchedNotes = watch("notes");
+  const watchedPaymentStatus = watch("paymentStatus");
 
   const load = useCallback(async () => {
     const res = await fetch(`/api/invoices/customer/${id}`);
@@ -598,6 +605,28 @@ export default function CustomerInvoiceDetailPage() {
             <div className="card">
               <InvoiceItemsEditor control={control} register={register} type="customer" />
             </div>
+
+            <InvoiceDocumentPreview
+              docType="INVOICE"
+              number={watchedInvoiceNumber ?? ""}
+              date={watchedInvoiceDate ?? ""}
+              dueDate={watchedDueDate ?? ""}
+              partyLabel="Bill To"
+              partyName={invoice.customer.name}
+              partyEmail={invoice.customer.email}
+              partyPhone={invoice.customer.phone}
+              partyAddress={invoice.customer.address}
+              priceLabel="Unit Price"
+              items={(watchedItems ?? []).map((item) => ({
+                description: item.description,
+                quantity: item.quantity,
+                price: item.unitPrice,
+                taxRate: item.taxRate,
+              }))}
+              notes={watchedNotes}
+              paymentStatus={watchedPaymentStatus}
+              paidAmount={watchedPaid}
+            />
           </form>
         ) : (
           <>
