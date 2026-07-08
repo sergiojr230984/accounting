@@ -64,6 +64,7 @@ interface InvoiceDetail {
 }
 
 interface EmployeeOpt { id: string; name: string; commissionRate: string }
+interface FeeOption { id: string; label: string; rate: number }
 
 export default function CustomerInvoiceDetailPage() {
   const { id } = useParams() as { id: string };
@@ -103,6 +104,11 @@ export default function CustomerInvoiceDetailPage() {
   const [userRole, setUserRole] = useState<string | null>(null);
   const canSeeCommission = userRole === "ADMIN" || userRole === "MANAGER";
 
+  // Fees (credit card fee + custom fees from Settings)
+  const [feeOptions, setFeeOptions] = useState<FeeOption[]>([]);
+  const [selectedFeeIds, setSelectedFeeIds] = useState<(string | null)[]>([]);
+  const [feesInitialized, setFeesInitialized] = useState(false);
+
   const { register, handleSubmit, control, reset, getValues, setValue, watch, formState: { errors } } = useForm<EditForm>({
     resolver: zodResolver(editSchema),
   });
@@ -122,6 +128,7 @@ export default function CustomerInvoiceDetailPage() {
     if (!res.ok) { router.push("/invoices/customer"); return; }
     const data = await res.json();
     setInvoice(data);
+    setFeesInitialized(false);
     reset({
       invoiceNumber: data.invoiceNumber,
       invoiceDate: data.invoiceDate.split("T")[0],
@@ -155,7 +162,69 @@ export default function CustomerInvoiceDetailPage() {
       .then((r) => (r.ok ? r.json() : null))
       .then((d: { viewer?: { role?: string } } | null) => setUserRole(d?.viewer?.role ?? null))
       .catch(() => {});
+    fetch("/api/settings")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((p: { creditCardFeeRate?: string; customFees?: { id: string; label: string; rate: number }[] } | null) => {
+        if (!p) return;
+        const options: FeeOption[] = [];
+        if (Number(p.creditCardFeeRate) > 0) {
+          options.push({ id: "__cc__", label: "CARD FEE", rate: Number(p.creditCardFeeRate) });
+        }
+        if (Array.isArray(p.customFees)) options.push(...p.customFees);
+        setFeeOptions(options);
+      })
+      .catch(() => {});
   }, []);
+
+  // Seed the selected fee slots from the invoice's already-applied fees, once
+  // both the invoice and the available fee options have loaded.
+  useEffect(() => {
+    if (feesInitialized || !invoice) return;
+    const ids = invoice.appliedFees
+      .map((f) => f.id)
+      .filter((fid): fid is string => !!fid);
+    setSelectedFeeIds(ids.length > 0 ? [...ids, null] : []);
+    setFeesInitialized(true);
+  }, [invoice, feesInitialized]);
+
+  const itemsSubtotalTax = (() => {
+    let subtotal = new Decimal(0);
+    let taxAmount = new Decimal(0);
+    for (const item of watchedItems ?? []) {
+      try {
+        const lineTotal = new Decimal(item.quantity || "0").times(item.unitPrice || "0");
+        subtotal = subtotal.plus(lineTotal);
+        taxAmount = taxAmount.plus(lineTotal.times(item.taxRate || "0"));
+      } catch {
+        // ignore unparsable rows while the user is still typing
+      }
+    }
+    return { subtotal, taxAmount };
+  })();
+
+  const computedAppliedFees = selectedFeeIds
+    .filter((fid): fid is string => !!fid)
+    .map((fid) => feeOptions.find((f) => f.id === fid))
+    .filter((f): f is FeeOption => !!f)
+    .map((f) => ({
+      id: f.id,
+      label: f.label,
+      rate: f.rate,
+      amount: itemsSubtotalTax.subtotal.plus(itemsSubtotalTax.taxAmount).times(f.rate).toFixed(2),
+    }));
+
+  function setFeeSlot(slotIdx: number, feeId: string | null) {
+    setSelectedFeeIds((prev) => {
+      const next = [...prev];
+      next[slotIdx] = feeId;
+      if (feeId && slotIdx === next.length - 1) next.push(null);
+      return next;
+    });
+  }
+
+  function removeFeeSlot(slotIdx: number) {
+    setSelectedFeeIds((prev) => prev.filter((_, i) => i !== slotIdx));
+  }
 
   // Auto-update paymentStatus when paidAmount or downPayment changes in edit mode
   useEffect(() => {
@@ -186,7 +255,7 @@ export default function CustomerInvoiceDetailPage() {
       const res = await fetch(`/api/invoices/customer/${id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(data),
+        body: JSON.stringify({ ...data, appliedFees: computedAppliedFees }),
       });
       if (!res.ok) {
         const d = await res.json();
@@ -606,6 +675,58 @@ export default function CustomerInvoiceDetailPage() {
               <InvoiceItemsEditor control={control} register={register} type="customer" />
             </div>
 
+            {feeOptions.length > 0 && (
+              <div className="card space-y-3">
+                <h3 className="text-sm font-semibold text-gray-700">Fees</h3>
+                <p className="text-xs text-gray-500">
+                  Add a card processing fee or any other fee configured in Settings. Applied as a percentage of subtotal + tax.
+                </p>
+                <div className="space-y-2">
+                  {selectedFeeIds.map((feeId, idx) => {
+                    const usedIds = selectedFeeIds.filter((f, i) => f && i !== idx);
+                    const amount = feeId
+                      ? itemsSubtotalTax.subtotal
+                          .plus(itemsSubtotalTax.taxAmount)
+                          .times(feeOptions.find((f) => f.id === feeId)?.rate ?? 0)
+                          .toFixed(2)
+                      : null;
+                    return (
+                      <div key={idx} className="flex items-center gap-2">
+                        <select
+                          className="input text-sm flex-1"
+                          value={feeId ?? ""}
+                          onChange={(e) => setFeeSlot(idx, e.target.value || null)}
+                        >
+                          <option value="">Select a fee</option>
+                          {feeOptions
+                            .filter((f) => f.id === feeId || !usedIds.includes(f.id))
+                            .map((f) => (
+                              <option key={f.id} value={f.id}>
+                                {f.label} ({(f.rate * 100).toFixed(2)}%)
+                              </option>
+                            ))}
+                        </select>
+                        <span className="text-sm font-medium text-gray-700 w-20 text-right">
+                          {amount !== null ? `$${amount}` : "—"}
+                        </span>
+                        {(feeId || idx < selectedFeeIds.length - 1) && (
+                          <button type="button" onClick={() => removeFeeSlot(idx)} className="p-1 text-red-400 hover:text-red-600">
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        )}
+                      </div>
+                    );
+                  })}
+                  {selectedFeeIds.length === 0 && (
+                    <button type="button" onClick={() => setSelectedFeeIds([null])} className="btn-secondary text-xs py-1.5">
+                      <Plus className="w-3.5 h-3.5" />
+                      Add a fee
+                    </button>
+                  )}
+                </div>
+              </div>
+            )}
+
             <InvoiceDocumentPreview
               docType="INVOICE"
               number={watchedInvoiceNumber ?? ""}
@@ -623,6 +744,7 @@ export default function CustomerInvoiceDetailPage() {
                 price: item.unitPrice,
                 taxRate: item.taxRate,
               }))}
+              fees={computedAppliedFees}
               notes={watchedNotes}
               paymentStatus={watchedPaymentStatus}
               paidAmount={watchedPaid}

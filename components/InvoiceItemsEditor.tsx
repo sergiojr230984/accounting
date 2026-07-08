@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import {
   useFieldArray,
   useWatch,
@@ -59,6 +60,16 @@ export default function InvoiceItemsEditor<T extends FieldValues = any>({
 
   const priceField = type === "customer" ? "unitPrice" : "unitCost";
   const priceLabel = type === "customer" ? "Unit Price" : "Unit Cost";
+
+  const [taxRates, setTaxRates] = useState<{ id: string; name: string; rate: string; active: boolean }[]>([]);
+  useEffect(() => {
+    fetch("/api/settings/taxes")
+      .then((r) => (r.ok ? r.json() : []))
+      .then((list: { id: string; name: string; rate: string; active: boolean }[]) =>
+        setTaxRates(list.filter((t) => t.active))
+      )
+      .catch(() => {});
+  }, []);
 
   return (
     <div>
@@ -125,15 +136,29 @@ export default function InvoiceItemsEditor<T extends FieldValues = any>({
             </div>
             {/* Tax rate */}
             <div className="col-span-1">
-              <input
-                className="input text-sm"
-                placeholder="Tax"
-                type="number"
-                step="0.001"
-                min="0"
-                max="1"
-                {...register(`${fieldName}.${index}.taxRate` as Path<T>)}
-              />
+              {taxRates.length > 0 ? (
+                <select
+                  className="input text-sm"
+                  {...register(`${fieldName}.${index}.taxRate` as Path<T>)}
+                >
+                  <option value="0">No tax</option>
+                  {taxRates.map((t) => (
+                    <option key={t.id} value={t.rate}>
+                      {t.name} ({(parseFloat(t.rate) * 100).toFixed(2)}%)
+                    </option>
+                  ))}
+                </select>
+              ) : (
+                <input
+                  className="input text-sm"
+                  placeholder="Tax"
+                  type="number"
+                  step="0.001"
+                  min="0"
+                  max="1"
+                  {...register(`${fieldName}.${index}.taxRate` as Path<T>)}
+                />
+              )}
             </div>
             {/* Line total */}
             <div className="col-span-1 text-right pt-2">

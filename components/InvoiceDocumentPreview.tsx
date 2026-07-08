@@ -21,6 +21,7 @@ interface InvoiceDocumentPreviewProps {
   partyAddress?: string | null;
   priceLabel: string;
   items: PreviewItem[];
+  fees?: { label: string; amount: string }[];
   notes?: string;
   paymentStatus: "UNPAID" | "PARTIALLY_PAID" | "PAID";
   paidAmount: string;
@@ -44,6 +45,7 @@ export default function InvoiceDocumentPreview({
   partyAddress,
   priceLabel,
   items,
+  fees,
   notes,
   paymentStatus,
   paidAmount,
@@ -68,7 +70,16 @@ export default function InvoiceDocumentPreview({
     return { ...item, lineTotal };
   });
 
-  const total = subtotal.plus(taxAmount);
+  let feesTotal = new Decimal(0);
+  for (const fee of fees ?? []) {
+    try {
+      feesTotal = feesTotal.plus(new Decimal(fee.amount || "0"));
+    } catch {
+      // ignore unparsable fee amount
+    }
+  }
+
+  const total = subtotal.plus(taxAmount).plus(feesTotal);
   const paid = (() => {
     try {
       return new Decimal(paidAmount || "0");
@@ -147,6 +158,12 @@ export default function InvoiceDocumentPreview({
               <span className="text-gray-500">Tax</span>
               <span>${taxAmount.toFixed(2)}</span>
             </div>
+            {(fees ?? []).map((fee, i) => (
+              <div key={i} className="flex justify-between">
+                <span className="text-gray-500">{fee.label}</span>
+                <span>${new Decimal(fee.amount || "0").toFixed(2)}</span>
+              </div>
+            ))}
             <div className="flex justify-between font-bold text-base border-t pt-2">
               <span>Total</span>
               <span>${total.toFixed(2)}</span>

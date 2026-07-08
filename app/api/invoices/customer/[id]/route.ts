@@ -5,6 +5,13 @@ import { requireRole } from "@/lib/api";
 import { z } from "zod";
 import Decimal from "decimal.js";
 
+const appliedFeeSchema = z.object({
+  id: z.string(),
+  label: z.string(),
+  rate: z.number(),
+  amount: z.string(),
+});
+
 const updateSchema = z.object({
   invoiceNumber: z.string().min(1).optional(),
   invoiceDate: z.string().optional(),
@@ -16,6 +23,7 @@ const updateSchema = z.object({
   employeeId: z.string().nullable().optional(),
   commissionRate: z.string().optional(),
   customerAddress: z.string().optional().nullable(),
+  appliedFees: z.array(appliedFeeSchema).optional(),
   items: z
     .array(
       z.object({
@@ -90,6 +98,7 @@ export async function PATCH(
   if (data.downPayment !== undefined) updateData.downPayment = data.downPayment;
   if (data.employeeId !== undefined) updateData.employeeId = data.employeeId;
   if (data.commissionRate !== undefined) updateData.commissionRate = data.commissionRate;
+  if (data.appliedFees !== undefined) updateData.appliedFees = data.appliedFees as unknown as object;
 
   // Only touch line items if the client actually sent a non-empty array.
   // IMPORTANT: compute and validate items BEFORE any destructive DB operation
@@ -123,9 +132,18 @@ export async function PATCH(
       );
     }
 
+    let feesSum = new Decimal(0);
+    for (const f of data.appliedFees ?? []) {
+      try {
+        feesSum = feesSum.plus(new Decimal(f.amount));
+      } catch {
+        // skip malformed entry
+      }
+    }
+
     updateData.subtotal = subtotal.toFixed(2);
     updateData.taxAmount = taxAmount.toFixed(2);
-    updateData.totalAmount = subtotal.plus(taxAmount).toFixed(2);
+    updateData.totalAmount = subtotal.plus(taxAmount).plus(feesSum).toFixed(2);
 
     // Delete existing items only AFTER successful computation
     await prisma.customerInvoiceItem.deleteMany({ where: { invoiceId: id } });
