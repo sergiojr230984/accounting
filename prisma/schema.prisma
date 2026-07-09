@@ -25,18 +25,44 @@ enum SupplierCategory {
   OTHER
 }
 
+// "default-company" is a fixed (non-cuid) Company.id seeded below and used
+// as the @default for every companyId column, so existing/legacy records
+// and app code that doesn't set companyId keep working unmodified.
+model Company {
+  id        String   @id @default(cuid())
+  name      String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  users                User[]
+  customers            Customer[]
+  suppliers            Supplier[]
+  customerInvoices     CustomerInvoice[]
+  customerInvoiceItems CustomerInvoiceItem[]
+  supplierInvoices     SupplierInvoice[]
+  supplierInvoiceItems SupplierInvoiceItem[]
+  payments             Payment[]
+  files                UploadedFile[]
+}
+
 model User {
   id        String   @id @default(cuid())
+  companyId String   @default("default-company")
+  company   Company  @relation(fields: [companyId], references: [id])
   name      String
   email     String   @unique
   password  String
   role      Role     @default(MANAGER)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+
+  @@index([companyId])
 }
 
 model Customer {
   id        String            @id @default(cuid())
+  companyId String            @default("default-company")
+  company   Company           @relation(fields: [companyId], references: [id])
   name      String
   email     String?
   phone     String?
@@ -44,10 +70,14 @@ model Customer {
   createdAt DateTime          @default(now())
   updatedAt DateTime          @updatedAt
   invoices  CustomerInvoice[]
+
+  @@index([companyId])
 }
 
 model Supplier {
   id        String            @id @default(cuid())
+  companyId String            @default("default-company")
+  company   Company           @relation(fields: [companyId], references: [id])
   name      String
   email     String?
   phone     String?
@@ -55,19 +85,23 @@ model Supplier {
   createdAt DateTime          @default(now())
   updatedAt DateTime          @updatedAt
   invoices  SupplierInvoice[]
+
+  @@index([companyId])
 }
 
 model CustomerInvoice {
   id            String                @id @default(cuid())
+  companyId     String                @default("default-company")
+  company       Company               @relation(fields: [companyId], references: [id])
   invoiceNumber String
   customerId    String
   customer      Customer              @relation(fields: [customerId], references: [id])
   invoiceDate   DateTime
   dueDate       DateTime
   subtotal      Decimal               @db.Decimal(15, 2)
-  taxAmount     Decimal               @db.Decimal(15, 2) @default(0)
+  taxAmount     Decimal               @default(0) @db.Decimal(15, 2)
   totalAmount   Decimal               @db.Decimal(15, 2)
-  paidAmount    Decimal               @db.Decimal(15, 2) @default(0)
+  paidAmount    Decimal               @default(0) @db.Decimal(15, 2)
   paymentStatus PaymentStatus         @default(UNPAID)
   notes         String?
   createdAt     DateTime              @default(now())
@@ -77,23 +111,30 @@ model CustomerInvoice {
   files         UploadedFile[]
 
   @@unique([invoiceNumber, customerId])
+  @@index([companyId])
 }
 
 model CustomerInvoiceItem {
   id          String          @id @default(cuid())
+  companyId   String          @default("default-company")
+  company     Company         @relation(fields: [companyId], references: [id])
   invoiceId   String
   invoice     CustomerInvoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
   description String
   quantity    Decimal         @db.Decimal(15, 4)
   unitPrice   Decimal         @db.Decimal(15, 2)
-  taxRate     Decimal         @db.Decimal(5, 4) @default(0)
+  taxRate     Decimal         @default(0) @db.Decimal(5, 4)
   lineTotal   Decimal         @db.Decimal(15, 2)
   createdAt   DateTime        @default(now())
   updatedAt   DateTime        @updatedAt
+
+  @@index([companyId])
 }
 
 model SupplierInvoice {
   id            String                @id @default(cuid())
+  companyId     String                @default("default-company")
+  company       Company               @relation(fields: [companyId], references: [id])
   invoiceNumber String
   supplierId    String
   supplier      Supplier              @relation(fields: [supplierId], references: [id])
@@ -101,9 +142,9 @@ model SupplierInvoice {
   dueDate       DateTime?
   category      SupplierCategory
   subtotal      Decimal               @db.Decimal(15, 2)
-  taxAmount     Decimal               @db.Decimal(15, 2) @default(0)
+  taxAmount     Decimal               @default(0) @db.Decimal(15, 2)
   totalAmount   Decimal               @db.Decimal(15, 2)
-  paidAmount    Decimal               @db.Decimal(15, 2) @default(0)
+  paidAmount    Decimal               @default(0) @db.Decimal(15, 2)
   paymentStatus PaymentStatus         @default(UNPAID)
   notes         String?
   createdAt     DateTime              @default(now())
@@ -113,23 +154,30 @@ model SupplierInvoice {
   files         UploadedFile[]
 
   @@unique([invoiceNumber, supplierId])
+  @@index([companyId])
 }
 
 model SupplierInvoiceItem {
   id          String          @id @default(cuid())
+  companyId   String          @default("default-company")
+  company     Company         @relation(fields: [companyId], references: [id])
   invoiceId   String
   invoice     SupplierInvoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
   description String
   quantity    Decimal         @db.Decimal(15, 4)
   unitCost    Decimal         @db.Decimal(15, 2)
-  taxRate     Decimal         @db.Decimal(5, 4) @default(0)
+  taxRate     Decimal         @default(0) @db.Decimal(5, 4)
   lineTotal   Decimal         @db.Decimal(15, 2)
   createdAt   DateTime        @default(now())
   updatedAt   DateTime        @updatedAt
+
+  @@index([companyId])
 }
 
 model Payment {
   id                String           @id @default(cuid())
+  companyId         String           @default("default-company")
+  company           Company          @relation(fields: [companyId], references: [id])
   amount            Decimal          @db.Decimal(15, 2)
   paymentDate       DateTime
   notes             String?
@@ -139,10 +187,14 @@ model Payment {
   supplierInvoice   SupplierInvoice? @relation(fields: [supplierInvoiceId], references: [id])
   createdAt         DateTime         @default(now())
   updatedAt         DateTime         @updatedAt
+
+  @@index([companyId])
 }
 
 model UploadedFile {
   id                String           @id @default(cuid())
+  companyId         String           @default("default-company")
+  company           Company          @relation(fields: [companyId], references: [id])
   originalName      String
   storedName        String
   mimeType          String
@@ -153,4 +205,6 @@ model UploadedFile {
   supplierInvoiceId String?
   supplierInvoice   SupplierInvoice? @relation(fields: [supplierInvoiceId], references: [id])
   createdAt         DateTime         @default(now())
+
+  @@index([companyId])
 }
