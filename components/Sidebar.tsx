@@ -44,6 +44,7 @@ const navItems: NavItem[] = [
     icon: FileText,
     children: [
       { href: "/invoices/customer", label: "Invoices" },
+      { href: "/estimates", label: "Estimates" },
       { href: "/customers", label: "Customers" },
       { href: "/products", label: "Products & Services", icon: Package, roles: ["ADMIN", "SALES"] },
     ],

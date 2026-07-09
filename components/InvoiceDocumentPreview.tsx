@@ -10,10 +10,11 @@ interface PreviewItem {
 }
 
 interface InvoiceDocumentPreviewProps {
-  docType: "INVOICE" | "BILL";
+  docType: "INVOICE" | "BILL" | "ESTIMATE";
   number: string;
   date: string;
   dueDate?: string;
+  dueDateLabel?: string;
   partyLabel: string;
   partyName: string;
   partyEmail?: string | null;
@@ -23,7 +24,7 @@ interface InvoiceDocumentPreviewProps {
   items: PreviewItem[];
   fees?: { label: string; amount: string }[];
   notes?: string;
-  paymentStatus: "UNPAID" | "PARTIALLY_PAID" | "PAID";
+  paymentStatus?: "UNPAID" | "PARTIALLY_PAID" | "PAID";
   paidAmount: string;
 }
 
@@ -38,6 +39,7 @@ export default function InvoiceDocumentPreview({
   number,
   date,
   dueDate,
+  dueDateLabel,
   partyLabel,
   partyName,
   partyEmail,
@@ -96,7 +98,7 @@ export default function InvoiceDocumentPreview({
     <div className="card">
       <div className="flex items-center justify-between mb-4">
         <h2 className="font-semibold text-gray-800">Preview</h2>
-        <PaymentBadge status={paymentStatus} />
+        {paymentStatus && <PaymentBadge status={paymentStatus} />}
       </div>
 
       <div className="border border-gray-200 rounded-xl overflow-hidden bg-white">
@@ -114,7 +116,7 @@ export default function InvoiceDocumentPreview({
               <p><span className="text-gray-400">Number:</span> {number || "—"}</p>
               <p><span className="text-gray-400">Date:</span> {invoiceDate ? formatDateOnly(invoiceDate) : "—"}</p>
               {dueDate !== undefined && (
-                <p><span className="text-gray-400">Due:</span> {paymentDueDate ? formatDateOnly(paymentDueDate) : "—"}</p>
+                <p><span className="text-gray-400">{dueDateLabel ?? "Due"}:</span> {paymentDueDate ? formatDateOnly(paymentDueDate) : "—"}</p>
               )}
             </div>
           </div>
@@ -165,17 +167,21 @@ export default function InvoiceDocumentPreview({
               </div>
             ))}
             <div className="flex justify-between font-bold text-base border-t pt-2">
-              <span>Total</span>
+              <span>{docType === "ESTIMATE" ? "Estimated Total" : "Total"}</span>
               <span>${total.toFixed(2)}</span>
             </div>
-            <div className="flex justify-between text-green-600">
-              <span>Paid</span>
-              <span>${paid.toFixed(2)}</span>
-            </div>
-            <div className="flex justify-between font-semibold text-red-600">
-              <span>Balance Due</span>
-              <span>${balanceDue.toFixed(2)}</span>
-            </div>
+            {docType !== "ESTIMATE" && (
+              <>
+                <div className="flex justify-between text-green-600">
+                  <span>Paid</span>
+                  <span>${paid.toFixed(2)}</span>
+                </div>
+                <div className="flex justify-between font-semibold text-red-600">
+                  <span>Balance Due</span>
+                  <span>${balanceDue.toFixed(2)}</span>
+                </div>
+              </>
+            )}
           </div>
         </div>
 

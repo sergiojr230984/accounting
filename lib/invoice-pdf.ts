@@ -75,7 +75,8 @@ export interface InvoicePDFData {
   employee?: { id: string; name: string } | null;
   // 'customer' (default) prints INVOICE + BILL TO + Unit price.
   // 'supplier' prints PURCHASE ORDER + VENDOR + Unit cost.
-  kind?: "customer" | "supplier";
+  // 'estimate' prints ESTIMATE + PREPARED FOR + Unit price, no payment section.
+  kind?: "customer" | "supplier" | "estimate";
 }
 
 // Brand colors
@@ -93,6 +94,7 @@ export function generateInvoicePDF(invoice: InvoicePDFData): jsPDF {
   const pageHeight = doc.internal.pageSize.getHeight();
   const margin = 48;
   const isPO = invoice.kind === "supplier";
+  const isEstimate = invoice.kind === "estimate";
 
   // ─── HEADER ────────────────────────────────────
   doc.setFillColor(...ORANGE);
@@ -136,9 +138,9 @@ export function generateInvoicePDF(invoice: InvoicePDFData): jsPDF {
   }
 
   doc.setFont("helvetica", "bold");
-  doc.setFontSize(isPO ? 28 : 36);
+  doc.setFontSize(isPO ? 28 : isEstimate ? 32 : 36);
   doc.setTextColor(...TEXT_DARK);
-  doc.text(isPO ? "PURCHASE ORDER" : "INVOICE", pageWidth - margin, 64, {
+  doc.text(isPO ? "PURCHASE ORDER" : isEstimate ? "ESTIMATE" : "INVOICE", pageWidth - margin, 64, {
     align: "right",
   });
 
@@ -154,7 +156,7 @@ export function generateInvoicePDF(invoice: InvoicePDFData): jsPDF {
   doc.setFont("helvetica", "normal");
   doc.setFontSize(8.5);
   doc.setTextColor(...TEXT_LIGHT);
-  doc.text(isPO ? "VENDOR" : "BILL TO", leftColX, metaTop);
+  doc.text(isPO ? "VENDOR" : isEstimate ? "PREPARED FOR" : "BILL TO", leftColX, metaTop);
 
   let billY = metaTop + 16;
   doc.setFont("helvetica", "bold");
@@ -223,12 +225,12 @@ export function generateInvoicePDF(invoice: InvoicePDFData): jsPDF {
 
   const rep = invoice.employee?.name?.trim() || "—";
   const rows: { label: string; value: string }[] = [
-    { label: isPO ? "PO Number" : "Invoice Number", value: invoice.invoiceNumber },
-    { label: "Sales Rep", value: rep },
-    { label: "Invoice Date", value: formatDateOnly(invoice.invoiceDate) },
+    { label: isPO ? "PO Number" : isEstimate ? "Estimate Number" : "Invoice Number", value: invoice.invoiceNumber },
+    ...(isEstimate ? [] : [{ label: "Sales Rep", value: rep }]),
+    { label: isEstimate ? "Estimate Date" : "Invoice Date", value: formatDateOnly(invoice.invoiceDate) },
     {
-      label: isPO ? "Expected" : "Payment Due",
-      value: invoice.dueDate ? formatDateOnly(invoice.dueDate) : "On receipt",
+      label: isPO ? "Expected" : isEstimate ? "Valid Until" : "Payment Due",
+      value: invoice.dueDate ? formatDateOnly(invoice.dueDate) : isEstimate ? "—" : "On receipt",
     },
   ];
 
@@ -252,7 +254,7 @@ export function generateInvoicePDF(invoice: InvoicePDFData): jsPDF {
   doc.setFont("helvetica", "normal");
   doc.setFontSize(9);
   doc.setTextColor(...TEXT_MID);
-  doc.text("Amount Due", rightColX + 12, metaY + 19);
+  doc.text(isEstimate ? "Estimated Total" : "Amount Due", rightColX + 12, metaY + 19);
   doc.setFont("helvetica", "bold");
   doc.setFontSize(13);
   doc.setTextColor(...TEXT_DARK);
@@ -365,37 +367,41 @@ export function generateInvoicePDF(invoice: InvoicePDFData): jsPDF {
   totalsY += 2;
   writeRow("Total", pdfCurrency(String(invoice.totalAmount)), { bold: true, size: 11 });
 
-  if (down > 0) {
-    writeRow("Down Payment", "-" + pdfCurrency(down.toFixed(2)), { muted: true });
-  }
-
-  const payments = invoice.payments ?? [];
-  const paymentSum = payments.reduce((acc, p) => acc + Number(p.amount), 0);
-  if (payments.length > 0) {
-    for (const p of payments) {
-      const dateStr = formatDateOnly(p.paymentDate);
-      const label = p.notes?.trim()
-        ? `Payment on ${dateStr} using ${p.notes.trim()}:`
-        : `Payment on ${dateStr}:`;
-      writeRow(label, "-" + pdfCurrency(String(p.amount)), { muted: true });
+  if (!isEstimate) {
+    if (down > 0) {
+      writeRow("Down Payment", "-" + pdfCurrency(down.toFixed(2)), { muted: true });
     }
-    const leftover = paid - paymentSum;
-    if (leftover > 0.005) {
-      writeRow("Payment Received", "-" + pdfCurrency(leftover.toFixed(2)), { muted: true });
-    }
-  } else if (paid > 0) {
-    writeRow("Payment Received", "-" + pdfCurrency(paid.toFixed(2)), { muted: true });
-  }
 
-  doc.setDrawColor(...RULE_GRAY);
-  doc.line(labelX, totalsY - 8, valueX, totalsY - 8);
-  totalsY += 4;
-  doc.setFont("helvetica", "bold");
-  doc.setFontSize(13);
-  doc.setTextColor(...BRAND_DARK);
-  doc.text("Balance Due", labelX, totalsY);
-  doc.text(pdfCurrency(balance.toFixed(2)), valueX, totalsY, { align: "right" });
-  totalsY += 30;
+    const payments = invoice.payments ?? [];
+    const paymentSum = payments.reduce((acc, p) => acc + Number(p.amount), 0);
+    if (payments.length > 0) {
+      for (const p of payments) {
+        const dateStr = formatDateOnly(p.paymentDate);
+        const label = p.notes?.trim()
+          ? `Payment on ${dateStr} using ${p.notes.trim()}:`
+          : `Payment on ${dateStr}:`;
+        writeRow(label, "-" + pdfCurrency(String(p.amount)), { muted: true });
+      }
+      const leftover = paid - paymentSum;
+      if (leftover > 0.005) {
+        writeRow("Payment Received", "-" + pdfCurrency(leftover.toFixed(2)), { muted: true });
+      }
+    } else if (paid > 0) {
+      writeRow("Payment Received", "-" + pdfCurrency(paid.toFixed(2)), { muted: true });
+    }
+
+    doc.setDrawColor(...RULE_GRAY);
+    doc.line(labelX, totalsY - 8, valueX, totalsY - 8);
+    totalsY += 4;
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(13);
+    doc.setTextColor(...BRAND_DARK);
+    doc.text("Balance Due", labelX, totalsY);
+    doc.text(pdfCurrency(balance.toFixed(2)), valueX, totalsY, { align: "right" });
+    totalsY += 30;
+  } else {
+    totalsY += 10;
+  }
 
   // ─── NOTES / TERMS ────────────────────────────────────
   if (invoice.notes && invoice.notes.trim()) {

@@ -26,6 +26,14 @@ enum SupplierCategory {
   OTHER
 }
 
+enum EstimateStatus {
+  DRAFT
+  SENT
+  ACCEPTED
+  DECLINED
+  EXPIRED
+}
+
 model User {
   id        String   @id @default(cuid())
   name      String
@@ -49,6 +57,7 @@ model Customer {
   createdAt              DateTime          @default(now())
   updatedAt              DateTime          @updatedAt
   invoices               CustomerInvoice[]
+  estimates              Estimate[]
 }
 
 model Supplier {
@@ -111,6 +120,42 @@ model CustomerInvoiceItem {
   lineTotal       Decimal         @db.Decimal(15, 2)
   createdAt       DateTime        @default(now())
   updatedAt       DateTime        @updatedAt
+}
+
+model Estimate {
+  id                 String         @id @default(cuid())
+  estimateNumber     String
+  customerId         String
+  customer           Customer       @relation(fields: [customerId], references: [id])
+  estimateDate       DateTime
+  expiryDate         DateTime?
+  subtotal           Decimal        @db.Decimal(15, 2)
+  taxAmount          Decimal        @db.Decimal(15, 2) @default(0)
+  totalAmount        Decimal        @db.Decimal(15, 2)
+  status             EstimateStatus @default(DRAFT)
+  notes              String?
+  viewToken          String?        @unique
+  sentAt             DateTime?
+  convertedInvoiceId String?        @unique
+  createdAt          DateTime       @default(now())
+  updatedAt          DateTime       @updatedAt
+  items              EstimateItem[]
+
+  @@unique([estimateNumber, customerId])
+}
+
+model EstimateItem {
+  id              String   @id @default(cuid())
+  estimateId      String
+  estimate        Estimate @relation(fields: [estimateId], references: [id], onDelete: Cascade)
+  description     String
+  itemDescription String?
+  quantity        Decimal  @db.Decimal(15, 4)
+  unitPrice       Decimal  @db.Decimal(15, 2)
+  taxRate         Decimal  @db.Decimal(5, 4) @default(0)
+  lineTotal       Decimal  @db.Decimal(15, 2)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
 }
 
 model SupplierInvoice {
