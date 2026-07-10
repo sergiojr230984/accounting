@@ -263,6 +263,21 @@ export default function InvoiceItemsEditor<T extends FieldValues = any>({
                           {t.name} ({(parseFloat(t.rate) * 100).toFixed(2)}%)
                         </option>
                       ))}
+                      {(() => {
+                        const currentRate = items?.[index]?.taxRate;
+                        if (
+                          currentRate &&
+                          parseFloat(currentRate) !== 0 &&
+                          !taxRates.some((t) => parseFloat(t.rate) === parseFloat(currentRate))
+                        ) {
+                          return (
+                            <option value={currentRate}>
+                              Custom ({(parseFloat(currentRate) * 100).toFixed(2)}%)
+                            </option>
+                          );
+                        }
+                        return null;
+                      })()}
                     </select>
                   ) : (
                     <input

@@ -96,7 +96,7 @@ export async function PATCH(
   }
   if (data.paidAmount !== undefined) updateData.paidAmount = data.paidAmount;
   if (data.downPayment !== undefined) updateData.downPayment = data.downPayment;
-  if (data.employeeId !== undefined) updateData.employeeId = data.employeeId;
+  if (data.employeeId !== undefined) updateData.employeeId = data.employeeId || null;
   if (data.commissionRate !== undefined) updateData.commissionRate = data.commissionRate;
   if (data.appliedFees !== undefined) updateData.appliedFees = data.appliedFees as unknown as object;
 
