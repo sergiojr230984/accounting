@@ -2,6 +2,7 @@
 
 import { signOut } from "next-auth/react";
 import { User, LogOut } from "lucide-react";
+import CompanySwitcher from "@/components/CompanySwitcher";
 
 interface TopBarProps {
   user: { name?: string | null; email?: string | null };
@@ -10,7 +11,7 @@ interface TopBarProps {
 export default function TopBar({ user }: TopBarProps) {
   return (
     <header className="h-14 bg-white border-b border-gray-200 flex items-center justify-between px-6 flex-shrink-0">
-      <div />
+      <CompanySwitcher />
       <div className="flex items-center gap-4">
         <div className="flex items-center gap-2 text-sm text-gray-700">
           <div className="w-8 h-8 bg-brand-100 rounded-full flex items-center justify-center">

@@ -15,6 +15,7 @@ export async function GET() {
   if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   const suppliers = await prisma.supplier.findMany({
+    where: { companyId: session.companyId },
     orderBy: { name: "asc" },
     include: {
       _count: { select: { invoices: true } },
@@ -35,6 +36,7 @@ export async function POST(request: Request) {
 
   const supplier = await prisma.supplier.create({
     data: {
+      companyId: session.companyId,
       name: parsed.data.name,
       email: parsed.data.email || null,
       phone: parsed.data.phone || null,

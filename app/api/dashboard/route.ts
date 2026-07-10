@@ -20,7 +20,10 @@ export async function GET(request: Request) {
 
   const [customerInvoices, supplierInvoices] = await Promise.all([
     prisma.customerInvoice.findMany({
-      where: hasDateFilter ? { invoiceDate: dateFilter } : {},
+      where: {
+        companyId: session.companyId,
+        ...(hasDateFilter ? { invoiceDate: dateFilter } : {}),
+      },
       select: {
         totalAmount: true,
         paidAmount: true,
@@ -29,7 +32,10 @@ export async function GET(request: Request) {
       },
     }),
     prisma.supplierInvoice.findMany({
-      where: hasDateFilter ? { invoiceDate: dateFilter } : {},
+      where: {
+        companyId: session.companyId,
+        ...(hasDateFilter ? { invoiceDate: dateFilter } : {}),
+      },
       select: {
         totalAmount: true,
         paidAmount: true,

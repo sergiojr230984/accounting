@@ -17,6 +17,19 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Must specify an invoice to attach to" }, { status: 400 });
   }
 
+  if (customerInvoiceId) {
+    const invoice = await prisma.customerInvoice.findFirst({
+      where: { id: customerInvoiceId, companyId: session.companyId },
+    });
+    if (!invoice) return NextResponse.json({ error: "Invoice not found" }, { status: 404 });
+  }
+  if (supplierInvoiceId) {
+    const invoice = await prisma.supplierInvoice.findFirst({
+      where: { id: supplierInvoiceId, companyId: session.companyId },
+    });
+    if (!invoice) return NextResponse.json({ error: "Invoice not found" }, { status: 404 });
+  }
+
   const validation = validateFile(file);
   if (!validation.ok) {
     return NextResponse.json({ error: validation.error }, { status: 400 });
@@ -26,6 +39,7 @@ export async function POST(request: Request) {
 
   const uploaded = await prisma.uploadedFile.create({
     data: {
+      companyId: session.companyId,
       originalName: file.name,
       storedName,
       mimeType: file.type,

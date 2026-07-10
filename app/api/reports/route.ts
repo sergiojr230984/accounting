@@ -20,7 +20,7 @@ export async function GET(request: Request) {
 
   if (type === "income") {
     const invoices = await prisma.customerInvoice.findMany({
-      where: hasDate ? { invoiceDate: dateFilter } : {},
+      where: { companyId: session.companyId, ...(hasDate ? { invoiceDate: dateFilter } : {}) },
       include: { customer: true, items: true },
       orderBy: { invoiceDate: "desc" },
     });
@@ -33,7 +33,7 @@ export async function GET(request: Request) {
 
   if (type === "expenses") {
     const invoices = await prisma.supplierInvoice.findMany({
-      where: hasDate ? { invoiceDate: dateFilter } : {},
+      where: { companyId: session.companyId, ...(hasDate ? { invoiceDate: dateFilter } : {}) },
       include: { supplier: true, items: true },
       orderBy: { invoiceDate: "desc" },
     });
@@ -56,11 +56,11 @@ export async function GET(request: Request) {
   if (type === "profit-loss") {
     const [customerInvoices, supplierInvoices] = await Promise.all([
       prisma.customerInvoice.findMany({
-        where: hasDate ? { invoiceDate: dateFilter } : {},
+        where: { companyId: session.companyId, ...(hasDate ? { invoiceDate: dateFilter } : {}) },
         select: { totalAmount: true, invoiceDate: true },
       }),
       prisma.supplierInvoice.findMany({
-        where: hasDate ? { invoiceDate: dateFilter } : {},
+        where: { companyId: session.companyId, ...(hasDate ? { invoiceDate: dateFilter } : {}) },
         select: { totalAmount: true, category: true, invoiceDate: true },
       }),
     ]);
@@ -100,7 +100,7 @@ export async function GET(request: Request) {
 
   if (type === "customer-outstanding") {
     const invoices = await prisma.customerInvoice.findMany({
-      where: { paymentStatus: { not: "PAID" } },
+      where: { companyId: session.companyId, paymentStatus: { not: "PAID" } },
       include: { customer: true },
       orderBy: { dueDate: "asc" },
     });
@@ -116,7 +116,7 @@ export async function GET(request: Request) {
 
   if (type === "supplier-outstanding") {
     const invoices = await prisma.supplierInvoice.findMany({
-      where: { paymentStatus: { not: "PAID" } },
+      where: { companyId: session.companyId, paymentStatus: { not: "PAID" } },
       include: { supplier: true },
       orderBy: { dueDate: "asc" },
     });

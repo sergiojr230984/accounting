@@ -34,8 +34,8 @@ export async function GET(
 
   const { id } = await params;
 
-  const invoice = await prisma.supplierInvoice.findUnique({
-    where: { id },
+  const invoice = await prisma.supplierInvoice.findFirst({
+    where: { id, companyId: session.companyId },
     include: {
       supplier: true,
       items: true,
@@ -62,7 +62,9 @@ export async function PATCH(
     return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
   }
 
-  const existing = await prisma.supplierInvoice.findUnique({ where: { id } });
+  const existing = await prisma.supplierInvoice.findFirst({
+    where: { id, companyId: session.companyId },
+  });
   if (!existing) return NextResponse.json({ error: "Not found" }, { status: 404 });
 
   const data = parsed.data;
@@ -97,6 +99,7 @@ export async function PATCH(
     await prisma.supplierInvoiceItem.deleteMany({ where: { invoiceId: id } });
     updateData.items = {
       create: computedItems.map((item) => ({
+        companyId: session.companyId,
         description: item.description,
         quantity: item.quantity,
         unitCost: item.unitCost,
@@ -123,6 +126,11 @@ export async function DELETE(
   if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   const { id } = await params;
+  const existing = await prisma.supplierInvoice.findFirst({
+    where: { id, companyId: session.companyId },
+  });
+  if (!existing) return NextResponse.json({ error: "Not found" }, { status: 404 });
+
   await prisma.supplierInvoice.delete({ where: { id } });
   return NextResponse.json({ ok: true });
 }

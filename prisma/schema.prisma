@@ -35,6 +35,7 @@ model Company {
   updatedAt DateTime @updatedAt
 
   users                User[]
+  members              CompanyMember[]
   customers            Customer[]
   suppliers            Supplier[]
   customerInvoices     CustomerInvoice[]
@@ -45,16 +46,33 @@ model Company {
   files                UploadedFile[]
 }
 
-model User {
+// A user can belong to more than one company; this is what lets the app's
+// company switcher list and move between them. User.companyId above stays
+// as the user's home/default company (used at first sign-in).
+model CompanyMember {
   id        String   @id @default(cuid())
-  companyId String   @default("default-company")
-  company   Company  @relation(fields: [companyId], references: [id])
-  name      String
-  email     String   @unique
-  password  String
+  companyId String
+  company   Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
   role      Role     @default(MANAGER)
   createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+
+  @@unique([companyId, userId])
+  @@index([userId])
+}
+
+model User {
+  id          String          @id @default(cuid())
+  companyId   String          @default("default-company")
+  company     Company         @relation(fields: [companyId], references: [id])
+  name        String
+  email       String          @unique
+  password    String
+  role        Role            @default(MANAGER)
+  memberships CompanyMember[]
+  createdAt   DateTime        @default(now())
+  updatedAt   DateTime        @updatedAt
 
   @@index([companyId])
 }

@@ -5,23 +5,21 @@ import { z } from "zod";
 
 const schema = z.object({
   name: z.string().min(1),
-  email: z.string().email().optional().or(z.literal("")),
-  phone: z.string().optional(),
-  address: z.string().optional(),
 });
 
 export async function GET() {
   const session = await auth();
   if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-  const customers = await prisma.customer.findMany({
-    where: { companyId: session.companyId },
-    orderBy: { name: "asc" },
-    include: {
-      _count: { select: { invoices: true } },
-    },
+  const memberships = await prisma.companyMember.findMany({
+    where: { userId: session.user.id },
+    include: { company: { select: { id: true, name: true } } },
+    orderBy: { createdAt: "asc" },
   });
-  return NextResponse.json(customers);
+
+  return NextResponse.json(
+    memberships.map((m) => ({ id: m.company.id, name: m.company.name, role: m.role }))
+  );
 }
 
 export async function POST(request: Request) {
@@ -34,14 +32,14 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
   }
 
-  const customer = await prisma.customer.create({
+  const company = await prisma.company.create({
     data: {
-      companyId: session.companyId,
       name: parsed.data.name,
-      email: parsed.data.email || null,
-      phone: parsed.data.phone || null,
-      address: parsed.data.address || null,
+      members: {
+        create: { userId: session.user.id, role: "ADMIN" },
+      },
     },
   });
-  return NextResponse.json(customer, { status: 201 });
+
+  return NextResponse.json({ id: company.id, name: company.name, role: "ADMIN" }, { status: 201 });
 }

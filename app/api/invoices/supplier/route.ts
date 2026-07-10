@@ -36,7 +36,7 @@ export async function GET(request: Request) {
   const page = parseInt(searchParams.get("page") ?? "1");
   const limit = parseInt(searchParams.get("limit") ?? "20");
 
-  const where: Record<string, unknown> = {};
+  const where: Record<string, unknown> = { companyId: session.companyId };
   if (supplierId) where.supplierId = supplierId;
   if (category) where.category = category;
   if (status) where.paymentStatus = status;
@@ -78,6 +78,13 @@ export async function POST(request: Request) {
   const { supplierId, invoiceNumber, invoiceDate, dueDate, category, items, notes, paymentStatus, paidAmount } =
     parsed.data;
 
+  const supplier = await prisma.supplier.findFirst({
+    where: { id: supplierId, companyId: session.companyId },
+  });
+  if (!supplier) {
+    return NextResponse.json({ error: "Supplier not found" }, { status: 404 });
+  }
+
   const existing = await prisma.supplierInvoice.findUnique({
     where: { invoiceNumber_supplierId: { invoiceNumber, supplierId } },
   });
@@ -105,6 +112,7 @@ export async function POST(request: Request) {
 
   const invoice = await prisma.supplierInvoice.create({
     data: {
+      companyId: session.companyId,
       supplierId,
       invoiceNumber,
       invoiceDate: new Date(invoiceDate),
@@ -118,6 +126,7 @@ export async function POST(request: Request) {
       notes,
       items: {
         create: computedItems.map((item) => ({
+          companyId: session.companyId,
           description: item.description,
           quantity: item.quantity,
           unitCost: item.unitCost,

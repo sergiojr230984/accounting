@@ -374,9 +374,113 @@ async function main() {
     ],
   });
 
+  // A second company, to demo the company switcher. The admin belongs to
+  // both companies (so switching is visible with a single login); the
+  // manager only belongs to the original one.
+  const northwind = await prisma.company.upsert({
+    where: { id: "company-northwind" },
+    update: {},
+    create: { id: "company-northwind", name: "Northwind Trading Co" },
+  });
+
+  await prisma.companyMember.upsert({
+    where: { companyId_userId: { companyId: northwind.id, userId: admin.id } },
+    update: {},
+    create: { companyId: northwind.id, userId: admin.id, role: "ADMIN" },
+  });
+
+  const northwindCustomer = await prisma.customer.upsert({
+    where: { id: "cust-northwind-contoso" },
+    update: {},
+    create: {
+      id: "cust-northwind-contoso",
+      companyId: northwind.id,
+      name: "Contoso Ltd",
+      email: "ap@contoso.com",
+      phone: "+1-555-0900",
+      address: "1 Contoso Way, Redmond, WA 98052",
+    },
+  });
+
+  const northwindSupplier = await prisma.supplier.upsert({
+    where: { id: "supp-northwind-fabrikam" },
+    update: {},
+    create: {
+      id: "supp-northwind-fabrikam",
+      companyId: northwind.id,
+      name: "Fabrikam Supplies",
+      email: "billing@fabrikam.com",
+      phone: "+1-555-0910",
+      address: "22 Fabrikam Ave, Seattle, WA 98101",
+    },
+  });
+
+  await prisma.customerInvoice.upsert({
+    where: { id: "ci-northwind-001" },
+    update: {},
+    create: {
+      id: "ci-northwind-001",
+      companyId: northwind.id,
+      invoiceNumber: "NW-2024-001",
+      customerId: northwindCustomer.id,
+      invoiceDate: new Date("2024-05-01"),
+      dueDate: new Date("2024-06-01"),
+      subtotal: new Decimal("6000.00"),
+      taxAmount: new Decimal("480.00"),
+      totalAmount: new Decimal("6480.00"),
+      paidAmount: new Decimal("0.00"),
+      paymentStatus: PaymentStatus.UNPAID,
+      notes: "Northwind onboarding project",
+      items: {
+        create: [
+          {
+            companyId: northwind.id,
+            description: "Implementation Services",
+            quantity: new Decimal("40"),
+            unitPrice: new Decimal("150.00"),
+            taxRate: new Decimal("0.08"),
+            lineTotal: new Decimal("6000.00"),
+          },
+        ],
+      },
+    },
+  });
+
+  await prisma.supplierInvoice.upsert({
+    where: { id: "si-northwind-001" },
+    update: {},
+    create: {
+      id: "si-northwind-001",
+      companyId: northwind.id,
+      invoiceNumber: "FB-2024-0501",
+      supplierId: northwindSupplier.id,
+      invoiceDate: new Date("2024-05-10"),
+      dueDate: new Date("2024-06-10"),
+      category: SupplierCategory.OPERATING_EXPENSE,
+      subtotal: new Decimal("900.00"),
+      taxAmount: new Decimal("72.00"),
+      totalAmount: new Decimal("972.00"),
+      paidAmount: new Decimal("0.00"),
+      paymentStatus: PaymentStatus.UNPAID,
+      notes: "Office setup supplies",
+      items: {
+        create: [
+          {
+            companyId: northwind.id,
+            description: "Office Furniture Set",
+            quantity: new Decimal("1"),
+            unitCost: new Decimal("900.00"),
+            taxRate: new Decimal("0.08"),
+            lineTotal: new Decimal("900.00"),
+          },
+        ],
+      },
+    },
+  });
+
   console.log("✅ Seed complete");
-  console.log("  Admin: admin@bizledger.com / admin123");
-  console.log("  Manager: manager@bizledger.com / manager123");
+  console.log("  Admin: admin@bizledger.com / admin123 (member of Default Company + Northwind Trading Co)");
+  console.log("  Manager: manager@bizledger.com / manager123 (member of Default Company)");
 }
 
 main()

@@ -34,7 +34,7 @@ export async function GET(request: Request) {
   const page = parseInt(searchParams.get("page") ?? "1");
   const limit = parseInt(searchParams.get("limit") ?? "20");
 
-  const where: Record<string, unknown> = {};
+  const where: Record<string, unknown> = { companyId: session.companyId };
   if (customerId) where.customerId = customerId;
   if (status) where.paymentStatus = status;
   if (from || to) {
@@ -75,6 +75,13 @@ export async function POST(request: Request) {
   const { customerId, invoiceNumber, invoiceDate, dueDate, items, notes, paymentStatus, paidAmount } =
     parsed.data;
 
+  const customer = await prisma.customer.findFirst({
+    where: { id: customerId, companyId: session.companyId },
+  });
+  if (!customer) {
+    return NextResponse.json({ error: "Customer not found" }, { status: 404 });
+  }
+
   // Duplicate check
   const existing = await prisma.customerInvoice.findUnique({
     where: { invoiceNumber_customerId: { invoiceNumber, customerId } },
@@ -104,6 +111,7 @@ export async function POST(request: Request) {
 
   const invoice = await prisma.customerInvoice.create({
     data: {
+      companyId: session.companyId,
       customerId,
       invoiceNumber,
       invoiceDate: new Date(invoiceDate),
@@ -116,6 +124,7 @@ export async function POST(request: Request) {
       notes,
       items: {
         create: computedItems.map((item) => ({
+          companyId: session.companyId,
           description: item.description,
           quantity: item.quantity,
           unitPrice: item.unitPrice,

@@ -15,17 +15,32 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
     signIn: "/login",
   },
   callbacks: {
-    async jwt({ token, user }) {
-      if (user) {
+    async jwt({ token, user, trigger, session }) {
+      if (user?.id) {
         token.id = user.id;
-        token.role = (user as { role?: string }).role;
+        token.role = user.role;
+        token.companyId = user.companyId;
       }
+
+      // Fires when the client calls `update({ companyId })` to switch the
+      // active company. Re-verify membership server-side rather than
+      // trusting the client-supplied companyId directly.
+      if (trigger === "update" && session?.companyId && token.id) {
+        const membership = await prisma.companyMember.findUnique({
+          where: { companyId_userId: { companyId: session.companyId, userId: token.id } },
+        });
+        if (membership) {
+          token.companyId = session.companyId;
+        }
+      }
+
       return token;
     },
     async session({ session, token }) {
       if (token) {
-        session.user.id = token.id as string;
-        (session.user as { role?: string }).role = token.role as string;
+        session.user.id = token.id;
+        session.user.role = token.role;
+        session.companyId = token.companyId;
       }
       return session;
     },
@@ -44,7 +59,20 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
         const valid = await bcrypt.compare(parsed.data.password, user.password);
         if (!valid) return null;
 
-        return { id: user.id, name: user.name, email: user.email, role: user.role };
+        // Home company defaults to the user's oldest membership, falling
+        // back to their companyId column for pre-CompanyMember accounts.
+        const homeMembership = await prisma.companyMember.findFirst({
+          where: { userId: user.id },
+          orderBy: { createdAt: "asc" },
+        });
+
+        return {
+          id: user.id,
+          name: user.name,
+          email: user.email,
+          role: user.role,
+          companyId: homeMembership?.companyId ?? user.companyId,
+        };
       },
     }),
   ],
