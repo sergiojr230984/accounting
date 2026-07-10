@@ -721,6 +721,13 @@ export default function NewCustomerInvoicePage() {
                                   {t.name} ({(parseFloat(t.rate) * 100).toFixed(2)}%)
                                 </option>
                               ))}
+                              {item.taxRate &&
+                                parseFloat(item.taxRate) !== 0 &&
+                                !taxRates.some((t) => parseFloat(t.rate) === parseFloat(item.taxRate)) && (
+                                  <option value={item.taxRate}>
+                                    Custom ({(parseFloat(item.taxRate) * 100).toFixed(2)}%)
+                                  </option>
+                                )}
                             </select>
                           ) : (
                             <input
@@ -757,7 +764,7 @@ export default function NewCustomerInvoicePage() {
                               <span className="inline-block w-3 border-t border-gray-300 align-middle" />
                             </td>
                             <td className="px-2 py-1 text-right text-xs uppercase tracking-wide text-gray-400 font-medium">
-                              Tax
+                              Fee
                             </td>
                             <td colSpan={2} className="px-2 py-1">
                               <select
