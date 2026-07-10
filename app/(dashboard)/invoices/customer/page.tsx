@@ -2,10 +2,10 @@
 
 import { useState, useEffect, useCallback } from "react";
 import Link from "next/link";
-import { Plus, Search, Filter } from "lucide-react";
-import { format } from "date-fns";
+import { Plus, Search, Filter, AlertTriangle } from "lucide-react";
 import PaymentBadge from "@/components/PaymentBadge";
 import { formatCurrency } from "@/lib/money";
+import { formatDateOnly } from "@/lib/date";
 
 interface Invoice {
   id: string;
@@ -22,6 +22,7 @@ export default function CustomerInvoicesPage() {
   const [invoices, setInvoices] = useState<Invoice[]>([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
+  const [notLinked, setNotLinked] = useState(false);
   const [search, setSearch] = useState("");
   const [status, setStatus] = useState("");
   const [from, setFrom] = useState("");
@@ -38,8 +39,9 @@ export default function CustomerInvoicesPage() {
       if (to) params.set("to", to);
       const res = await fetch(`/api/invoices/customer?${params}`);
       const data = await res.json();
-      setInvoices(data.invoices);
-      setTotal(data.total);
+      setInvoices(data.invoices ?? []);
+      setTotal(data.total ?? 0);
+      setNotLinked(data.notLinked ?? false);
     } finally {
       setLoading(false);
     }
@@ -67,6 +69,19 @@ export default function CustomerInvoicesPage() {
           New Invoice
         </Link>
       </div>
+
+      {notLinked && (
+        <div className="flex items-start gap-3 bg-amber-50 border border-amber-200 rounded-xl p-4">
+          <AlertTriangle className="w-5 h-5 text-amber-500 flex-shrink-0 mt-0.5" />
+          <div>
+            <p className="text-sm font-medium text-amber-800">Your account is not linked to an employee profile</p>
+            <p className="text-sm text-amber-600 mt-0.5">
+              Contact your administrator to link your login email to your employee record.
+              Until then, your invoices will not appear here.
+            </p>
+          </div>
+        </div>
+      )}
 
       {/* Filters */}
       <div className="card py-4">
@@ -132,8 +147,8 @@ export default function CustomerInvoicesPage() {
                   <tr key={inv.id} className="hover:bg-gray-50 transition-colors">
                     <td className="px-5 py-3 font-medium text-brand-600">{inv.invoiceNumber}</td>
                     <td className="px-5 py-3 text-gray-700">{inv.customer.name}</td>
-                    <td className="px-5 py-3 text-gray-500">{format(new Date(inv.invoiceDate), "MMM d, yyyy")}</td>
-                    <td className="px-5 py-3 text-gray-500">{format(new Date(inv.dueDate), "MMM d, yyyy")}</td>
+                    <td className="px-5 py-3 text-gray-500">{formatDateOnly(inv.invoiceDate)}</td>
+                    <td className="px-5 py-3 text-gray-500">{formatDateOnly(inv.dueDate)}</td>
                     <td className="px-5 py-3 text-right font-medium">{formatCurrency(inv.totalAmount)}</td>
                     <td className="px-5 py-3 text-right text-gray-500">{formatCurrency(inv.paidAmount)}</td>
                     <td className="px-5 py-3 text-center">
@@ -149,7 +164,7 @@ export default function CustomerInvoicesPage() {
           </tbody>
         </table>
 
-        {!loading && filtered.length === 0 && (
+        {!loading && !notLinked && filtered.length === 0 && (
           <div className="text-center py-12 text-gray-400">
             <p>No invoices found</p>
           </div>

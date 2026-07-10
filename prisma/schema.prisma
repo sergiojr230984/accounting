@@ -10,6 +10,7 @@ datasource db {
 enum Role {
   ADMIN
   MANAGER
+  SALES
 }
 
 enum PaymentStatus {
@@ -26,106 +27,128 @@ enum SupplierCategory {
 }
 
 model User {
-  id        String   @id @default(cuid())
+  id        String    @id @default(cuid())
   name      String
-  email     String   @unique
+  email     String    @unique
   password  String
-  role      Role     @default(MANAGER)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  role      Role      @default(MANAGER)
+  active    Boolean   @default(true)
+  lastLogin DateTime?
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
 }
 
 model Customer {
-  id        String            @id @default(cuid())
-  name      String
-  email     String?
-  phone     String?
-  address   String?
-  createdAt DateTime          @default(now())
-  updatedAt DateTime          @updatedAt
-  invoices  CustomerInvoice[]
+  id                    String            @id @default(cuid())
+  name                  String
+  email                 String?
+  phone                 String?
+  address               String?
+  emergencyContactName  String?
+  emergencyContactPhone String?
+  createdAt             DateTime          @default(now())
+  updatedAt             DateTime          @updatedAt
+  invoices              CustomerInvoice[]
 }
 
 model Supplier {
-  id        String            @id @default(cuid())
-  name      String
-  email     String?
-  phone     String?
-  address   String?
-  createdAt DateTime          @default(now())
-  updatedAt DateTime          @updatedAt
-  invoices  SupplierInvoice[]
+  id                  String            @id @default(cuid())
+  name                String
+  email               String?
+  phone               String?
+  address             String?
+  paymentTermsDays    Int               @default(30)
+  defaultCategory     SupplierCategory?
+  bankName            String?
+  bankAccountNumber   String?
+  bankRouting         String?
+  zelle               String?
+  paymentInstructions String?
+  createdAt           DateTime          @default(now())
+  updatedAt           DateTime          @updatedAt
+  invoices            SupplierInvoice[]
 }
 
 model CustomerInvoice {
-  id            String                @id @default(cuid())
-  invoiceNumber String
-  customerId    String
-  customer      Customer              @relation(fields: [customerId], references: [id])
-  invoiceDate   DateTime
-  dueDate       DateTime
-  subtotal      Decimal               @db.Decimal(15, 2)
-  taxAmount     Decimal               @db.Decimal(15, 2) @default(0)
-  totalAmount   Decimal               @db.Decimal(15, 2)
-  paidAmount    Decimal               @db.Decimal(15, 2) @default(0)
-  paymentStatus PaymentStatus         @default(UNPAID)
-  notes         String?
-  createdAt     DateTime              @default(now())
-  updatedAt     DateTime              @updatedAt
-  items         CustomerInvoiceItem[]
-  payments      Payment[]
-  files         UploadedFile[]
+  id             String                @id @default(cuid())
+  invoiceNumber  String
+  customerId     String
+  customer       Customer              @relation(fields: [customerId], references: [id])
+  invoiceDate    DateTime
+  dueDate        DateTime
+  subtotal       Decimal               @db.Decimal(15, 2)
+  taxAmount      Decimal               @db.Decimal(15, 2) @default(0)
+  totalAmount    Decimal               @db.Decimal(15, 2)
+  paidAmount     Decimal               @db.Decimal(15, 2) @default(0)
+  downPayment    Decimal               @db.Decimal(15, 2) @default(0)
+  creditCardFee  Decimal               @db.Decimal(15, 2) @default(0)
+  appliedFees    Json                  @default("[]")
+  paymentStatus  PaymentStatus         @default(UNPAID)
+  notes          String?
+  viewToken      String?               @unique
+  sentAt         DateTime?
+  employeeId     String?
+  employee       Employee?             @relation(fields: [employeeId], references: [id])
+  commissionRate Decimal               @db.Decimal(5, 4) @default(0)
+  createdAt      DateTime              @default(now())
+  updatedAt      DateTime              @updatedAt
+  items          CustomerInvoiceItem[]
+  payments       Payment[]
+  files          UploadedFile[]
 
   @@unique([invoiceNumber, customerId])
 }
 
 model CustomerInvoiceItem {
-  id          String          @id @default(cuid())
-  invoiceId   String
-  invoice     CustomerInvoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
-  description String
-  quantity    Decimal         @db.Decimal(15, 4)
-  unitPrice   Decimal         @db.Decimal(15, 2)
-  taxRate     Decimal         @db.Decimal(5, 4) @default(0)
-  lineTotal   Decimal         @db.Decimal(15, 2)
-  createdAt   DateTime        @default(now())
-  updatedAt   DateTime        @updatedAt
+  id              String          @id @default(cuid())
+  invoiceId       String
+  invoice         CustomerInvoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  description     String
+  itemDescription String?
+  quantity        Decimal         @db.Decimal(15, 4)
+  unitPrice       Decimal         @db.Decimal(15, 2)
+  taxRate         Decimal         @db.Decimal(5, 4) @default(0)
+  lineTotal       Decimal         @db.Decimal(15, 2)
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
 }
 
 model SupplierInvoice {
-  id            String                @id @default(cuid())
-  invoiceNumber String
-  supplierId    String
-  supplier      Supplier              @relation(fields: [supplierId], references: [id])
-  invoiceDate   DateTime
-  dueDate       DateTime?
-  category      SupplierCategory
-  subtotal      Decimal               @db.Decimal(15, 2)
-  taxAmount     Decimal               @db.Decimal(15, 2) @default(0)
-  totalAmount   Decimal               @db.Decimal(15, 2)
-  paidAmount    Decimal               @db.Decimal(15, 2) @default(0)
-  paymentStatus PaymentStatus         @default(UNPAID)
-  notes         String?
-  createdAt     DateTime              @default(now())
-  updatedAt     DateTime              @updatedAt
-  items         SupplierInvoiceItem[]
-  payments      Payment[]
-  files         UploadedFile[]
+  id                 String                @id @default(cuid())
+  invoiceNumber      String
+  supplierId         String
+  supplier           Supplier              @relation(fields: [supplierId], references: [id])
+  invoiceDate        DateTime
+  dueDate            DateTime?
+  category           SupplierCategory
+  subtotal           Decimal               @db.Decimal(15, 2)
+  taxAmount          Decimal               @db.Decimal(15, 2) @default(0)
+  totalAmount        Decimal               @db.Decimal(15, 2)
+  paidAmount         Decimal               @db.Decimal(15, 2) @default(0)
+  paymentStatus      PaymentStatus         @default(UNPAID)
+  notes              String?
+  customerInvoiceRef String?
+  createdAt          DateTime              @default(now())
+  updatedAt          DateTime              @updatedAt
+  items              SupplierInvoiceItem[]
+  payments           Payment[]
+  files              UploadedFile[]
 
   @@unique([invoiceNumber, supplierId])
 }
 
 model SupplierInvoiceItem {
-  id          String          @id @default(cuid())
-  invoiceId   String
-  invoice     SupplierInvoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
-  description String
-  quantity    Decimal         @db.Decimal(15, 4)
-  unitCost    Decimal         @db.Decimal(15, 2)
-  taxRate     Decimal         @db.Decimal(5, 4) @default(0)
-  lineTotal   Decimal         @db.Decimal(15, 2)
-  createdAt   DateTime        @default(now())
-  updatedAt   DateTime        @updatedAt
+  id              String          @id @default(cuid())
+  invoiceId       String
+  invoice         SupplierInvoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  description     String
+  itemDescription String?
+  quantity        Decimal         @db.Decimal(15, 4)
+  unitCost        Decimal         @db.Decimal(15, 2)
+  taxRate         Decimal         @db.Decimal(5, 4) @default(0)
+  lineTotal       Decimal         @db.Decimal(15, 2)
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
 }
 
 model Payment {
@@ -139,6 +162,57 @@ model Payment {
   supplierInvoice   SupplierInvoice? @relation(fields: [supplierInvoiceId], references: [id])
   createdAt         DateTime         @default(now())
   updatedAt         DateTime         @updatedAt
+}
+
+model CompanyProfile {
+  id                     String   @id @default("default")
+  name                   String?
+  logo                   String?
+  address                String?
+  email                  String?
+  phone                  String?
+  creditCardFeeRate      Decimal  @db.Decimal(5, 4) @default(0)
+  creditCardFeeLabel     String   @default("Credit card processing fee")
+  customFees             Json     @default("[]")
+  customerInvoicePrefix  String   @default("INV-2026-")
+  customerInvoiceNextSeq Int      @default(1001)
+  supplierInvoicePrefix  String   @default("PO-2026-")
+  supplierInvoiceNextSeq Int      @default(1001)
+  createdAt              DateTime @default(now())
+  updatedAt              DateTime @updatedAt
+}
+
+model TaxRate {
+  id        String   @id @default(cuid())
+  name      String
+  rate      Decimal  @db.Decimal(5, 4)
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Product {
+  id            String   @id @default(cuid())
+  name          String
+  description   String?
+  price         Decimal  @db.Decimal(15, 2) @default(0)
+  taxRate       Decimal  @db.Decimal(5, 4) @default(0)
+  incomeAccount String?
+  active        Boolean  @default(true)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+}
+
+model Employee {
+  id             String            @id @default(cuid())
+  name           String
+  email          String?           @unique
+  phone          String?
+  commissionRate Decimal           @db.Decimal(5, 4) @default(0)
+  active         Boolean           @default(true)
+  createdAt      DateTime          @default(now())
+  updatedAt      DateTime          @updatedAt
+  invoices       CustomerInvoice[]
 }
 
 model UploadedFile {

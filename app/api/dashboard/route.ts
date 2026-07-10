@@ -91,7 +91,7 @@ export async function GET(request: Request) {
 
   customerInvoices.forEach((inv) => {
     const d = new Date(inv.invoiceDate);
-    const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+    const key = `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}`;
     if (monthlyMap.has(key)) {
       monthlyMap.get(key)!.income = monthlyMap
         .get(key)!
@@ -101,7 +101,7 @@ export async function GET(request: Request) {
 
   supplierInvoices.forEach((inv) => {
     const d = new Date(inv.invoiceDate);
-    const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+    const key = `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}`;
     if (monthlyMap.has(key)) {
       monthlyMap.get(key)!.expenses = monthlyMap
         .get(key)!

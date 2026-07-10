@@ -6,6 +6,7 @@ import Decimal from "decimal.js";
 
 const itemSchema = z.object({
   description: z.string().min(1),
+  itemDescription: z.string().optional(),
   quantity: z.string().regex(/^\d+(\.\d+)?$/),
   unitCost: z.string().regex(/^\d+(\.\d+)?$/),
   taxRate: z.string().regex(/^\d+(\.\d+)?$/).default("0"),
@@ -21,6 +22,7 @@ const invoiceSchema = z.object({
   notes: z.string().optional(),
   paymentStatus: z.enum(["UNPAID", "PARTIALLY_PAID", "PAID"]).default("UNPAID"),
   paidAmount: z.string().default("0"),
+  customerInvoiceRef: z.string().optional(),
 });
 
 export async function GET(request: Request) {
@@ -75,7 +77,7 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
   }
 
-  const { supplierId, invoiceNumber, invoiceDate, dueDate, category, items, notes, paymentStatus, paidAmount } =
+  const { supplierId, invoiceNumber, invoiceDate, dueDate, category, items, notes, paymentStatus, paidAmount, customerInvoiceRef } =
     parsed.data;
 
   const existing = await prisma.supplierInvoice.findUnique({
@@ -116,9 +118,11 @@ export async function POST(request: Request) {
       paidAmount,
       paymentStatus,
       notes,
+      customerInvoiceRef: customerInvoiceRef || null,
       items: {
         create: computedItems.map((item) => ({
           description: item.description,
+          itemDescription: item.itemDescription ?? null,
           quantity: item.quantity,
           unitCost: item.unitCost,
           taxRate: item.taxRate,
@@ -128,6 +132,13 @@ export async function POST(request: Request) {
     },
     include: { supplier: true, items: true },
   });
+
+  await prisma.companyProfile
+    .update({
+      where: { id: "default" },
+      data: { supplierInvoiceNextSeq: { increment: 1 } },
+    })
+    .catch(() => undefined);
 
   return NextResponse.json(invoice, { status: 201 });
 }

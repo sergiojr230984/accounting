@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
@@ -7,59 +8,195 @@ import {
   FileText,
   ShoppingCart,
   Users,
-  Truck,
   BarChart3,
   BookOpen,
+  Plus,
+  ChevronDown,
+  Settings,
+  Package,
 } from "lucide-react";
 
-const navItems = [
-  { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
-  { href: "/invoices/customer", label: "Customer Invoices", icon: FileText },
-  { href: "/invoices/supplier", label: "Supplier Invoices", icon: ShoppingCart },
-  { href: "/customers", label: "Customers", icon: Users },
-  { href: "/suppliers", label: "Suppliers", icon: Truck },
-  { href: "/reports", label: "Reports", icon: BarChart3 },
+type Role = "ADMIN" | "MANAGER" | "SALES";
+
+type LeafItem = {
+  href: string;
+  label: string;
+  icon?: React.ComponentType<{ className?: string }>;
+  roles?: Role[];
+};
+type GroupItem = {
+  label: string;
+  icon: React.ComponentType<{ className?: string }>;
+  children: LeafItem[];
+  roles?: Role[];
+};
+type NavItem = LeafItem | GroupItem;
+
+function isLeaf(item: NavItem): item is LeafItem {
+  return (item as LeafItem).href !== undefined;
+}
+
+// roles: if defined, only those roles see this item. Undefined = all roles.
+const navItems: NavItem[] = [
+  { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard, roles: ["ADMIN"] },
+  {
+    label: "Sales & Payments",
+    icon: FileText,
+    children: [
+      { href: "/invoices/customer", label: "Invoices" },
+      { href: "/customers", label: "Customers" },
+      { href: "/products", label: "Products & Services", icon: Package, roles: ["ADMIN", "SALES"] },
+    ],
+  },
+  {
+    label: "Purchases",
+    icon: ShoppingCart,
+    children: [
+      { href: "/invoices/supplier", label: "Bills" },
+      { href: "/suppliers", label: "Suppliers" },
+    ],
+  },
+  {
+    label: "Team",
+    icon: Users,
+    roles: ["ADMIN"],
+    children: [
+      { href: "/employees", label: "Employees" },
+      { href: "/performance", label: "Performance" },
+    ],
+  },
+  {
+    label: "Reports",
+    icon: BarChart3,
+    roles: ["ADMIN", "MANAGER"],
+    children: [
+      { href: "/reports", label: "Reportes Financieros" },
+      { href: "/reports/frequency", label: "Frecuencia de Productos", roles: ["ADMIN"] },
+    ],
+  },
+  { href: "/settings", label: "Settings", icon: Settings, roles: ["ADMIN"] },
 ];
 
-export default function Sidebar() {
+function filterByRole(items: NavItem[], role: Role): NavItem[] {
+  return items
+    .filter((item) => !item.roles || item.roles.includes(role))
+    .map((item) => {
+      if (isLeaf(item)) return item;
+      return {
+        ...item,
+        children: item.children.filter((c) => !c.roles || c.roles.includes(role)),
+      };
+    })
+    .filter((item) => isLeaf(item) || item.children.length > 0);
+}
+
+export default function Sidebar({ role }: { role?: string }) {
   const pathname = usePathname();
+  const effectiveRole: Role = role === "ADMIN" ? "ADMIN" : role === "SALES" ? "SALES" : "MANAGER";
+  const visibleNav = filterByRole(navItems, effectiveRole);
+
+  const [openGroups, setOpenGroups] = useState<Record<string, boolean>>(() => {
+    const initial: Record<string, boolean> = {};
+    for (const item of visibleNav) {
+      if (!isLeaf(item)) {
+        initial[item.label] = item.children.some((c) => pathname.startsWith(c.href));
+      }
+    }
+    return initial;
+  });
 
   return (
-    <aside className="w-60 bg-brand-900 text-white flex flex-col flex-shrink-0">
-      <div className="p-5 border-b border-brand-700">
-        <div className="flex items-center gap-3">
-          <div className="w-9 h-9 bg-brand-500 rounded-lg flex items-center justify-center">
-            <BookOpen className="w-5 h-5" />
+    <aside className="w-60 bg-white border-r border-gray-200 flex flex-col flex-shrink-0">
+      {/* Brand */}
+      <div className="px-5 py-5">
+        <Link href="/invoices/customer" className="flex items-center gap-2.5">
+          <div className="w-8 h-8 bg-brand-600 rounded-lg flex items-center justify-center flex-shrink-0">
+            <BookOpen className="w-4 h-4 text-white" />
           </div>
-          <div>
-            <p className="font-bold text-sm">BizLedger</p>
-            <p className="text-brand-300 text-xs">Accounting</p>
+          <div className="leading-tight">
+            <p className="font-bold text-sm text-gray-900">La Cuevita</p>
+            <p className="text-gray-400 text-[10px] uppercase tracking-wide">Accounting</p>
           </div>
-        </div>
+        </Link>
       </div>
 
-      <nav className="flex-1 p-4 space-y-1">
-        {navItems.map(({ href, label, icon: Icon }) => {
-          const active = pathname === href || (href !== "/dashboard" && pathname.startsWith(href));
+      {/* Create new */}
+      <div className="px-4">
+        <Link
+          href="/invoices/customer/new"
+          className="flex items-center gap-2 px-3 py-2.5 bg-brand-600 hover:bg-brand-700 text-white rounded-lg text-sm font-semibold transition-colors"
+        >
+          <Plus className="w-4 h-4" />
+          Create new
+        </Link>
+      </div>
+
+      {/* Nav */}
+      <nav className="flex-1 px-3 py-4 space-y-0.5 overflow-y-auto">
+        {visibleNav.map((item) => {
+          if (isLeaf(item)) {
+            const Icon = item.icon!;
+            const active = pathname === item.href || (item.href !== "/dashboard" && pathname.startsWith(item.href));
+            return (
+              <Link
+                key={item.href}
+                href={item.href}
+                className={`flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium transition-colors ${
+                  active
+                    ? "bg-brand-50 text-brand-700"
+                    : "text-gray-700 hover:bg-gray-50"
+                }`}
+              >
+                <Icon className="w-4 h-4 flex-shrink-0" />
+                {item.label}
+              </Link>
+            );
+          }
+
+          const Icon = item.icon;
+          const open = openGroups[item.label] ?? false;
+          const anyChildActive = item.children.some((c) => pathname.startsWith(c.href));
           return (
-            <Link
-              key={href}
-              href={href}
-              className={`flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors ${
-                active
-                  ? "bg-brand-600 text-white"
-                  : "text-brand-200 hover:bg-brand-800 hover:text-white"
-              }`}
-            >
-              <Icon className="w-4 h-4 flex-shrink-0" />
-              {label}
-            </Link>
+            <div key={item.label}>
+              <button
+                onClick={() => setOpenGroups((s) => ({ ...s, [item.label]: !s[item.label] }))}
+                className={`w-full flex items-center justify-between gap-3 px-3 py-2 rounded-lg text-sm font-medium transition-colors ${
+                  anyChildActive ? "text-brand-700" : "text-gray-700 hover:bg-gray-50"
+                }`}
+              >
+                <span className="flex items-center gap-3">
+                  <Icon className="w-4 h-4 flex-shrink-0" />
+                  {item.label}
+                </span>
+                <ChevronDown className={`w-3.5 h-3.5 text-gray-400 transition-transform ${open ? "rotate-180" : ""}`} />
+              </button>
+              {open && (
+                <div className="ml-7 mt-0.5 mb-1 space-y-0.5 border-l border-gray-100 pl-3">
+                  {item.children.map((c) => {
+                    const active = pathname === c.href || pathname.startsWith(c.href + "/");
+                    return (
+                      <Link
+                        key={c.href}
+                        href={c.href}
+                        className={`block px-3 py-1.5 rounded-md text-sm transition-colors ${
+                          active ? "text-brand-700 font-medium" : "text-gray-600 hover:text-gray-900"
+                        }`}
+                      >
+                        {c.label}
+                      </Link>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
           );
         })}
       </nav>
 
-      <div className="p-4 border-t border-brand-700">
-        <p className="text-brand-400 text-xs text-center">v1.0.0</p>
+      <div className="px-5 py-3 border-t border-gray-100">
+        <p className="text-gray-400 text-[10px] text-center">
+          La Cuevita Accounting · v1.5.2
+        </p>
       </div>
     </aside>
   );

@@ -1,22 +1,42 @@
-import { auth } from "@/lib/auth";
-import { NextResponse } from "next/server";
+import { NextResponse, type NextRequest } from "next/server";
 
-export default auth((req) => {
+const PUBLIC_PATHS = [
+  "/login",
+  "/api/auth",
+  "/pay",
+  "/api/health",
+  "/api/debug",
+];
+
+// NextAuth v5 session cookie names (HTTP dev vs HTTPS prod)
+function hasSession(req: NextRequest): boolean {
+  return (
+    req.cookies.has("next-auth.session-token") ||
+    req.cookies.has("__Secure-next-auth.session-token") ||
+    req.cookies.has("authjs.session-token") ||
+    req.cookies.has("__Secure-authjs.session-token")
+  );
+}
+
+export default function middleware(req: NextRequest) {
   const { pathname } = req.nextUrl;
+  const isPublic = PUBLIC_PATHS.some((p) => pathname.startsWith(p));
+  const loggedIn = hasSession(req);
 
-  const publicPaths = ["/login", "/api/auth"];
-  const isPublic = publicPaths.some((p) => pathname.startsWith(p));
-
-  if (!req.auth && !isPublic) {
-    return NextResponse.redirect(new URL("/login", req.url));
+  if (!loggedIn && !isPublic) {
+    const url = req.nextUrl.clone();
+    url.pathname = "/login";
+    return NextResponse.redirect(url);
   }
 
-  if (req.auth && pathname === "/login") {
-    return NextResponse.redirect(new URL("/dashboard", req.url));
+  if (loggedIn && pathname === "/login") {
+    const url = req.nextUrl.clone();
+    url.pathname = "/invoices/customer";
+    return NextResponse.redirect(url);
   }
 
   return NextResponse.next();
-});
+}
 
 export const config = {
   matcher: ["/((?!_next/static|_next/image|favicon.ico|public/).*)"],

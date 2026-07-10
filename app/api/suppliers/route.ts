@@ -1,6 +1,9 @@
 import { NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
+import { requirePermission } from "@/lib/permissions";
+import { writeAuditLog, extractMeta, actorFromSession } from "@/lib/audit";
+import { initializeDatabase } from "@/lib/init-db";
 import { z } from "zod";
 
 const schema = z.object({
@@ -10,36 +13,77 @@ const schema = z.object({
   address: z.string().optional(),
 });
 
-export async function GET() {
+export async function GET(request: Request) {
   const session = await auth();
   if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-  const suppliers = await prisma.supplier.findMany({
-    orderBy: { name: "asc" },
-    include: {
-      _count: { select: { invoices: true } },
-    },
-  });
-  return NextResponse.json(suppliers);
+  const { allowed } = requirePermission(session, "supplier", "read");
+  if (!allowed) {
+    await writeAuditLog({ ...actorFromSession(session), action: "ACCESS_DENIED", entityType: "supplier", entityLabel: "Supplier List", ...extractMeta(request) });
+    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  }
+
+  await initializeDatabase();
+  try {
+    const suppliers = await prisma.supplier.findMany({
+      orderBy: { name: "asc" },
+      include: {
+        _count: { select: { invoices: true } },
+      },
+    });
+    return NextResponse.json(suppliers);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return NextResponse.json({ error: msg }, { status: 500 });
+  }
 }
 
 export async function POST(request: Request) {
   const session = await auth();
   if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-  const body = await request.json();
+  const { allowed } = requirePermission(session, "supplier", "create");
+  if (!allowed) {
+    await writeAuditLog({ ...actorFromSession(session), action: "ACCESS_DENIED", entityType: "supplier", entityLabel: "Create Supplier", ...extractMeta(request) });
+    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  }
+
+  let body: unknown;
+  try {
+    body = await request.json();
+  } catch {
+    return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
+  }
+
   const parsed = schema.safeParse(body);
   if (!parsed.success) {
     return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
   }
 
-  const supplier = await prisma.supplier.create({
-    data: {
-      name: parsed.data.name,
-      email: parsed.data.email || null,
-      phone: parsed.data.phone || null,
-      address: parsed.data.address || null,
-    },
-  });
-  return NextResponse.json(supplier, { status: 201 });
+  await initializeDatabase();
+  try {
+    const supplier = await prisma.supplier.create({
+      data: {
+        name: parsed.data.name,
+        email: parsed.data.email || null,
+        phone: parsed.data.phone || null,
+        address: parsed.data.address || null,
+      },
+    });
+
+    await writeAuditLog({
+      ...actorFromSession(session),
+      action: "CREATE",
+      entityType: "supplier",
+      entityId: supplier.id,
+      entityLabel: supplier.name,
+      ...extractMeta(request),
+    });
+
+    return NextResponse.json(supplier, { status: 201 });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error("[suppliers POST]", msg);
+    return NextResponse.json({ error: msg }, { status: 500 });
+  }
 }

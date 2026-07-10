@@ -6,9 +6,17 @@ import Decimal from "decimal.js";
 
 const itemSchema = z.object({
   description: z.string().min(1),
+  itemDescription: z.string().optional(),
   quantity: z.string().regex(/^\d+(\.\d+)?$/, "Must be a number"),
   unitPrice: z.string().regex(/^\d+(\.\d+)?$/, "Must be a number"),
   taxRate: z.string().regex(/^\d+(\.\d+)?$/, "Must be a number").default("0"),
+});
+
+const appliedFeeSchema = z.object({
+  id: z.string(),
+  label: z.string(),
+  rate: z.number(),
+  amount: z.string(),
 });
 
 const invoiceSchema = z.object({
@@ -20,7 +28,23 @@ const invoiceSchema = z.object({
   notes: z.string().optional(),
   paymentStatus: z.enum(["UNPAID", "PARTIALLY_PAID", "PAID"]).default("UNPAID"),
   paidAmount: z.string().regex(/^\d+(\.\d+)?$/).default("0"),
+  downPayment: z.string().regex(/^\d+(\.\d+)?$/).default("0"),
+  employeeId: z.string().optional().nullable(),
+  commissionRate: z.string().regex(/^\d+(\.\d+)?$/).default("0"),
+  addCreditCardFee: z.boolean().default(false),
+  appliedFees: z.array(appliedFeeSchema).default([]),
 });
+
+function deriveStatus(
+  total: Decimal,
+  paid: Decimal,
+  down: Decimal
+): "UNPAID" | "PARTIALLY_PAID" | "PAID" {
+  const balance = total.minus(paid).minus(down);
+  if (balance.lte(0)) return "PAID";
+  if (paid.gt(0) || down.gt(0)) return "PARTIALLY_PAID";
+  return "UNPAID";
+}
 
 export async function GET(request: Request) {
   const session = await auth();
@@ -34,6 +58,9 @@ export async function GET(request: Request) {
   const page = parseInt(searchParams.get("page") ?? "1");
   const limit = parseInt(searchParams.get("limit") ?? "20");
 
+  const role = (session.user as { role?: string }).role;
+  const userEmail = session.user?.email;
+
   const where: Record<string, unknown> = {};
   if (customerId) where.customerId = customerId;
   if (status) where.paymentStatus = status;
@@ -42,6 +69,20 @@ export async function GET(request: Request) {
       ...(from ? { gte: new Date(from) } : {}),
       ...(to ? { lte: new Date(to) } : {}),
     };
+  }
+
+  // SALES employees only see their own invoices
+  if (role === "SALES") {
+    if (!userEmail) {
+      return NextResponse.json({ invoices: [], total: 0, page, limit, notLinked: true });
+    }
+    const employee = await prisma.employee.findFirst({
+      where: { email: { equals: userEmail, mode: "insensitive" } },
+    });
+    if (!employee) {
+      return NextResponse.json({ invoices: [], total: 0, page, limit, notLinked: true });
+    }
+    where.employeeId = employee.id;
   }
 
   const [invoices, total] = await Promise.all([
@@ -72,10 +113,37 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
   }
 
-  const { customerId, invoiceNumber, invoiceDate, dueDate, items, notes, paymentStatus, paidAmount } =
-    parsed.data;
+  const role = (session.user as { role?: string }).role;
+  const userEmail = session.user?.email;
 
-  // Duplicate check
+  let {
+    customerId,
+    invoiceNumber,
+    invoiceDate,
+    dueDate,
+    items,
+    notes,
+    paidAmount,
+    downPayment,
+    employeeId,
+    commissionRate,
+    addCreditCardFee,
+    appliedFees,
+  } = parsed.data;
+
+  // SALES employees are always linked to their own employee record
+  if (role === "SALES" && userEmail) {
+    const employee = await prisma.employee.findFirst({
+      where: { email: { equals: userEmail, mode: "insensitive" } },
+    });
+    if (employee) {
+      employeeId = employee.id;
+      if (!commissionRate || commissionRate === "0") {
+        commissionRate = employee.commissionRate.toString();
+      }
+    }
+  }
+
   const existing = await prisma.customerInvoice.findUnique({
     where: { invoiceNumber_customerId: { invoiceNumber, customerId } },
   });
@@ -100,7 +168,27 @@ export async function POST(request: Request) {
     return { ...item, lineTotal: lineTotal.toFixed(2) };
   });
 
-  const totalAmount = subtotal.plus(taxAmount);
+  let creditCardFee = new Decimal(0);
+  if (addCreditCardFee) {
+    const profile = await prisma.companyProfile.findUnique({ where: { id: "default" } });
+    if (profile && Number(profile.creditCardFeeRate) > 0) {
+      creditCardFee = subtotal.plus(taxAmount).times(profile.creditCardFeeRate.toString());
+    }
+  }
+
+  let customFeesSum = new Decimal(0);
+  for (const f of appliedFees) {
+    try {
+      customFeesSum = customFeesSum.plus(new Decimal(f.amount));
+    } catch {
+      // skip malformed entry
+    }
+  }
+
+  const totalAmount = subtotal.plus(taxAmount).plus(creditCardFee).plus(customFeesSum);
+  const paidDec = new Decimal(paidAmount ?? "0");
+  const downDec = new Decimal(downPayment ?? "0");
+  const paymentStatus = deriveStatus(totalAmount, paidDec, downDec);
 
   const invoice = await prisma.customerInvoice.create({
     data: {
@@ -111,12 +199,18 @@ export async function POST(request: Request) {
       subtotal: subtotal.toFixed(2),
       taxAmount: taxAmount.toFixed(2),
       totalAmount: totalAmount.toFixed(2),
+      creditCardFee: creditCardFee.toFixed(2),
+      appliedFees: appliedFees as unknown as object,
       paidAmount: paidAmount ?? "0",
-      paymentStatus: paymentStatus ?? "UNPAID",
+      paymentStatus,
+      downPayment: downPayment ?? "0",
+      employeeId: employeeId ?? null,
+      commissionRate: commissionRate ?? "0",
       notes,
       items: {
         create: computedItems.map((item) => ({
           description: item.description,
+          itemDescription: item.itemDescription ?? null,
           quantity: item.quantity,
           unitPrice: item.unitPrice,
           taxRate: item.taxRate,
@@ -126,6 +220,36 @@ export async function POST(request: Request) {
     },
     include: { customer: true, items: true },
   });
+
+  await prisma.companyProfile
+    .update({
+      where: { id: "default" },
+      data: { customerInvoiceNextSeq: { increment: 1 } },
+    })
+    .catch(() => undefined);
+
+  try {
+    for (const item of items) {
+      const name = item.description.trim();
+      if (!name) continue;
+      const existing = await prisma.product.findFirst({
+        where: { name: { equals: name, mode: "insensitive" } },
+      });
+      if (!existing) {
+        await prisma.product.create({
+          data: {
+            name,
+            description: item.itemDescription ?? null,
+            price: item.unitPrice,
+            taxRate: item.taxRate,
+            active: true,
+          },
+        });
+      }
+    }
+  } catch {
+    // Product sync failure must never break invoice creation
+  }
 
   return NextResponse.json(invoice, { status: 201 });
 }

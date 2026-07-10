@@ -3,10 +3,10 @@
 import { useState, useEffect, useCallback } from "react";
 import Link from "next/link";
 import { Plus, Search, Filter } from "lucide-react";
-import { format } from "date-fns";
 import PaymentBadge from "@/components/PaymentBadge";
 import CategoryBadge from "@/components/CategoryBadge";
 import { formatCurrency } from "@/lib/money";
+import { formatDateOnly } from "@/lib/date";
 
 interface Invoice {
   id: string;
@@ -133,7 +133,7 @@ export default function SupplierInvoicesPage() {
                   <tr key={inv.id} className="hover:bg-gray-50 transition-colors">
                     <td className="px-5 py-3 font-medium text-brand-600">{inv.invoiceNumber}</td>
                     <td className="px-5 py-3 text-gray-700">{inv.supplier.name}</td>
-                    <td className="px-5 py-3 text-gray-500">{format(new Date(inv.invoiceDate), "MMM d, yyyy")}</td>
+                    <td className="px-5 py-3 text-gray-500">{formatDateOnly(inv.invoiceDate)}</td>
                     <td className="px-5 py-3"><CategoryBadge category={inv.category} /></td>
                     <td className="px-5 py-3 text-right font-medium">{formatCurrency(inv.totalAmount)}</td>
                     <td className="px-5 py-3 text-center"><PaymentBadge status={inv.paymentStatus} /></td>
