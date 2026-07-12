@@ -164,6 +164,29 @@ export async function requireRole(
 }
 
 /**
+ * Horizontal scoping for customer invoices. ADMIN/MANAGER see everything
+ * (returns null -- no filter to apply). A SALES caller is scoped to
+ * invoices linked to "their" Employee record, matched by email against the
+ * session's own email (User has no direct relation to Employee, but both
+ * models already have a unique `email` field -- no schema change needed).
+ * A SALES user with no matching Employee row is scoped to an id that can
+ * never match, rather than falling back to seeing everything: an unlinked
+ * SALES account should see nothing, not the whole company's invoices.
+ */
+export async function scopeInvoicesToOwnEmployee(
+  session: AuthedSession
+): Promise<{ employeeId: string } | null> {
+  if (session.user.role !== "SALES") return null;
+  const email = (session.user.email ?? "").toLowerCase().trim();
+  if (!email) return { employeeId: "__no-matching-employee__" };
+  const employee = await prisma.employee.findFirst({
+    where: { email: { equals: email, mode: "insensitive" } },
+    select: { id: true },
+  });
+  return { employeeId: employee?.id ?? "__no-matching-employee__" };
+}
+
+/**
  * Standard error response envelope. Use this so clients can rely on shape.
  */
 export function apiError(

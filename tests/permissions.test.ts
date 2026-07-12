@@ -94,12 +94,29 @@ describe("previously had no role gate at all -- now fixed", () => {
   });
 });
 
-describe("horizontal isolation between two salespeople -- removed vs. main", () => {
-  // On main, a SALES user was correctly scoped to only their own invoices
-  // via an Employee-linked email match. On this branch, User has no
-  // relation to Employee at all -- there is no per-salesperson scoping
-  // concept anywhere, confirmed by code review. Both tests below prove it.
-  it.fails("one salesperson's invoice list should not include invoices created by another salesperson", async () => {
+describe("horizontal isolation between two salespeople -- rebuilt, matching main's original behavior", () => {
+  // Rebuilt without a schema change: User and Employee both already had a
+  // unique `email` field, so SALES scoping matches on that (see
+  // lib/api.ts's scopeInvoicesToOwnEmployee) instead of needing a new
+  // relation column. seed-test-fixtures.ts links each SALES test account to
+  // a same-email Employee row so invoice creation (which auto-assigns
+  // employeeId from the caller's own linked record for SALES) has
+  // something real to link to.
+  it("a salesperson can see their own invoice in their own list", async () => {
+    const customer = await admin.postJson<{ id: string }>("/api/customers", { name: "Own Invoice Test Co" });
+    const inv = await sales1.postJson<{ id: string }>("/api/invoices/customer", {
+      customerId: customer.body.id,
+      invoiceNumber: `OWN-${Date.now()}`,
+      invoiceDate: "2026-01-01",
+      dueDate: "2026-01-31",
+      items: [{ description: "x", quantity: "1", unitPrice: "1" }],
+    });
+    expect(inv.status).toBe(201);
+    const { body } = await sales1.getJson<{ invoices: { id: string }[] }>("/api/invoices/customer?limit=100");
+    expect(body.invoices.map((i) => i.id)).toContain(inv.body.id);
+  });
+
+  it("one salesperson's invoice list does not include invoices created by another salesperson", async () => {
     const customer = await admin.postJson<{ id: string }>("/api/customers", { name: "Horizontal Test Co" });
     const inv = await sales1.postJson<{ id: string; invoiceNumber: string }>("/api/invoices/customer", {
       customerId: customer.body.id,
@@ -110,10 +127,23 @@ describe("horizontal isolation between two salespeople -- removed vs. main", () 
     });
     const { body } = await sales2.getJson<{ invoices: { id: string }[] }>("/api/invoices/customer?limit=100");
     const ids = body.invoices.map((i) => i.id);
-    expect(ids).not.toContain(inv.body.id); // currently included -- every SALES user sees every invoice
+    expect(ids).not.toContain(inv.body.id);
   });
 
-  it.fails("one salesperson should not be able to edit an invoice created by another salesperson", async () => {
+  it("one salesperson cannot view another salesperson's invoice by id", async () => {
+    const customer = await admin.postJson<{ id: string }>("/api/customers", { name: "Horizontal Test Co 3" });
+    const inv = await sales1.postJson<{ id: string }>("/api/invoices/customer", {
+      customerId: customer.body.id,
+      invoiceNumber: `HORIZ3-${Date.now()}`,
+      invoiceDate: "2026-01-01",
+      dueDate: "2026-01-31",
+      items: [{ description: "x", quantity: "1", unitPrice: "1" }],
+    });
+    const { status } = await sales2.getJson(`/api/invoices/customer/${inv.body.id}`);
+    expect(status).toBe(403);
+  });
+
+  it("one salesperson cannot edit an invoice created by another salesperson", async () => {
     const customer = await admin.postJson<{ id: string }>("/api/customers", { name: "Horizontal Test Co 2" });
     const inv = await sales1.postJson<{ id: string }>("/api/invoices/customer", {
       customerId: customer.body.id,
@@ -123,6 +153,21 @@ describe("horizontal isolation between two salespeople -- removed vs. main", () 
       items: [{ description: "x", quantity: "1", unitPrice: "1" }],
     });
     const { status } = await sales2.postJson(`/api/invoices/customer/${inv.body.id}`, { commissionRate: "0.99" }, "PATCH");
-    expect(status).toBe(403); // currently 200 -- no role check on this PATCH at all
+    expect(status).toBe(403);
+  });
+
+  it("ADMIN and MANAGER are not scoped -- they see every invoice regardless of who created it", async () => {
+    const customer = await admin.postJson<{ id: string }>("/api/customers", { name: "Horizontal Test Co 4" });
+    const inv = await sales1.postJson<{ id: string }>("/api/invoices/customer", {
+      customerId: customer.body.id,
+      invoiceNumber: `HORIZ4-${Date.now()}`,
+      invoiceDate: "2026-01-01",
+      dueDate: "2026-01-31",
+      items: [{ description: "x", quantity: "1", unitPrice: "1" }],
+    });
+    const asAdmin = await admin.getJson(`/api/invoices/customer/${inv.body.id}`);
+    const asManager = await manager.getJson(`/api/invoices/customer/${inv.body.id}`);
+    expect(asAdmin.status).toBe(200);
+    expect(asManager.status).toBe(200);
   });
 });

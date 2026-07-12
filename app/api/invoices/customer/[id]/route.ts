@@ -1,7 +1,6 @@
 import { NextResponse } from "next/server";
-import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
-import { requireRole } from "@/lib/api";
+import { requireAuth, requireRole, scopeInvoicesToOwnEmployee } from "@/lib/api";
 import { z } from "zod";
 import Decimal from "decimal.js";
 
@@ -42,8 +41,8 @@ export async function GET(
   _request: Request,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  const session = await auth();
-  if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  const guard = await requireAuth();
+  if (guard instanceof NextResponse) return guard;
 
   const { id } = await params;
 
@@ -59,6 +58,12 @@ export async function GET(
   });
 
   if (!invoice) return NextResponse.json({ error: "Not found" }, { status: 404 });
+
+  const scope = await scopeInvoicesToOwnEmployee(guard);
+  if (scope && invoice.employeeId !== scope.employeeId) {
+    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  }
+
   return NextResponse.json(invoice);
 }
 
@@ -66,8 +71,8 @@ export async function PATCH(
   request: Request,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  const session = await auth();
-  if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  const guard = await requireAuth();
+  if (guard instanceof NextResponse) return guard;
 
   const { id } = await params;
   const body = await request.json();
@@ -78,6 +83,11 @@ export async function PATCH(
 
   const existing = await prisma.customerInvoice.findUnique({ where: { id } });
   if (!existing) return NextResponse.json({ error: "Not found" }, { status: 404 });
+
+  const scope = await scopeInvoicesToOwnEmployee(guard);
+  if (scope && existing.employeeId !== scope.employeeId) {
+    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  }
 
   const data = parsed.data;
   const updateData: Record<string, unknown> = {};
@@ -219,6 +229,15 @@ export async function DELETE(
   if (guard instanceof NextResponse) return guard;
 
   const { id } = await params;
+
+  const existing = await prisma.customerInvoice.findUnique({ where: { id } });
+  if (!existing) return NextResponse.json({ error: "Not found" }, { status: 404 });
+
+  const scope = await scopeInvoicesToOwnEmployee(guard);
+  if (scope && existing.employeeId !== scope.employeeId) {
+    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  }
+
   await prisma.customerInvoice.delete({ where: { id } });
   return NextResponse.json({ ok: true });
 }

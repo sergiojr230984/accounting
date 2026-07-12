@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
-import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
+import { requireAuth, scopeInvoicesToOwnEmployee } from "@/lib/api";
 import { z } from "zod";
 import Decimal from "decimal.js";
 
@@ -36,8 +36,8 @@ const invoiceSchema = z.object({
 });
 
 export async function GET(request: Request) {
-  const session = await auth();
-  if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  const guard = await requireAuth();
+  if (guard instanceof NextResponse) return guard;
 
   const { searchParams } = new URL(request.url);
   const customerId = searchParams.get("customerId");
@@ -56,6 +56,9 @@ export async function GET(request: Request) {
       ...(to ? { lte: new Date(to) } : {}),
     };
   }
+  // SALES only sees invoices linked to their own Employee record.
+  const scope = await scopeInvoicesToOwnEmployee(guard);
+  if (scope) where.employeeId = scope.employeeId;
 
   const [invoices, total] = await Promise.all([
     prisma.customerInvoice.findMany({
@@ -76,8 +79,8 @@ export async function GET(request: Request) {
 }
 
 export async function POST(request: Request) {
-  const session = await auth();
-  if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  const guard = await requireAuth();
+  if (guard instanceof NextResponse) return guard;
 
   const body = await request.json();
   const parsed = invoiceSchema.safeParse(body);
@@ -95,11 +98,22 @@ export async function POST(request: Request) {
     paymentStatus,
     paidAmount,
     downPayment,
-    employeeId,
     commissionRate,
     addCreditCardFee,
     appliedFees,
   } = parsed.data;
+
+  // A SALES caller always gets their own linked Employee record, ignoring
+  // whatever employeeId the client submitted -- otherwise they could assign
+  // (or attribute commission for) an invoice to a colleague's name, and the
+  // horizontal-scoping checks on GET/PATCH/DELETE would exclude their own
+  // just-created invoice if it didn't end up linked to them. ADMIN/MANAGER
+  // keep assigning whichever salesperson the client-submitted value names.
+  let employeeId = parsed.data.employeeId;
+  if (guard.user.role === "SALES") {
+    const scope = await scopeInvoicesToOwnEmployee(guard);
+    employeeId = scope?.employeeId ?? null;
+  }
 
   // Duplicate check
   const existing = await prisma.customerInvoice.findUnique({

@@ -2,11 +2,10 @@ import { PrismaClient } from "@prisma/client";
 import bcrypt from "bcryptjs";
 
 /**
- * Test-only fixtures for the P9dod branch. Unlike main, User has no relation
- * to Employee here — there is no per-salesperson row-level scoping concept
- * at all (confirmed by direct code review), so these are just two plain
- * SALES-role accounts used to test whether one can see/touch data created
- * under the other's session.
+ * Test-only fixtures for the P9dod branch. User has no direct relation to
+ * Employee here, but both models have a unique `email` field -- horizontal
+ * SALES scoping matches on that (see lib/api.ts's scopeInvoicesToOwnEmployee),
+ * so each SALES test account gets a same-email Employee row to link to.
  */
 
 const prisma = new PrismaClient();
@@ -21,13 +20,23 @@ async function main() {
     update: {},
     create: { name: "Sales Rep One", email: "sales1@test.local", password: pw, role: "SALES" },
   });
+  await prisma.employee.upsert({
+    where: { email: "sales1@test.local" },
+    update: {},
+    create: { name: "Sales Rep One", email: "sales1@test.local" },
+  });
   await prisma.user.upsert({
     where: { email: "sales2@test.local" },
     update: {},
     create: { name: "Sales Rep Two", email: "sales2@test.local", password: pw, role: "SALES" },
   });
+  await prisma.employee.upsert({
+    where: { email: "sales2@test.local" },
+    update: {},
+    create: { name: "Sales Rep Two", email: "sales2@test.local" },
+  });
 
-  console.log("[seed-test-fixtures] Ready: sales1@test.local, sales2@test.local");
+  console.log("[seed-test-fixtures] Ready: sales1@test.local, sales2@test.local (each with a linked Employee record)");
 }
 
 main()
