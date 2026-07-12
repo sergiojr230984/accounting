@@ -82,6 +82,54 @@ describe("health check endpoints", () => {
   });
 });
 
+describe("CSRF defense-in-depth", () => {
+  // Fixed: middleware.ts now rejects a mutating API request whose Origin
+  // (or Referer, if Origin is absent) names a different host than the one
+  // the request arrived on. Live-tested in an earlier audit: a forged
+  // Origin header alone was enough to create a real customer, because the
+  // only defense was SameSite=Lax on the cookie -- real, but a single
+  // point of failure. This is a second, independent layer.
+  it("rejects a mutating request with a forged cross-origin Origin header, even with a valid session cookie", async () => {
+    const admin = await loginAs("admin@lacuevita.com", "admin123");
+    const res = await admin.fetch("/api/customers", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Origin: "https://evil-attacker.example",
+        Referer: "https://evil-attacker.example/csrf.html",
+      },
+      body: JSON.stringify({ name: "CSRF Origin Test Co" }),
+    });
+    expect(res.status).toBe(403);
+  });
+
+  it("still allows a same-origin mutating request through", async () => {
+    const admin = await loginAs("admin@lacuevita.com", "admin123");
+    const res = await admin.fetch("/api/customers", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Origin: BASE_URL },
+      body: JSON.stringify({ name: "Legit Same-Origin Co" }),
+    });
+    expect(res.status).toBe(201);
+  });
+
+  it("login itself is unaffected -- /api/auth/** is excluded so NextAuth's own CSRF token still governs it", async () => {
+    const s = anonymousSession();
+    const csrf = (await s.getJson<{ csrfToken: string }>("/api/auth/csrf")).body.csrfToken;
+    await s.fetch("/api/auth/callback/credentials", {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded", Origin: "https://evil-attacker.example" },
+      body: new URLSearchParams({
+        email: "admin@lacuevita.com",
+        password: "admin123",
+        csrfToken: csrf,
+        json: "true",
+      }).toString(),
+    });
+    expect(s.hasCookie("authjs.session-token")).toBe(true);
+  });
+});
+
 describe("login timing does not reveal account existence", () => {
   // Fixed: authorize() now runs a real bcrypt.compare against a dummy hash
   // for both an unknown email and a wrong password, instead of short-
