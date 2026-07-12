@@ -35,6 +35,40 @@ describe("login and logout", () => {
   });
 });
 
+describe("login rate limiting", () => {
+  // Fixed: lib/auth.ts now throttles login attempts per submitted email
+  // (and separately per IP) before ever touching the database or bcrypt.
+  // Uses a disposable throwaway account rather than the shared seeded admin
+  // account, so exhausting its rate-limit budget here doesn't lock out
+  // every other test file's beforeAll login for the rest of the suite run
+  // (the limiter is in-memory and lives for the whole server process).
+  it("throttles repeated failed attempts against the same account, even with the correct password", async () => {
+    const admin = await loginAs("admin@lacuevita.com", "admin123");
+    const email = `rate-limit-test-${Date.now()}@test.local`;
+    const password = "correctHorseBattery9";
+    await admin.postJson("/api/users", { name: "Rate Limit Test", email, password, role: "SALES" });
+
+    const attempt = async (attemptedPassword: string) => {
+      const s = anonymousSession();
+      const csrf = (await s.getJson<{ csrfToken: string }>("/api/auth/csrf")).body.csrfToken;
+      await s.fetch("/api/auth/callback/credentials", {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({ email, password: attemptedPassword, csrfToken: csrf, json: "true" }).toString(),
+      });
+      return s;
+    };
+
+    // Exhaust the per-email budget (max 10 within the window) with wrong passwords.
+    for (let i = 0; i < 10; i++) await attempt("wrong-password");
+
+    // The account is now throttled -- even the correct password is rejected,
+    // proving this isn't just "wrong credentials" but an active block.
+    const stillBlocked = await attempt(password);
+    expect(stillBlocked.hasCookie("authjs.session-token")).toBe(false);
+  });
+});
+
 describe("middleware is cookie-presence-only, not signature validation (by design, per code comment)", () => {
   // The forged cookie above correctly fails at the *route* layer (auth()
   // validates the JWT). But middleware.ts only checks that a cookie with

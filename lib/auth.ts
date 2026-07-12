@@ -3,6 +3,7 @@ import Credentials from "next-auth/providers/credentials";
 import bcrypt from "bcryptjs";
 import { prisma } from "@/lib/prisma";
 import { z } from "zod";
+import { rateLimit } from "@/lib/rate-limit";
 
 const loginSchema = z.object({
   email: z.string().email(),
@@ -79,9 +80,23 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
   },
   providers: [
     Credentials({
-      async authorize(credentials) {
+      async authorize(credentials, request) {
         const parsed = loginSchema.safeParse(credentials);
         if (!parsed.success) return null;
+
+        // Throttle both by IP (blocks one source hammering many accounts)
+        // and by the submitted email (blocks distributed attempts against
+        // one account) before ever touching the database or bcrypt.
+        const ip =
+          request.headers.get("x-forwarded-for")?.split(",")[0].trim() ||
+          request.headers.get("x-real-ip") ||
+          "unknown";
+        const ipLimit = rateLimit(`login-ip:${ip}`, { windowMs: 15 * 60_000, max: 50 });
+        const emailLimit = rateLimit(`login-email:${parsed.data.email.toLowerCase()}`, {
+          windowMs: 15 * 60_000,
+          max: 10,
+        });
+        if (!ipLimit.ok || !emailLimit.ok) return null;
 
         const user = await prisma.user.findUnique({
           where: { email: parsed.data.email },
