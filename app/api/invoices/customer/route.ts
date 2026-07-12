@@ -116,6 +116,25 @@ export async function POST(request: Request) {
     employeeId = scope?.employeeId ?? null;
   }
 
+  // customerId and employeeId are foreign keys the DB will happily reject
+  // with a raw constraint-violation error if either references a row that
+  // doesn't exist (deleted between page load and submit, a stale cached
+  // dropdown value, etc.) -- checked here so that's a clean 400/404
+  // instead of an unhandled 500 crashing the whole request.
+  const customerExists = await prisma.customer.findUnique({ where: { id: customerId }, select: { id: true } });
+  if (!customerExists) {
+    return NextResponse.json({ error: "Selected customer no longer exists." }, { status: 404 });
+  }
+  if (employeeId) {
+    const employeeExists = await prisma.employee.findUnique({ where: { id: employeeId }, select: { id: true } });
+    if (!employeeExists) {
+      return NextResponse.json(
+        { error: "Selected sales rep no longer exists. Please pick another." },
+        { status: 400 }
+      );
+    }
+  }
+
   // Duplicate check
   const existing = await prisma.customerInvoice.findUnique({
     where: { invoiceNumber_customerId: { invoiceNumber, customerId } },
