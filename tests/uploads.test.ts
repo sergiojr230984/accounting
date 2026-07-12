@@ -38,12 +38,11 @@ describe("file upload validation", () => {
     expect(body.storedName).toMatch(/\.pdf$/);
   });
 
-  // lib/upload.ts is byte-for-byte identical to main on this point: the
-  // declared Content-Type (checked against the allowlist) and the filename
-  // (used to derive the stored extension) are validated independently, so a
+  // Fixed: lib/upload.ts now derives the stored extension from a fixed
+  // MIME-type lookup table, never from the client-supplied filename, so a
   // file claiming application/pdf but named *.html is stored -- and served
-  // back -- as HTML, executing any embedded <script>. Unfixed on this branch.
-  it.fails("the stored file extension should follow the validated MIME type, not the client-supplied filename", async () => {
+  // back -- as .pdf regardless of what the filename says.
+  it("the stored file extension should follow the validated MIME type, not the client-supplied filename", async () => {
     const form = new FormData();
     form.append(
       "file",
@@ -55,7 +54,7 @@ describe("file upload validation", () => {
     form.append("customerInvoiceId", invoiceId);
     const res = await admin.fetch("/api/upload", { method: "POST", body: form });
     const body = await res.json();
-    expect(body.storedName).toMatch(/\.pdf$/); // currently ends in .html
+    expect(body.storedName).toMatch(/\.pdf$/);
   });
 
   it("a path-traversal filename does not escape the uploads directory", async () => {
