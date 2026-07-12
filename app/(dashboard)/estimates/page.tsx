@@ -2,7 +2,8 @@
 
 import { useState, useEffect, useCallback, useMemo } from "react";
 import Link from "next/link";
-import { Plus, Search, ChevronRight, FileText } from "lucide-react";
+import { useRouter } from "next/navigation";
+import { Plus, Search, ChevronRight, FileText, ArrowRightCircle, Loader2 } from "lucide-react";
 import { formatCurrency } from "@/lib/money";
 import { formatDateOnly } from "@/lib/date";
 
@@ -38,6 +39,7 @@ function StatusBadge({ status }: { status: EstimateStatus }) {
 }
 
 export default function EstimatesPage() {
+  const router = useRouter();
   const [estimates, setEstimates] = useState<Estimate[]>([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
@@ -45,6 +47,8 @@ export default function EstimatesPage() {
   const [customerFilter, setCustomerFilter] = useState("");
   const [statusFilter, setStatusFilter] = useState("");
   const [customers, setCustomers] = useState<{ id: string; name: string }[]>([]);
+  const [convertingId, setConvertingId] = useState<string | null>(null);
+  const [convertError, setConvertError] = useState("");
 
   useEffect(() => {
     fetch("/api/customers")
@@ -70,6 +74,22 @@ export default function EstimatesPage() {
 
   useEffect(() => { load(); }, [load]);
 
+  async function handleConvert(id: string) {
+    setConvertError("");
+    setConvertingId(id);
+    try {
+      const res = await fetch(`/api/estimates/${id}/convert`, { method: "POST" });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setConvertError(data.error ?? "Failed to convert to invoice");
+        return;
+      }
+      router.push(`/invoices/customer/${data.invoiceId}`);
+    } finally {
+      setConvertingId(null);
+    }
+  }
+
   const filtered = useMemo(
     () =>
       estimates.filter(
@@ -94,6 +114,12 @@ export default function EstimatesPage() {
           Create an estimate
         </Link>
       </div>
+
+      {convertError && (
+        <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg text-sm">
+          {convertError}
+        </div>
+      )}
 
       {/* Filter row */}
       <div className="flex flex-wrap items-center gap-3">
@@ -177,13 +203,30 @@ export default function EstimatesPage() {
                     {formatCurrency(est.totalAmount)}
                   </td>
                   <td className="px-5 py-4 text-right">
-                    <Link
-                      href={`/estimates/${est.id}`}
-                      className="inline-flex items-center gap-1 text-brand-600 hover:text-brand-700 font-medium text-xs"
-                    >
-                      {est.convertedInvoiceId ? "View" : "Open"}
-                      <ChevronRight className="w-3.5 h-3.5" />
-                    </Link>
+                    <div className="flex items-center justify-end gap-3">
+                      {!est.convertedInvoiceId && (
+                        <button
+                          onClick={() => handleConvert(est.id)}
+                          disabled={convertingId === est.id}
+                          className="inline-flex items-center gap-1 text-brand-600 hover:text-brand-700 font-medium text-xs disabled:opacity-50"
+                          title="Turn this estimate into a real invoice"
+                        >
+                          {convertingId === est.id ? (
+                            <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                          ) : (
+                            <ArrowRightCircle className="w-3.5 h-3.5" />
+                          )}
+                          Convert
+                        </button>
+                      )}
+                      <Link
+                        href={`/estimates/${est.id}`}
+                        className="inline-flex items-center gap-1 text-brand-600 hover:text-brand-700 font-medium text-xs"
+                      >
+                        {est.convertedInvoiceId ? "View" : "Open"}
+                        <ChevronRight className="w-3.5 h-3.5" />
+                      </Link>
+                    </div>
                   </td>
                 </tr>
               ))
