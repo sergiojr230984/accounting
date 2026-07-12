@@ -159,10 +159,11 @@ describe("session revocation", () => {
     expect(after.status).toBe(200); // would be 403 if the role change hadn't propagated
   });
 
-  // NOT a fix: the session callback re-checks `role` but never re-checks
-  // `active`. Deactivating a user only blocks their *next login* -- an
-  // already-issued session keeps working until it naturally expires.
-  it.fails("deactivating a user should immediately revoke their existing session, not just block future logins", async () => {
+  // Fixed: the session callback now re-checks `active` on every session
+  // read, the same way it already re-checks `role`, so deactivating a user
+  // revokes their existing session immediately rather than only blocking
+  // their next login.
+  it("deactivating a user immediately revokes their existing session, not just future logins", async () => {
     const admin = await loginAs("admin@lacuevita.com", "admin123");
     const created = await admin.postJson<{ id: string }>("/api/users", {
       name: "Deactivate Test",
@@ -175,6 +176,6 @@ describe("session revocation", () => {
     await admin.postJson(`/api/users/${created.body.id}`, { active: false }, "PATCH");
 
     const stillWorks = await target.getJson("/api/customers");
-    expect(stillWorks.status).toBe(401); // currently still 200 -- the session outlives deactivation
+    expect(stillWorks.status).toBe(401);
   });
 });

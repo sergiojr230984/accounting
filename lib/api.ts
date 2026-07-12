@@ -3,6 +3,7 @@ import type { Session } from "next-auth";
 import { cookies } from "next/headers";
 import { decode } from "@auth/core/jwt";
 import { auth } from "./auth";
+import { prisma } from "./prisma";
 import { rateLimit, type RateLimitOptions } from "./rate-limit";
 
 export type Role = "ADMIN" | "MANAGER" | "SALES";
@@ -58,6 +59,15 @@ async function readJwtUser(): Promise<JwtFallback> {
         if (!token) continue;
         const id = (token.id as string) ?? (token.sub as string) ?? "";
         if (!id) continue;
+
+        // This path decodes the JWT directly rather than going through
+        // lib/auth.ts's session() callback, so it needs its own check that
+        // the account hasn't been deactivated since the token was issued --
+        // otherwise a deactivated user's session would keep working through
+        // this fallback even after the primary path revokes it.
+        const dbUser = await prisma.user.findUnique({ where: { id }, select: { active: true } });
+        if (dbUser?.active === false) continue;
+
         const role = ((token.role as string) ?? "MANAGER") as Role;
         return {
           ok: true,

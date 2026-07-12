@@ -1,4 +1,4 @@
-import NextAuth from "next-auth";
+import NextAuth, { type Session } from "next-auth";
 import Credentials from "next-auth/providers/credentials";
 import bcrypt from "bcryptjs";
 import { prisma } from "@/lib/prisma";
@@ -10,7 +10,7 @@ const loginSchema = z.object({
   password: z.string().min(6),
 });
 
-export const { handlers, auth, signIn, signOut } = NextAuth({
+const { handlers, auth: baseAuth, signIn, signOut } = NextAuth({
   trustHost: true,
   session: { strategy: "jwt" },
   pages: {
@@ -116,3 +116,29 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
     }),
   ],
 });
+
+/**
+ * Wraps NextAuth's own auth(). The session() callback above already
+ * re-reads `role` from the database on every call, but NextAuth v5-beta's
+ * App Router session handling only picks up in-place mutations to the
+ * existing session object -- returning null from that callback (to reject
+ * a deactivated user outright) is silently discarded, so `session` itself
+ * always comes back truthy once the JWT is validly signed, regardless of
+ * what the callback returns. Most routes in this app only check
+ * `if (!session)`, not a field within it, so an in-place mutation alone
+ * can't revoke a deactivated user's session for those callers. Checking
+ * `active` here, on the actual return value every caller receives, closes
+ * that gap for all of them in one place instead of editing ~30 routes.
+ */
+export async function auth(): Promise<Session | null> {
+  const session = (await baseAuth()) as Session | null;
+  if (!session?.user?.id) return session;
+  const dbUser = await prisma.user.findUnique({
+    where: { id: session.user.id },
+    select: { active: true },
+  });
+  if (dbUser?.active === false) return null;
+  return session;
+}
+
+export { handlers, signIn, signOut };
