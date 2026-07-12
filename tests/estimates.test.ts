@@ -39,6 +39,21 @@ describe("estimate creation", () => {
   });
 });
 
+describe("next estimate number — computed via SQL aggregate, not a full-table JS scan", () => {
+  it("suggests one past the highest existing sequence under the current prefix", async () => {
+    const prefix = `EST-${new Date().getFullYear()}-`;
+    await admin.postJson("/api/estimates", {
+      customerId,
+      estimateNumber: `${prefix}9999`,
+      estimateDate: "2026-01-01",
+      items: [{ description: "x", quantity: "1", unitPrice: "1" }],
+    });
+
+    const { body } = await admin.getJson<{ nextNumber: string }>("/api/estimates/next-number");
+    expect(body.nextNumber).toBe(`${prefix}10000`);
+  });
+});
+
 describe("convert to invoice", () => {
   it("converting an estimate creates a real invoice with matching totals", async () => {
     const est = await admin.postJson<{ id: string; totalAmount: string }>("/api/estimates", {

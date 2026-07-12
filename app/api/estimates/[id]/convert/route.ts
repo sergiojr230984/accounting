@@ -32,15 +32,18 @@ export async function POST(
     const profile = await tx.companyProfile.findUnique({ where: { id: "default" } });
     const prefix = profile?.customerInvoicePrefix ?? "INV-2026-";
     const settingsSeq = profile?.customerInvoiceNextSeq ?? 1001;
-    const existingInvoices = await tx.customerInvoice.findMany({
-      where: { invoiceNumber: { startsWith: prefix } },
-      select: { invoiceNumber: true },
-    });
+    // Aggregate in Postgres instead of fetching every matching invoiceNumber
+    // and looping in JS -- same fix as the customer-invoice next-number
+    // route, but more urgent here: this runs inside the transaction that
+    // holds the estimate row lock, so the old full-table fetch directly
+    // extended how long every other concurrent conversion had to wait.
+    const [{ maxSeq: scannedMax }] = await tx.$queryRaw<{ maxSeq: number | null }[]>`
+      SELECT MAX(CAST(substring(substring("invoiceNumber" from length(${prefix}) + 1) from '^[0-9]+') AS INTEGER)) AS "maxSeq"
+      FROM "CustomerInvoice"
+      WHERE "invoiceNumber" LIKE ${prefix + "%"}
+    `;
     let maxSeq = settingsSeq - 1;
-    for (const inv of existingInvoices) {
-      const num = parseInt(inv.invoiceNumber.slice(prefix.length), 10);
-      if (!isNaN(num) && num > maxSeq) maxSeq = num;
-    }
+    if (scannedMax !== null && scannedMax > maxSeq) maxSeq = scannedMax;
     const invoiceNumber = `${prefix}${String(maxSeq + 1).padStart(4, "0")}`;
 
     const today = new Date();

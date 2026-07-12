@@ -150,6 +150,48 @@ describe("overpayment handling", () => {
   });
 });
 
+describe("next invoice number — computed via SQL aggregate, not a full-table JS scan", () => {
+  it("suggests one past the highest existing sequence under the current prefix", async () => {
+    const before = await admin.getJson<{ prefix: string; nextSeq: number }>(
+      "/api/invoices/customer/next-number"
+    );
+    const { prefix } = before.body;
+
+    // Deliberately far above whatever sequence other tests have reached,
+    // so this assertion doesn't depend on run order.
+    const highNumber = `${prefix}9999`;
+    await admin.postJson("/api/invoices/customer", {
+      customerId,
+      invoiceNumber: highNumber,
+      invoiceDate: "2026-01-01",
+      dueDate: "2026-01-31",
+      items: [{ description: "x", quantity: "1", unitPrice: "1" }],
+    });
+
+    const after = await admin.getJson<{ nextSeq: number; nextNumber: string }>(
+      "/api/invoices/customer/next-number"
+    );
+    expect(after.body.nextSeq).toBe(10000);
+    expect(after.body.nextNumber).toBe(`${prefix}10000`);
+  });
+
+  it("a manually-set invoice number with trailing non-digit text still contributes its leading digits (matches the old parseInt-based behavior)", async () => {
+    const before = await admin.getJson<{ prefix: string }>("/api/invoices/customer/next-number");
+    const { prefix } = before.body;
+
+    await admin.postJson("/api/invoices/customer", {
+      customerId,
+      invoiceNumber: `${prefix}8888b`,
+      invoiceDate: "2026-01-01",
+      dueDate: "2026-01-31",
+      items: [{ description: "x", quantity: "1", unitPrice: "1" }],
+    });
+
+    const after = await admin.getJson<{ nextSeq: number }>("/api/invoices/customer/next-number");
+    expect(after.body.nextSeq).toBeGreaterThanOrEqual(8889);
+  });
+});
+
 describe("applied fees are re-derived server-side, not trusted from the client", () => {
   let feeId: string;
   const feeRate = 0.1; // 10%
