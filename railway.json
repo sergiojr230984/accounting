@@ -7,7 +7,9 @@
     "buildCommand": "npm ci && npm run build",
     "preDeployCommand": "",
     "startCommand": "npm start",
-    "healthcheckPath": "/",
-    "restartPolicyType": "ON_FAILURE"
+    "healthcheckPath": "/api/health",
+    "healthcheckTimeout": 60,
+    "restartPolicyType": "ON_FAILURE",
+    "restartPolicyMaxRetries": 3
   }
 }
