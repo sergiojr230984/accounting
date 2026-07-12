@@ -93,13 +93,19 @@ export async function POST(request: Request) {
   let subtotal = new Decimal(0);
   let taxAmount = new Decimal(0);
 
+  // Round each line's total to 2 decimals FIRST, then sum the already-
+  // rounded values into subtotal -- same fix as the customer-invoice
+  // equivalent of this pattern (previously subtotal/taxAmount accumulated
+  // full-precision Decimals while lineTotal was rounded separately for
+  // storage, so the two could legitimately disagree by a cent).
   const computedItems = items.map((item) => {
     const qty = new Decimal(item.quantity);
     const cost = new Decimal(item.unitCost);
     const rate = new Decimal(item.taxRate);
-    const lineTotal = qty.times(cost);
+    const lineTotal = qty.times(cost).toDecimalPlaces(2);
+    const lineTax = lineTotal.times(rate).toDecimalPlaces(2);
     subtotal = subtotal.plus(lineTotal);
-    taxAmount = taxAmount.plus(lineTotal.times(rate));
+    taxAmount = taxAmount.plus(lineTax);
     return { ...item, lineTotal: lineTotal.toFixed(2) };
   });
 

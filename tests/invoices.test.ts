@@ -47,10 +47,10 @@ describe("invoice creation — server-side totals", () => {
     expect(second.status).toBe(409);
   });
 
-  // Identical bug to main: subtotal accumulates unrounded per-line Decimals
-  // and rounds once at the end, while each line item is rounded individually
-  // for storage/display -- the two can legitimately disagree by a cent.
-  it.fails("invoice subtotal should equal the sum of its own stored line totals", async () => {
+  // Fixed: each line's total is rounded to 2 decimals before being summed
+  // into subtotal, instead of accumulating full-precision Decimals and
+  // rounding once at the end -- the two values can no longer disagree.
+  it("invoice subtotal should equal the sum of its own stored line totals", async () => {
     const { body } = await admin.postJson<{ subtotal: string; items: { lineTotal: string }[] }>(
       "/api/invoices/customer",
       {

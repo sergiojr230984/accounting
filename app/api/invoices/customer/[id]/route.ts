@@ -135,9 +135,12 @@ export async function PATCH(
         const qty = new Decimal(item.quantity || "0");
         const price = new Decimal(item.unitPrice || "0");
         const rate = new Decimal(item.taxRate || "0");
-        const lineTotal = qty.times(price);
+        // Round to 2 decimals FIRST, then sum the already-rounded values
+        // into subtotal/taxAmount -- same fix as invoice creation.
+        const lineTotal = qty.times(price).toDecimalPlaces(2);
+        const lineTax = lineTotal.times(rate).toDecimalPlaces(2);
         subtotal = subtotal.plus(lineTotal);
-        taxAmount = taxAmount.plus(lineTotal.times(rate));
+        taxAmount = taxAmount.plus(lineTax);
         return {
           description: item.description,
           itemDescription: item.itemDescription,
