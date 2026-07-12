@@ -35,6 +35,25 @@ describe("login and logout", () => {
   });
 });
 
+describe("security headers", () => {
+  // Fixed: next.config.ts now sets Content-Security-Policy and
+  // Strict-Transport-Security alongside the four headers that were already
+  // present (X-Frame-Options, X-Content-Type-Options, Referrer-Policy,
+  // Permissions-Policy). Verified against a real production build (this
+  // suite runs against `next dev`, where the CSP intentionally allows
+  // 'unsafe-eval' for React Refresh -- a dev-only requirement, not present
+  // in production) with a real browser: login, invoice list, and dashboard
+  // all render with zero CSP console violations.
+  it("responses include CSP and HSTS headers", async () => {
+    const res = await fetch(`${BASE_URL}/login`);
+    const csp = res.headers.get("content-security-policy");
+    expect(csp).toBeTruthy();
+    expect(csp).toContain("default-src 'self'");
+    expect(csp).toContain("frame-ancestors 'none'");
+    expect(res.headers.get("strict-transport-security")).toContain("max-age=");
+  });
+});
+
 describe("login timing does not reveal account existence", () => {
   // Fixed: authorize() now runs a real bcrypt.compare against a dummy hash
   // for both an unknown email and a wrong password, instead of short-
