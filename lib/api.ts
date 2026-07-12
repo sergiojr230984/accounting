@@ -109,24 +109,6 @@ export async function requireAuth(): Promise<AuthedSession | NextResponse> {
     } as AuthedSession;
   }
 
-  // Pragmatic fallback for NextAuth v5-beta quirk: if `auth()` returned a
-  // session object at all, the request carries a valid signed cookie — we
-  // just can't extract the user fields. Treat that as authed-as-admin in
-  // this single-tenant deployment so settings / taxes / user CRUD aren't
-  // permanently blocked while we diagnose the underlying decoding issue.
-  if (session) {
-    return {
-      ...session,
-      expires: session.expires ?? new Date(Date.now() + 86400_000).toISOString(),
-      user: {
-        id: "session-fallback",
-        name: null,
-        email: null,
-        role: "ADMIN",
-      },
-    } as AuthedSession;
-  }
-
   return NextResponse.json(
     {
       error: "Your session has expired or wasn't recognized. Sign out and sign back in.",
@@ -155,12 +137,9 @@ export async function requireRole(
   if (guard instanceof NextResponse) return guard;
   const role = guard.user.role;
 
-  // If we couldn't determine the role (e.g. the v5-beta session-fallback path
-  // synthesized an ADMIN user), treat the session as authoritative. The
-  // alternative is permanently locking admins out of their own settings.
-  if (!role) return guard;
-
-  if (!roles.includes(role)) {
+  // An authenticated session with no determinable role cannot satisfy any
+  // role requirement -- reject rather than treating it as authorized.
+  if (!role || !roles.includes(role)) {
     return NextResponse.json(
       {
         error: `Forbidden — your role "${role}" cannot do this. Required: ${roles.join(" or ")}.`,
