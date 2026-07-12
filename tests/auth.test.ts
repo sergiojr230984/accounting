@@ -33,6 +33,17 @@ describe("login and logout", () => {
     });
     expect(res.status).toBe(401);
   });
+
+  // Fixed: NextAuth's JWT-strategy default session lifetime is 30 days --
+  // far too long a window for a session with access to customer/bank/
+  // financial data. lib/auth.ts now sets an explicit 12-hour maxAge.
+  it("a new session expires in roughly 12 hours, not the 30-day default", async () => {
+    const s = await loginAs("admin@lacuevita.com", "admin123");
+    const { body } = await s.getJson<{ expires: string }>("/api/auth/session");
+    const hoursFromNow = (new Date(body.expires).getTime() - Date.now()) / 3_600_000;
+    expect(hoursFromNow).toBeGreaterThan(11);
+    expect(hoursFromNow).toBeLessThan(13);
+  });
 });
 
 describe("security headers", () => {

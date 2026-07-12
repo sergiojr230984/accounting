@@ -18,7 +18,15 @@ const DUMMY_PASSWORD_HASH = bcrypt.hashSync("no-account-has-this-password", 12);
 
 const { handlers, auth: baseAuth, signIn, signOut } = NextAuth({
   trustHost: true,
-  session: { strategy: "jwt" },
+  // NextAuth's JWT-strategy default is 30 days -- far too long a window for
+  // a session with access to customer/bank/financial data, especially since
+  // (see lib/api.ts's auth() wrapper doc comment) a still-cryptographically-
+  // valid token issued before an explicit sign-out keeps working if replayed
+  // directly, independent of the client-side cookie clearing sign-out does.
+  // 12 hours bounds that exposure to roughly a working day; NextAuth's
+  // default updateAge (24h) still applies, so an active session's expiry
+  // keeps rolling forward on use rather than hard-cutting mid-task.
+  session: { strategy: "jwt", maxAge: 12 * 60 * 60 },
   pages: {
     signIn: "/login",
   },
