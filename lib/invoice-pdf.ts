@@ -1,5 +1,6 @@
 import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
+import Decimal from "decimal.js";
 import { formatDateOnly } from "./date";
 
 /**
@@ -218,10 +219,15 @@ export function generateInvoicePDF(invoice: InvoicePDFData): jsPDF {
   const leftColBottom = billY;
 
   // ─── RIGHT: INVOICE DETAILS ───────────────────────────────
-  const total = Number(invoice.totalAmount);
-  const paid = Number(invoice.paidAmount);
-  const down = Number(invoice.downPayment);
-  const balance = Math.max(total - paid - down, 0);
+  // Decimal, not raw JS float arithmetic -- money values combined here
+  // (total minus paid minus down, and later a sum across every payment)
+  // are exactly the kind of repeated floating-point subtraction/addition
+  // that can drift by a cent, and this "Balance Due" figure is the most
+  // customer-facing number on the document.
+  const total = new Decimal(invoice.totalAmount);
+  const paid = new Decimal(invoice.paidAmount);
+  const down = new Decimal(invoice.downPayment ?? 0);
+  const balance = Decimal.max(total.minus(paid).minus(down), 0);
 
   const rep = invoice.employee?.name?.trim() || "—";
   const rows: { label: string; value: string }[] = [
@@ -349,16 +355,21 @@ export function generateInvoicePDF(invoice: InvoicePDFData): jsPDF {
   writeRow("Subtotal", pdfCurrency(String(invoice.subtotal)), { muted: true });
   writeRow("Tax", pdfCurrency(String(invoice.taxAmount)), { muted: true });
 
-  const ccFee = Number(invoice.creditCardFee ?? 0);
-  if (ccFee > 0) {
+  const ccFee = new Decimal(invoice.creditCardFee ?? 0);
+  if (ccFee.gt(0)) {
     writeRow(company?.creditCardFeeLabel ?? "Card processing fee", pdfCurrency(ccFee.toFixed(2)), {
       muted: true,
     });
   }
 
   for (const fee of invoice.appliedFees ?? []) {
-    const amt = Number(fee.amount);
-    if (!isFinite(amt) || amt <= 0) continue;
+    let amt: Decimal;
+    try {
+      amt = new Decimal(fee.amount);
+    } catch {
+      continue;
+    }
+    if (!amt.isFinite() || amt.lte(0)) continue;
     writeRow(fee.label, pdfCurrency(amt.toFixed(2)), { muted: true });
   }
 
@@ -368,12 +379,12 @@ export function generateInvoicePDF(invoice: InvoicePDFData): jsPDF {
   writeRow("Total", pdfCurrency(String(invoice.totalAmount)), { bold: true, size: 11 });
 
   if (!isEstimate) {
-    if (down > 0) {
+    if (down.gt(0)) {
       writeRow("Down Payment", "-" + pdfCurrency(down.toFixed(2)), { muted: true });
     }
 
     const payments = invoice.payments ?? [];
-    const paymentSum = payments.reduce((acc, p) => acc + Number(p.amount), 0);
+    const paymentSum = payments.reduce((acc, p) => acc.plus(p.amount), new Decimal(0));
     if (payments.length > 0) {
       for (const p of payments) {
         const dateStr = formatDateOnly(p.paymentDate);
@@ -382,11 +393,11 @@ export function generateInvoicePDF(invoice: InvoicePDFData): jsPDF {
           : `Payment on ${dateStr}:`;
         writeRow(label, "-" + pdfCurrency(String(p.amount)), { muted: true });
       }
-      const leftover = paid - paymentSum;
-      if (leftover > 0.005) {
+      const leftover = paid.minus(paymentSum);
+      if (leftover.gt(0.005)) {
         writeRow("Payment Received", "-" + pdfCurrency(leftover.toFixed(2)), { muted: true });
       }
-    } else if (paid > 0) {
+    } else if (paid.gt(0)) {
       writeRow("Payment Received", "-" + pdfCurrency(paid.toFixed(2)), { muted: true });
     }
 
