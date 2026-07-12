@@ -51,47 +51,46 @@ describe("correctly ADMIN-gated resources", () => {
   });
 });
 
-describe("resources with no role gate at all -- any authenticated role has full access", () => {
-  it.fails("SALES should not see the company-wide P&L on the dashboard", async () => {
+describe("previously had no role gate at all -- now fixed", () => {
+  it("SALES cannot see the company-wide P&L on the dashboard", async () => {
     const { status } = await sales1.getJson("/api/dashboard");
-    expect(status).toBe(403); // currently 200
+    expect(status).toBe(403);
   });
 
-  it.fails("SALES should not be able to delete a customer", async () => {
+  it("SALES cannot delete a customer", async () => {
     const created = await admin.postJson<{ id: string }>("/api/customers", {
       name: "Permission Test Customer (safe to delete)",
     });
     const { status } = await sales1.postJson(`/api/customers/${created.body.id}`, {}, "DELETE");
-    expect(status).toBe(403); // currently 200
+    expect(status).toBe(403);
   });
 
-  // Regression vs. main: on main, suppliers/[id] was one of the
-  // *correctly*-gated routes (via the now-removed lib/permissions.ts). On
-  // this branch every supplier handler -- including DELETE, and including
-  // read access to bank account/routing/Zelle fields -- has zero role check.
-  it.fails("SALES should not see supplier bank account details", async () => {
+  // Regression vs. main, now restored: on main, suppliers/[id] was one of
+  // the *correctly*-gated routes (via the now-removed lib/permissions.ts).
+  it("SALES cannot see supplier bank account details", async () => {
     const { status } = await sales1.getJson("/api/suppliers");
-    expect(status).toBe(403); // currently 200, full bank details included
+    expect(status).toBe(403);
   });
 
-  it.fails("SALES should not be able to delete a supplier", async () => {
+  it("SALES cannot delete a supplier", async () => {
     const created = await admin.postJson<{ id: string }>("/api/suppliers", {
       name: "Permission Test Supplier (safe to delete)",
     });
     const { status } = await sales1.postJson(`/api/suppliers/${created.body.id}`, {}, "DELETE");
-    expect(status).toBe(403); // currently 200
+    expect(status).toBe(403);
   });
 
-  it.fails("SALES should not see every employee's commission rate", async () => {
+  it("SALES does not see every employee's commission rate", async () => {
     await admin.postJson("/api/employees", { name: "Commission Leak Test", commissionRate: "0.15" });
     const { status, body } = await sales1.getJson<{ commissionRate: string }[]>("/api/employees");
+    expect(status).toBe(200); // the list itself stays visible (invoice-assignment dropdown)
     const anyHasCommission = Array.isArray(body) && body.some((e) => "commissionRate" in e);
-    expect(status === 403 || !anyHasCommission).toBe(true); // currently 200 with commissionRate included
+    expect(anyHasCommission).toBe(false); // but the sensitive field is stripped
   });
 
-  it.fails("SALES should not see every employee's commission and sales totals on the performance leaderboard", async () => {
+  it("SALES cannot see every employee's commission and sales totals on the performance leaderboard", async () => {
     const { status } = await sales1.getJson("/api/performance");
-    expect(status).toBe(403); // currently 200, company-wide leaderboard visible to any role
+    expect(status).toBe(403);
   });
 });
 

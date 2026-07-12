@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
-import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { initializeDatabase } from "@/lib/init-db";
+import { requireRole } from "@/lib/api";
 import { z } from "zod";
 
 const schema = z.object({
@@ -24,8 +24,10 @@ const schema = z.object({
 });
 
 export async function GET() {
-  const session = await auth();
-  if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  // Suppliers include bank account/routing/Zelle details -- ADMIN/MANAGER
+  // only, matching every other financial resource in the app.
+  const guard = await requireRole("ADMIN", "MANAGER");
+  if (guard instanceof NextResponse) return guard;
 
   await initializeDatabase();
   try {
@@ -43,8 +45,8 @@ export async function GET() {
 }
 
 export async function POST(request: Request) {
-  const session = await auth();
-  if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  const guard = await requireRole("ADMIN", "MANAGER");
+  if (guard instanceof NextResponse) return guard;
 
   let body: unknown;
   try {
