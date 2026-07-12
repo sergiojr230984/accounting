@@ -112,24 +112,42 @@ describe("paid-invoice protection", () => {
 });
 
 describe("overpayment handling", () => {
-  it.fails(
-    "paidAmount should not be able to exceed totalAmount without an explicit credit/overpayment path",
-    async () => {
-      const created = await admin.postJson<{ id: string }>("/api/invoices/customer", {
-        customerId,
-        invoiceNumber: `OVERPAY-TEST-${Date.now()}`,
-        invoiceDate: "2026-01-01",
-        dueDate: "2026-01-31",
-        items: [{ description: "Service", quantity: "1", unitPrice: "1000" }],
-      });
-      const { status } = await admin.postJson(
-        `/api/invoices/customer/${created.body.id}`,
-        { paidAmount: "5000" },
-        "PATCH"
-      );
-      expect(status).toBe(400); // currently 200
-    }
-  );
+  it("paidAmount cannot exceed totalAmount via PATCH", async () => {
+    const created = await admin.postJson<{ id: string }>("/api/invoices/customer", {
+      customerId,
+      invoiceNumber: `OVERPAY-TEST-${Date.now()}`,
+      invoiceDate: "2026-01-01",
+      dueDate: "2026-01-31",
+      items: [{ description: "Service", quantity: "1", unitPrice: "1000" }],
+    });
+    const { status } = await admin.postJson(
+      `/api/invoices/customer/${created.body.id}`,
+      { paidAmount: "5000" },
+      "PATCH"
+    );
+    expect(status).toBe(400);
+  });
+
+  it("a payment that would push paidAmount above totalAmount is rejected", async () => {
+    const created = await admin.postJson<{ id: string }>("/api/invoices/customer", {
+      customerId,
+      invoiceNumber: `OVERPAY-LEDGER-${Date.now()}`,
+      invoiceDate: "2026-01-01",
+      dueDate: "2026-01-31",
+      items: [{ description: "Service", quantity: "1", unitPrice: "1000" }],
+    });
+    const id = created.body.id;
+    const first = await admin.postJson(`/api/invoices/customer/${id}/payments`, {
+      amount: "600",
+      paymentDate: "2026-01-05",
+    });
+    expect(first.status).toBe(201);
+    const second = await admin.postJson(`/api/invoices/customer/${id}/payments`, {
+      amount: "500", // 600 + 500 = 1100 > totalAmount 1000
+      paymentDate: "2026-01-06",
+    });
+    expect(second.status).toBe(400);
+  });
 });
 
 describe("payment ledger — new on this branch, not present on main", () => {

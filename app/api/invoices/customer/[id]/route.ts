@@ -205,6 +205,25 @@ export async function PATCH(
     }
   }
 
+  // Reject an amount that would exceed what's actually owed, rather than
+  // silently absorbing the difference -- there's no credit-balance concept
+  // in this codebase to represent "the customer overpaid by $X", so an
+  // over-cap value has nowhere correct to go and previously just vanished
+  // from the system's perspective.
+  if (data.paidAmount !== undefined || data.downPayment !== undefined) {
+    const newPaid = new Decimal(data.paidAmount ?? existing.paidAmount.toString());
+    const newDown = new Decimal(data.downPayment ?? existing.downPayment.toString());
+    const effectiveTotal = updateData.totalAmount !== undefined
+      ? new Decimal(updateData.totalAmount as string)
+      : new Decimal(existing.totalAmount.toString());
+    if (newPaid.plus(newDown).gt(effectiveTotal)) {
+      return NextResponse.json(
+        { error: "paidAmount plus downPayment cannot exceed the invoice total." },
+        { status: 400 }
+      );
+    }
+  }
+
   // Auto-derive paymentStatus when paidAmount or downPayment changes and the
   // caller didn't explicitly send a status override.
   if ((data.paidAmount !== undefined || data.downPayment !== undefined) && data.paymentStatus === undefined) {

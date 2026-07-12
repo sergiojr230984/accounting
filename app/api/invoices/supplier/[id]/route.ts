@@ -135,6 +135,21 @@ export async function PATCH(
     };
   }
 
+  // Reject an amount that would exceed what's actually owed -- same
+  // reasoning as the customer-invoice equivalent of this check.
+  if (data.paidAmount !== undefined) {
+    const newPaid = new Decimal(data.paidAmount);
+    const effectiveTotal = updateData.totalAmount !== undefined
+      ? new Decimal(updateData.totalAmount as string)
+      : new Decimal(existing.totalAmount.toString());
+    if (newPaid.gt(effectiveTotal)) {
+      return NextResponse.json(
+        { error: "paidAmount cannot exceed the bill total." },
+        { status: 400 }
+      );
+    }
+  }
+
   // Auto-derive paymentStatus when paidAmount changes and the caller didn't
   // explicitly send a status override.
   if (data.paidAmount !== undefined && data.paymentStatus === undefined) {

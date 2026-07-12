@@ -36,6 +36,16 @@ export async function POST(
 
   const { amount, paymentDate, notes } = parsed.data;
 
+  const prospectivePaid = new Decimal(invoice.paidAmount.toString()).plus(new Decimal(amount));
+  const invoiceTotal = new Decimal(invoice.totalAmount.toString());
+  const invoiceDown = new Decimal(invoice.downPayment.toString());
+  if (prospectivePaid.plus(invoiceDown).gt(invoiceTotal)) {
+    return NextResponse.json(
+      { error: "This payment would push paidAmount above the invoice total." },
+      { status: 400 }
+    );
+  }
+
   // Date inputs send "YYYY-MM-DD". new Date("2026-06-25") parses as UTC
   // midnight, which in any timezone west of UTC (e.g. EST) renders as the
   // PREVIOUS day. Pin to noon UTC so the same calendar date is shown
