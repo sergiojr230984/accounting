@@ -150,6 +150,49 @@ describe("overpayment handling", () => {
   });
 });
 
+describe("product-catalog auto-save — batched, not one query per line item", () => {
+  it("creates a new product from a line-item description, but not a duplicate for an existing (case-insensitive) match", async () => {
+    const uniqueName = `Widget-${Date.now()}`;
+    await admin.postJson("/api/invoices/customer", {
+      customerId,
+      invoiceNumber: `PRODSYNC-A-${Date.now()}`,
+      invoiceDate: "2026-01-01",
+      dueDate: "2026-01-31",
+      items: [{ description: uniqueName, quantity: "1", unitPrice: "5" }],
+    });
+    // Re-used with different casing on a second invoice -- should not create a second product.
+    await admin.postJson("/api/invoices/customer", {
+      customerId,
+      invoiceNumber: `PRODSYNC-B-${Date.now()}`,
+      invoiceDate: "2026-01-01",
+      dueDate: "2026-01-31",
+      items: [{ description: uniqueName.toUpperCase(), quantity: "1", unitPrice: "5" }],
+    });
+
+    const { body: products } = await admin.getJson<{ name: string }[]>("/api/products");
+    const matches = products.filter((p) => p.name.toLowerCase() === uniqueName.toLowerCase());
+    expect(matches.length).toBe(1);
+  });
+
+  it("two line items sharing the same new name on one invoice only create one product", async () => {
+    const uniqueName = `Gadget-${Date.now()}`;
+    await admin.postJson("/api/invoices/customer", {
+      customerId,
+      invoiceNumber: `PRODSYNC-DUPE-${Date.now()}`,
+      invoiceDate: "2026-01-01",
+      dueDate: "2026-01-31",
+      items: [
+        { description: uniqueName, quantity: "1", unitPrice: "1" },
+        { description: uniqueName, quantity: "2", unitPrice: "2" },
+      ],
+    });
+
+    const { body: products } = await admin.getJson<{ name: string }[]>("/api/products");
+    const matches = products.filter((p) => p.name.toLowerCase() === uniqueName.toLowerCase());
+    expect(matches.length).toBe(1);
+  });
+});
+
 describe("next invoice number — computed via SQL aggregate, not a full-table JS scan", () => {
   it("suggests one past the highest existing sequence under the current prefix", async () => {
     const before = await admin.getJson<{ prefix: string; nextSeq: number }>(

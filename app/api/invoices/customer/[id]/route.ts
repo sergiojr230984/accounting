@@ -243,24 +243,35 @@ export async function PATCH(
       })),
     };
 
-    // Auto-save new line items to the product catalog
+    // Auto-save new line items to the product catalog. Batched into one
+    // existence-check query plus one createMany -- same fix as invoice
+    // creation's equivalent of this loop.
     try {
-      for (const item of data.items) {
-        const name = item.description.trim();
-        if (!name) continue;
-        const existing = await prisma.product.findFirst({
-          where: { name: { equals: name, mode: "insensitive" } },
+      const names = Array.from(new Set(data.items.map((item) => item.description.trim()).filter(Boolean)));
+      if (names.length > 0) {
+        const existingProducts = await prisma.product.findMany({
+          where: { OR: names.map((name) => ({ name: { equals: name, mode: "insensitive" as const } })) },
+          select: { name: true },
         });
-        if (!existing) {
-          await prisma.product.create({
-            data: {
-              name,
-              description: item.itemDescription ?? null,
-              price: item.unitPrice,
-              taxRate: item.taxRate,
-              active: true,
-            },
+        const existingLower = new Set(existingProducts.map((p) => p.name.toLowerCase()));
+        const seen = new Set<string>();
+        const creates: { name: string; description: string | null; price: string; taxRate: string; active: boolean }[] = [];
+        for (const item of data.items) {
+          const name = item.description.trim();
+          if (!name) continue;
+          const key = name.toLowerCase();
+          if (existingLower.has(key) || seen.has(key)) continue;
+          seen.add(key);
+          creates.push({
+            name,
+            description: item.itemDescription ?? null,
+            price: item.unitPrice,
+            taxRate: item.taxRate,
+            active: true,
           });
+        }
+        if (creates.length > 0) {
+          await prisma.product.createMany({ data: creates });
         }
       }
     } catch {
