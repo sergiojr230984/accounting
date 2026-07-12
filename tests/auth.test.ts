@@ -53,17 +53,19 @@ describe("middleware is cookie-presence-only, not signature validation (by desig
 });
 
 describe("critical: unauthenticated-in-practice admin endpoints", () => {
-  // Live-verified: with nothing but a forged cookie (no real login at all),
-  // this diagnostic endpoint reports whether AUTH_SECRET is set and its
-  // EXACT character length. That number materially narrows a brute-force
-  // search against app/api/admin/reset-admin-password, which uses
-  // AUTH_SECRET itself as a bearer token (see the test below).
-  it.fails("/api/me should not leak AUTH_SECRET length to an unauthenticated caller", async () => {
+  // Fixed: this diagnostic endpoint used to report whether AUTH_SECRET was
+  // set and its exact character length to anyone with a forged cookie (no
+  // real login at all). The env.authSecretLength/authSecretSet fields are
+  // removed entirely; the rest of the diagnostic endpoint (session/viewer
+  // shape, cookie names) is left as-is since it doesn't reveal anything an
+  // unauthenticated forged-cookie caller couldn't already see was absent.
+  it("/api/me should not leak AUTH_SECRET length to an unauthenticated caller", async () => {
     const res = await fetch(`${BASE_URL}/api/me`, {
       headers: { Cookie: "authjs.session-token=garbage-not-a-real-jwt" },
     });
     const body = await res.json();
-    expect(body.env?.authSecretLength).toBeUndefined(); // currently a real number
+    expect(body.env?.authSecretLength).toBeUndefined();
+    expect(body.env).toBeUndefined();
   });
 
   // Fixed by removal: this route had no auth() call at all and returned
