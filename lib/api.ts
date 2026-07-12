@@ -3,6 +3,7 @@ import type { Session } from "next-auth";
 import { cookies } from "next/headers";
 import { decode } from "@auth/core/jwt";
 import { auth } from "./auth";
+import { prisma } from "./prisma";
 import { rateLimit, type RateLimitOptions } from "./rate-limit";
 
 export type Role = "ADMIN" | "MANAGER" | "SALES";
@@ -58,6 +59,15 @@ async function readJwtUser(): Promise<JwtFallback> {
         if (!token) continue;
         const id = (token.id as string) ?? (token.sub as string) ?? "";
         if (!id) continue;
+
+        // This path decodes the JWT directly rather than going through
+        // lib/auth.ts's session() callback, so it needs its own check that
+        // the account hasn't been deactivated since the token was issued --
+        // otherwise a deactivated user's session would keep working through
+        // this fallback even after the primary path revokes it.
+        const dbUser = await prisma.user.findUnique({ where: { id }, select: { active: true } });
+        if (dbUser?.active === false) continue;
+
         const role = ((token.role as string) ?? "MANAGER") as Role;
         return {
           ok: true,
@@ -109,24 +119,6 @@ export async function requireAuth(): Promise<AuthedSession | NextResponse> {
     } as AuthedSession;
   }
 
-  // Pragmatic fallback for NextAuth v5-beta quirk: if `auth()` returned a
-  // session object at all, the request carries a valid signed cookie — we
-  // just can't extract the user fields. Treat that as authed-as-admin in
-  // this single-tenant deployment so settings / taxes / user CRUD aren't
-  // permanently blocked while we diagnose the underlying decoding issue.
-  if (session) {
-    return {
-      ...session,
-      expires: session.expires ?? new Date(Date.now() + 86400_000).toISOString(),
-      user: {
-        id: "session-fallback",
-        name: null,
-        email: null,
-        role: "ADMIN",
-      },
-    } as AuthedSession;
-  }
-
   return NextResponse.json(
     {
       error: "Your session has expired or wasn't recognized. Sign out and sign back in.",
@@ -155,12 +147,9 @@ export async function requireRole(
   if (guard instanceof NextResponse) return guard;
   const role = guard.user.role;
 
-  // If we couldn't determine the role (e.g. the v5-beta session-fallback path
-  // synthesized an ADMIN user), treat the session as authoritative. The
-  // alternative is permanently locking admins out of their own settings.
-  if (!role) return guard;
-
-  if (!roles.includes(role)) {
+  // An authenticated session with no determinable role cannot satisfy any
+  // role requirement -- reject rather than treating it as authorized.
+  if (!role || !roles.includes(role)) {
     return NextResponse.json(
       {
         error: `Forbidden — your role "${role}" cannot do this. Required: ${roles.join(" or ")}.`,
@@ -172,6 +161,29 @@ export async function requireRole(
     );
   }
   return guard;
+}
+
+/**
+ * Horizontal scoping for customer invoices. ADMIN/MANAGER see everything
+ * (returns null -- no filter to apply). A SALES caller is scoped to
+ * invoices linked to "their" Employee record, matched by email against the
+ * session's own email (User has no direct relation to Employee, but both
+ * models already have a unique `email` field -- no schema change needed).
+ * A SALES user with no matching Employee row is scoped to an id that can
+ * never match, rather than falling back to seeing everything: an unlinked
+ * SALES account should see nothing, not the whole company's invoices.
+ */
+export async function scopeInvoicesToOwnEmployee(
+  session: AuthedSession
+): Promise<{ employeeId: string } | null> {
+  if (session.user.role !== "SALES") return null;
+  const email = (session.user.email ?? "").toLowerCase().trim();
+  if (!email) return { employeeId: "__no-matching-employee__" };
+  const employee = await prisma.employee.findFirst({
+    where: { email: { equals: email, mode: "insensitive" } },
+    select: { id: true },
+  });
+  return { employeeId: employee?.id ?? "__no-matching-employee__" };
 }
 
 /**

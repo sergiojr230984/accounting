@@ -1,17 +1,32 @@
-import NextAuth from "next-auth";
+import NextAuth, { type Session } from "next-auth";
 import Credentials from "next-auth/providers/credentials";
 import bcrypt from "bcryptjs";
 import { prisma } from "@/lib/prisma";
 import { z } from "zod";
+import { rateLimit } from "@/lib/rate-limit";
 
 const loginSchema = z.object({
   email: z.string().email(),
   password: z.string().min(6),
 });
 
-export const { handlers, auth, signIn, signOut } = NextAuth({
+// A precomputed hash with no matching password, compared against on every
+// login attempt for an email that doesn't exist (or is deactivated) so the
+// response takes the same time as a real, known-account attempt -- login
+// timing shouldn't reveal which email addresses have accounts.
+const DUMMY_PASSWORD_HASH = bcrypt.hashSync("no-account-has-this-password", 12);
+
+const { handlers, auth: baseAuth, signIn, signOut } = NextAuth({
   trustHost: true,
-  session: { strategy: "jwt" },
+  // NextAuth's JWT-strategy default is 30 days -- far too long a window for
+  // a session with access to customer/bank/financial data, especially since
+  // (see lib/api.ts's auth() wrapper doc comment) a still-cryptographically-
+  // valid token issued before an explicit sign-out keeps working if replayed
+  // directly, independent of the client-side cookie clearing sign-out does.
+  // 12 hours bounds that exposure to roughly a working day; NextAuth's
+  // default updateAge (24h) still applies, so an active session's expiry
+  // keeps rolling forward on use rather than hard-cutting mid-task.
+  session: { strategy: "jwt", maxAge: 12 * 60 * 60 },
   pages: {
     signIn: "/login",
   },
@@ -79,15 +94,34 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
   },
   providers: [
     Credentials({
-      async authorize(credentials) {
+      async authorize(credentials, request) {
         const parsed = loginSchema.safeParse(credentials);
         if (!parsed.success) return null;
+
+        // Throttle both by IP (blocks one source hammering many accounts)
+        // and by the submitted email (blocks distributed attempts against
+        // one account) before ever touching the database or bcrypt.
+        const ip =
+          request.headers.get("x-forwarded-for")?.split(",")[0].trim() ||
+          request.headers.get("x-real-ip") ||
+          "unknown";
+        const ipLimit = rateLimit(`login-ip:${ip}`, { windowMs: 15 * 60_000, max: 50 });
+        const emailLimit = rateLimit(`login-email:${parsed.data.email.toLowerCase()}`, {
+          windowMs: 15 * 60_000,
+          max: 10,
+        });
+        if (!ipLimit.ok || !emailLimit.ok) return null;
 
         const user = await prisma.user.findUnique({
           where: { email: parsed.data.email },
         });
-        if (!user) return null;
-        if (user.active === false) return null; // deactivated account
+        if (!user || user.active === false) {
+          // Pay the same bcrypt cost as a real comparison, against a hash
+          // that can never match, so the response timing is indistinguishable
+          // from a real account with a wrong password.
+          await bcrypt.compare(parsed.data.password, DUMMY_PASSWORD_HASH);
+          return null;
+        }
 
         const valid = await bcrypt.compare(parsed.data.password, user.password);
         if (!valid) return null;
@@ -101,3 +135,29 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
     }),
   ],
 });
+
+/**
+ * Wraps NextAuth's own auth(). The session() callback above already
+ * re-reads `role` from the database on every call, but NextAuth v5-beta's
+ * App Router session handling only picks up in-place mutations to the
+ * existing session object -- returning null from that callback (to reject
+ * a deactivated user outright) is silently discarded, so `session` itself
+ * always comes back truthy once the JWT is validly signed, regardless of
+ * what the callback returns. Most routes in this app only check
+ * `if (!session)`, not a field within it, so an in-place mutation alone
+ * can't revoke a deactivated user's session for those callers. Checking
+ * `active` here, on the actual return value every caller receives, closes
+ * that gap for all of them in one place instead of editing ~30 routes.
+ */
+export async function auth(): Promise<Session | null> {
+  const session = (await baseAuth()) as Session | null;
+  if (!session?.user?.id) return session;
+  const dbUser = await prisma.user.findUnique({
+    where: { id: session.user.id },
+    select: { active: true },
+  });
+  if (dbUser?.active === false) return null;
+  return session;
+}
+
+export { handlers, signIn, signOut };

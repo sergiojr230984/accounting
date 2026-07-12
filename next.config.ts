@@ -18,10 +18,36 @@ const nextConfig: NextConfig = {
   poweredByHeader: false,
   // Long-cache hashed static assets and add basic security headers.
   async headers() {
+    // No external script/style/font/image host is loaded anywhere in the
+    // app today (confirmed by a repo-wide search) -- self plus data:/blob:
+    // for images (client-side previews, jsPDF) is enough. script-src/
+    // style-src keep 'unsafe-inline' because Next.js's default (non-nonce)
+    // App Router setup relies on inline scripts for hydration data; a
+    // stricter nonce-based CSP is a reasonable follow-up but needs its own
+    // middleware wiring and browser testing, not a drop-in change.
+    // Next.js dev mode's React Refresh/HMR evaluates code via eval(), which
+    // a strict script-src blocks -- that's dev-only, not a production
+    // requirement, so unsafe-eval is scoped to non-production only.
+    const isDev = process.env.NODE_ENV !== "production";
+    const csp = [
+      "default-src 'self'",
+      `script-src 'self' 'unsafe-inline'${isDev ? " 'unsafe-eval'" : ""}`,
+      "style-src 'self' 'unsafe-inline'",
+      "img-src 'self' data: blob:",
+      "font-src 'self' data:",
+      "connect-src 'self'",
+      "object-src 'none'",
+      "base-uri 'self'",
+      "form-action 'self'",
+      "frame-ancestors 'none'",
+    ].join("; ");
+
     return [
       {
         source: "/(.*)",
         headers: [
+          { key: "Content-Security-Policy", value: csp },
+          { key: "Strict-Transport-Security", value: "max-age=63072000; includeSubDomains; preload" },
           { key: "X-Frame-Options", value: "DENY" },
           { key: "X-Content-Type-Options", value: "nosniff" },
           { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },

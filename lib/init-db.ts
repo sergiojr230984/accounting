@@ -1,7 +1,15 @@
 import bcrypt from "bcryptjs";
+import { randomBytes } from "crypto";
 import { prisma } from "./prisma";
 
-let initialized = false;
+// Caches the in-flight promise, not just a boolean -- a boolean flag set
+// synchronously before the async work below completes would let a second
+// caller (e.g. a route's own `await initializeDatabase()` racing the
+// fire-and-forget call in instrumentation.ts) see "already started" and
+// return immediately while table creation is still in progress, letting it
+// query a table that doesn't exist yet. Every caller now awaits the same
+// promise, so none can proceed until schema creation has actually finished.
+let initPromise: Promise<void> | null = null;
 
 const SCHEMA_STATEMENTS: string[] = [
   `DO $$ BEGIN CREATE TYPE "Role" AS ENUM ('ADMIN', 'MANAGER'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;`,
@@ -191,12 +199,54 @@ const SCHEMA_STATEMENTS: string[] = [
   `ALTER TABLE "SupplierInvoice" ADD COLUMN IF NOT EXISTS "customerInvoiceRef" TEXT;`,
   `ALTER TABLE "CustomerInvoiceItem" ADD COLUMN IF NOT EXISTS "itemDescription" TEXT;`,
   `ALTER TABLE "SupplierInvoiceItem" ADD COLUMN IF NOT EXISTS "itemDescription" TEXT;`,
+  // Estimate/EstimateItem were fully implemented (prisma/schema.prisma,
+  // /api/estimates/**, tests/estimates.test.ts) but never added here -- on
+  // a fresh production database (this file is the only schema-provisioning
+  // mechanism; see DEPLOYMENT.md) every /api/estimates call would fail with
+  // "relation does not exist".
+  `DO $$ BEGIN CREATE TYPE "EstimateStatus" AS ENUM ('DRAFT', 'SENT', 'ACCEPTED', 'DECLINED', 'EXPIRED'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;`,
+  `CREATE TABLE IF NOT EXISTS "Estimate" (
+    "id" TEXT NOT NULL PRIMARY KEY,
+    "estimateNumber" TEXT NOT NULL,
+    "customerId" TEXT NOT NULL,
+    "estimateDate" TIMESTAMP(3) NOT NULL,
+    "expiryDate" TIMESTAMP(3),
+    "subtotal" DECIMAL(15,2) NOT NULL,
+    "taxAmount" DECIMAL(15,2) NOT NULL DEFAULT 0,
+    "totalAmount" DECIMAL(15,2) NOT NULL,
+    "status" "EstimateStatus" NOT NULL DEFAULT 'DRAFT',
+    "notes" TEXT,
+    "viewToken" TEXT,
+    "sentAt" TIMESTAMP(3),
+    "convertedInvoiceId" TEXT,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT "Estimate_estimateNumber_customerId_key" UNIQUE ("estimateNumber", "customerId"),
+    CONSTRAINT "Estimate_customerId_fkey" FOREIGN KEY ("customerId") REFERENCES "Customer"("id") ON DELETE RESTRICT ON UPDATE CASCADE
+  );`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS "Estimate_viewToken_key" ON "Estimate"("viewToken");`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS "Estimate_convertedInvoiceId_key" ON "Estimate"("convertedInvoiceId");`,
+  `CREATE TABLE IF NOT EXISTS "EstimateItem" (
+    "id" TEXT NOT NULL PRIMARY KEY,
+    "estimateId" TEXT NOT NULL,
+    "description" TEXT NOT NULL,
+    "itemDescription" TEXT,
+    "quantity" DECIMAL(15,4) NOT NULL,
+    "unitPrice" DECIMAL(15,2) NOT NULL,
+    "taxRate" DECIMAL(5,4) NOT NULL DEFAULT 0,
+    "lineTotal" DECIMAL(15,2) NOT NULL,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT "EstimateItem_estimateId_fkey" FOREIGN KEY ("estimateId") REFERENCES "Estimate"("id") ON DELETE CASCADE ON UPDATE CASCADE
+  );`,
 ];
 
-export async function initializeDatabase() {
-  if (initialized) return;
-  initialized = true;
+export function initializeDatabase(): Promise<void> {
+  if (!initPromise) initPromise = runInitialization();
+  return initPromise;
+}
 
+async function runInitialization(): Promise<void> {
   console.log("[init-db] Creating tables if missing...");
   for (const stmt of SCHEMA_STATEMENTS) {
     try {
@@ -263,7 +313,13 @@ export async function initializeDatabase() {
 
     const adminCount = await prisma.user.count({ where: { role: "ADMIN" } });
     if (adminCount === 0) {
-      const hash = await bcrypt.hash("admin123", 12);
+      // Emergency safety net only (every ADMIN account was deleted/demoted).
+      // The password is random and never logged -- recovering access to
+      // this account requires setting a new password directly against the
+      // database, which is the correct floor for a last-resort recovery
+      // path, not something visible in ordinary application logs.
+      const randomPassword = randomBytes(24).toString("base64url");
+      const hash = await bcrypt.hash(randomPassword, 12);
       await prisma.user.create({
         data: {
           email: "admin@lacuevita.com",
@@ -272,7 +328,9 @@ export async function initializeDatabase() {
           role: "ADMIN",
         },
       });
-      console.log("[init-db] Default admin seeded: admin@lacuevita.com / admin123");
+      console.log(
+        "[init-db] No ADMIN users existed -- created a fallback admin@lacuevita.com account with a random password. Set its password directly in the database to recover access."
+      );
     }
   } catch (e) {
     console.error("[init-db] admin seed failed:", e);

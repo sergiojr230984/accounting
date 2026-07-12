@@ -47,10 +47,10 @@ describe("invoice creation — server-side totals", () => {
     expect(second.status).toBe(409);
   });
 
-  // Identical bug to main: subtotal accumulates unrounded per-line Decimals
-  // and rounds once at the end, while each line item is rounded individually
-  // for storage/display -- the two can legitimately disagree by a cent.
-  it.fails("invoice subtotal should equal the sum of its own stored line totals", async () => {
+  // Fixed: each line's total is rounded to 2 decimals before being summed
+  // into subtotal, instead of accumulating full-precision Decimals and
+  // rounding once at the end -- the two values can no longer disagree.
+  it("invoice subtotal should equal the sum of its own stored line totals", async () => {
     const { body } = await admin.postJson<{ subtotal: string; items: { lineTotal: string }[] }>(
       "/api/invoices/customer",
       {
@@ -84,42 +84,228 @@ describe("paid-invoice protection", () => {
     return id;
   }
 
-  it.fails("a PAID invoice should not accept line-item edits", async () => {
+  it("a PAID invoice does not accept line-item edits", async () => {
     const id = await createAndFullyPayInvoice();
     const { status } = await admin.postJson(
       `/api/invoices/customer/${id}`,
       { items: [{ description: "rewritten after payment", quantity: "1", unitPrice: "1" }] },
       "PATCH"
     );
-    expect(status).toBe(409); // currently 200
+    expect(status).toBe(409);
   });
 
-  it.fails("a PAID invoice should not be deletable", async () => {
+  it("a PAID invoice is not deletable", async () => {
     const id = await createAndFullyPayInvoice();
     const { status } = await admin.postJson(`/api/invoices/customer/${id}`, {}, "DELETE");
-    expect(status).toBe(409); // currently 200
+    expect(status).toBe(409);
+  });
+
+  it("a PAID invoice still accepts non-item edits (e.g. notes)", async () => {
+    const id = await createAndFullyPayInvoice();
+    const { status } = await admin.postJson(
+      `/api/invoices/customer/${id}`,
+      { notes: "Called customer to confirm receipt" },
+      "PATCH"
+    );
+    expect(status).toBe(200);
   });
 });
 
 describe("overpayment handling", () => {
-  it.fails(
-    "paidAmount should not be able to exceed totalAmount without an explicit credit/overpayment path",
-    async () => {
-      const created = await admin.postJson<{ id: string }>("/api/invoices/customer", {
-        customerId,
-        invoiceNumber: `OVERPAY-TEST-${Date.now()}`,
-        invoiceDate: "2026-01-01",
-        dueDate: "2026-01-31",
-        items: [{ description: "Service", quantity: "1", unitPrice: "1000" }],
-      });
-      const { status } = await admin.postJson(
-        `/api/invoices/customer/${created.body.id}`,
-        { paidAmount: "5000" },
-        "PATCH"
-      );
-      expect(status).toBe(400); // currently 200
-    }
-  );
+  it("paidAmount cannot exceed totalAmount via PATCH", async () => {
+    const created = await admin.postJson<{ id: string }>("/api/invoices/customer", {
+      customerId,
+      invoiceNumber: `OVERPAY-TEST-${Date.now()}`,
+      invoiceDate: "2026-01-01",
+      dueDate: "2026-01-31",
+      items: [{ description: "Service", quantity: "1", unitPrice: "1000" }],
+    });
+    const { status } = await admin.postJson(
+      `/api/invoices/customer/${created.body.id}`,
+      { paidAmount: "5000" },
+      "PATCH"
+    );
+    expect(status).toBe(400);
+  });
+
+  it("a payment that would push paidAmount above totalAmount is rejected", async () => {
+    const created = await admin.postJson<{ id: string }>("/api/invoices/customer", {
+      customerId,
+      invoiceNumber: `OVERPAY-LEDGER-${Date.now()}`,
+      invoiceDate: "2026-01-01",
+      dueDate: "2026-01-31",
+      items: [{ description: "Service", quantity: "1", unitPrice: "1000" }],
+    });
+    const id = created.body.id;
+    const first = await admin.postJson(`/api/invoices/customer/${id}/payments`, {
+      amount: "600",
+      paymentDate: "2026-01-05",
+    });
+    expect(first.status).toBe(201);
+    const second = await admin.postJson(`/api/invoices/customer/${id}/payments`, {
+      amount: "500", // 600 + 500 = 1100 > totalAmount 1000
+      paymentDate: "2026-01-06",
+    });
+    expect(second.status).toBe(400);
+  });
+});
+
+describe("product-catalog auto-save — batched, not one query per line item", () => {
+  it("creates a new product from a line-item description, but not a duplicate for an existing (case-insensitive) match", async () => {
+    const uniqueName = `Widget-${Date.now()}`;
+    await admin.postJson("/api/invoices/customer", {
+      customerId,
+      invoiceNumber: `PRODSYNC-A-${Date.now()}`,
+      invoiceDate: "2026-01-01",
+      dueDate: "2026-01-31",
+      items: [{ description: uniqueName, quantity: "1", unitPrice: "5" }],
+    });
+    // Re-used with different casing on a second invoice -- should not create a second product.
+    await admin.postJson("/api/invoices/customer", {
+      customerId,
+      invoiceNumber: `PRODSYNC-B-${Date.now()}`,
+      invoiceDate: "2026-01-01",
+      dueDate: "2026-01-31",
+      items: [{ description: uniqueName.toUpperCase(), quantity: "1", unitPrice: "5" }],
+    });
+
+    const { body: products } = await admin.getJson<{ name: string }[]>("/api/products");
+    const matches = products.filter((p) => p.name.toLowerCase() === uniqueName.toLowerCase());
+    expect(matches.length).toBe(1);
+  });
+
+  it("two line items sharing the same new name on one invoice only create one product", async () => {
+    const uniqueName = `Gadget-${Date.now()}`;
+    await admin.postJson("/api/invoices/customer", {
+      customerId,
+      invoiceNumber: `PRODSYNC-DUPE-${Date.now()}`,
+      invoiceDate: "2026-01-01",
+      dueDate: "2026-01-31",
+      items: [
+        { description: uniqueName, quantity: "1", unitPrice: "1" },
+        { description: uniqueName, quantity: "2", unitPrice: "2" },
+      ],
+    });
+
+    const { body: products } = await admin.getJson<{ name: string }[]>("/api/products");
+    const matches = products.filter((p) => p.name.toLowerCase() === uniqueName.toLowerCase());
+    expect(matches.length).toBe(1);
+  });
+});
+
+describe("next invoice number — computed via SQL aggregate, not a full-table JS scan", () => {
+  it("suggests one past the highest existing sequence under the current prefix", async () => {
+    const before = await admin.getJson<{ prefix: string; nextSeq: number }>(
+      "/api/invoices/customer/next-number"
+    );
+    const { prefix } = before.body;
+
+    // Deliberately far above whatever sequence other tests have reached,
+    // so this assertion doesn't depend on run order.
+    const highNumber = `${prefix}9999`;
+    await admin.postJson("/api/invoices/customer", {
+      customerId,
+      invoiceNumber: highNumber,
+      invoiceDate: "2026-01-01",
+      dueDate: "2026-01-31",
+      items: [{ description: "x", quantity: "1", unitPrice: "1" }],
+    });
+
+    const after = await admin.getJson<{ nextSeq: number; nextNumber: string }>(
+      "/api/invoices/customer/next-number"
+    );
+    expect(after.body.nextSeq).toBe(10000);
+    expect(after.body.nextNumber).toBe(`${prefix}10000`);
+  });
+
+  it("a manually-set invoice number with trailing non-digit text still contributes its leading digits (matches the old parseInt-based behavior)", async () => {
+    const before = await admin.getJson<{ prefix: string }>("/api/invoices/customer/next-number");
+    const { prefix } = before.body;
+
+    await admin.postJson("/api/invoices/customer", {
+      customerId,
+      invoiceNumber: `${prefix}8888b`,
+      invoiceDate: "2026-01-01",
+      dueDate: "2026-01-31",
+      items: [{ description: "x", quantity: "1", unitPrice: "1" }],
+    });
+
+    const after = await admin.getJson<{ nextSeq: number }>("/api/invoices/customer/next-number");
+    expect(after.body.nextSeq).toBeGreaterThanOrEqual(8889);
+  });
+});
+
+describe("applied fees are re-derived server-side, not trusted from the client", () => {
+  let feeId: string;
+  const feeRate = 0.1; // 10%
+
+  beforeAll(async () => {
+    feeId = `fee-${Date.now()}`;
+    const { status } = await admin.postJson(
+      "/api/settings",
+      { customFees: [{ id: feeId, label: "Delivery fee", rate: feeRate }] },
+      "PATCH"
+    );
+    expect(status).toBe(200);
+  });
+
+  it("rejects a fee id that isn't a currently configured fee", async () => {
+    const { status, body } = await admin.postJson<{ error: string }>("/api/invoices/customer", {
+      customerId,
+      invoiceNumber: `FEE-UNKNOWN-${Date.now()}`,
+      invoiceDate: "2026-01-01",
+      dueDate: "2026-01-31",
+      items: [{ description: "Service", quantity: "1", unitPrice: "100" }],
+      appliedFees: [{ id: "not-a-real-fee", label: "Made-up fee", rate: 0.5, amount: "50" }],
+    });
+    expect(status).toBe(400);
+    expect(body.error).toContain("not a currently configured fee");
+  });
+
+  it("rejects an amount above what the configured rate allows, even for a real fee id", async () => {
+    // subtotal 100, fee rate 10% -> the true ceiling is $10, no matter what
+    // amount the client claims.
+    const { status, body } = await admin.postJson<{ error: string }>("/api/invoices/customer", {
+      customerId,
+      invoiceNumber: `FEE-INFLATED-${Date.now()}`,
+      invoiceDate: "2026-01-01",
+      dueDate: "2026-01-31",
+      items: [{ description: "Service", quantity: "1", unitPrice: "100" }],
+      appliedFees: [{ id: feeId, label: "Delivery fee", rate: feeRate, amount: "9999" }],
+    });
+    expect(status).toBe(400);
+    expect(body.error).toContain("exceeds what its configured rate allows");
+  });
+
+  it("accepts a legitimate fee within its configured rate's ceiling", async () => {
+    const { status, body } = await admin.postJson<{ totalAmount: string }>("/api/invoices/customer", {
+      customerId,
+      invoiceNumber: `FEE-LEGIT-${Date.now()}`,
+      invoiceDate: "2026-01-01",
+      dueDate: "2026-01-31",
+      items: [{ description: "Service", quantity: "1", unitPrice: "100" }],
+      appliedFees: [{ id: feeId, label: "Delivery fee", rate: feeRate, amount: "10.00" }],
+    });
+    expect(status).toBe(201);
+    expect(Number(body.totalAmount)).toBe(110); // 100 subtotal + 10 fee
+  });
+
+  it("rejects an inflated fee amount added via PATCH too", async () => {
+    const created = await admin.postJson<{ id: string }>("/api/invoices/customer", {
+      customerId,
+      invoiceNumber: `FEE-PATCH-${Date.now()}`,
+      invoiceDate: "2026-01-01",
+      dueDate: "2026-01-31",
+      items: [{ description: "Service", quantity: "1", unitPrice: "100" }],
+    });
+    const { status, body } = await admin.postJson<{ error: string }>(
+      `/api/invoices/customer/${created.body.id}`,
+      { appliedFees: [{ id: feeId, label: "Delivery fee", rate: feeRate, amount: "9999" }] },
+      "PATCH"
+    );
+    expect(status).toBe(400);
+    expect(body.error).toContain("exceeds what its configured rate allows");
+  });
 });
 
 describe("payment ledger — new on this branch, not present on main", () => {
@@ -145,13 +331,14 @@ describe("payment ledger — new on this branch, not present on main", () => {
     expect(full.body.payments.length).toBe(1);
   });
 
-  // Confirmed via code review: payment creation reads the invoice's current
-  // paidAmount, adds the new amount in application code, then writes it back
-  // -- two concurrent payments can both read the same base value and the
-  // second write clobbers the first's contribution to paidAmount (though
-  // both Payment rows persist, so the ledger and the denormalized total
-  // silently disagree).
-  it.fails("two concurrent payments on the same invoice should both be reflected in paidAmount", async () => {
+  // Fixed: payment creation now acquires a real row lock (a raw
+  // SELECT ... FOR UPDATE inside an interactive transaction) before reading
+  // and updating paidAmount, so concurrent payments serialize instead of
+  // racing on a stale read. Re-run several times (including as part of a
+  // full-suite run, not just in isolation) to confirm the fix is robust,
+  // not just narrowing the window -- consistently correct across all of
+  // them.
+  it("eight concurrent payments on the same invoice are all correctly reflected in paidAmount", async () => {
     const created = await admin.postJson<{ id: string }>("/api/invoices/customer", {
       customerId,
       invoiceNumber: `PAYRACE-${Date.now()}`,
@@ -161,17 +348,15 @@ describe("payment ledger — new on this branch, not present on main", () => {
     });
     const id = created.body.id;
 
-    // A 2-request race doesn't reliably overlap at the DB layer against a
-    // fast local server; widen it the same way the invoice-numbering race
-    // test does, so the read-modify-write window is actually likely to be hit.
     await Promise.all(
       Array.from({ length: 8 }, () =>
         admin.postJson(`/api/invoices/customer/${id}/payments`, { amount: "100", paymentDate: "2026-01-05" })
       )
     );
 
-    const final = await admin.getJson<{ paidAmount: string }>(`/api/invoices/customer/${id}`);
-    expect(Number(final.body.paidAmount)).toBe(800); // currently can land below 800 -- writes clobber each other
+    const final = await admin.getJson<{ paidAmount: string; payments: unknown[] }>(`/api/invoices/customer/${id}`);
+    expect(Number(final.body.paidAmount)).toBe(800);
+    expect(final.body.payments.length).toBe(8);
   });
 });
 

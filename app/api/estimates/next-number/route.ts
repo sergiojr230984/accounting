@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
 import { requireAuth } from "@/lib/api";
 import { prisma } from "@/lib/prisma";
+import { initializeDatabase } from "@/lib/init-db";
+import { nextSequenceNumber } from "@/lib/next-number";
 
 const PREFIX = `EST-${new Date().getFullYear()}-`;
 
@@ -8,17 +10,8 @@ export async function GET() {
   const guard = await requireAuth();
   if (guard instanceof NextResponse) return guard;
 
-  const estimates = await prisma.estimate.findMany({
-    where: { estimateNumber: { startsWith: PREFIX } },
-    select: { estimateNumber: true },
-  });
+  await initializeDatabase();
 
-  let maxSeq = 1000;
-  for (const est of estimates) {
-    const num = parseInt(est.estimateNumber.slice(PREFIX.length), 10);
-    if (!isNaN(num) && num > maxSeq) maxSeq = num;
-  }
-
-  const nextNumber = `${PREFIX}${String(maxSeq + 1).padStart(4, "0")}`;
+  const { nextNumber } = await nextSequenceNumber(prisma, "Estimate", "estimateNumber", PREFIX, 1000);
   return NextResponse.json({ nextNumber });
 }

@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
+import { initializeDatabase } from "@/lib/init-db";
 import { z } from "zod";
 import Decimal from "decimal.js";
 
@@ -24,6 +25,8 @@ const estimateSchema = z.object({
 export async function GET(request: Request) {
   const session = await auth();
   if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
+  await initializeDatabase();
 
   const { searchParams } = new URL(request.url);
   const customerId = searchParams.get("customerId");
@@ -55,6 +58,8 @@ export async function GET(request: Request) {
 export async function POST(request: Request) {
   const session = await auth();
   if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
+  await initializeDatabase();
 
   const body = await request.json();
   const parsed = estimateSchema.safeParse(body);

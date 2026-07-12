@@ -13,8 +13,11 @@ Production stack: **Next.js 15** on **Railway**, **Postgres** add-on,
 4. **Pre-Deploy Command**: **must be empty**. Schema is created/migrated
    idempotently by `lib/init-db.ts` at first request. Leaving `prisma db
    push` or `prisma migrate deploy` in pre-deploy will hang the deploy.
-5. **Health check path**: `/api/health` (returns 200 + version + DB
-   latency, 503 if the DB is unreachable).
+5. **Health check path**: `/api/health` -- always returns 200 (a
+   dependency-free liveness probe by design, so a transient DB blip
+   doesn't trigger a Railway restart loop). DB status is still in the
+   response body (`db.ok`). For an endpoint that actually fails its
+   HTTP status on a DB outage, see `/api/health/full` below.
 6. **Restart policy**: `ON_FAILURE`.
 
 ## 2. Environment variables
@@ -95,10 +98,12 @@ authenticated user.
 ### Better Uptime
 
 1. Create a free account.
-2. Add a monitor: HTTP, URL `https://<your-domain>/api/health`,
-   expected status `200`, check every 1 min.
-3. The endpoint returns 503 when the DB is unreachable, so an outage
-   triggers immediately.
+2. Add a monitor: HTTP, URL `https://<your-domain>/api/health/full`
+   (not `/api/health` -- that one is Railway's dependency-free
+   liveness probe and always returns 200 by design, so it would never
+   trigger this alert), expected status `200`, check every 1 min.
+3. `/api/health/full` returns 503 when the DB is unreachable, so an
+   outage triggers immediately.
 
 ## 6. Caching
 

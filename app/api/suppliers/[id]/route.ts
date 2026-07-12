@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
-import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
+import { requireRole } from "@/lib/api";
 import { z } from "zod";
 
 const updateSchema = z.object({
@@ -26,8 +26,8 @@ export async function PATCH(
   request: Request,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  const session = await auth();
-  if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  const guard = await requireRole("ADMIN", "MANAGER");
+  if (guard instanceof NextResponse) return guard;
 
   const { id } = await params;
   const body = await request.json();
@@ -58,8 +58,8 @@ export async function DELETE(
   _request: Request,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  const session = await auth();
-  if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  const guard = await requireRole("ADMIN", "MANAGER");
+  if (guard instanceof NextResponse) return guard;
 
   const { id } = await params;
 

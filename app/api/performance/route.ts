@@ -1,12 +1,14 @@
 import { NextResponse } from "next/server";
-import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { initializeDatabase } from "@/lib/init-db";
+import { requireRole } from "@/lib/api";
 import Decimal from "decimal.js";
 
 export async function GET(request: Request) {
-  const session = await auth();
-  if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  // Company-wide commission/sales leaderboard across every salesperson --
+  // not something any one salesperson should see about their peers.
+  const guard = await requireRole("ADMIN", "MANAGER");
+  if (guard instanceof NextResponse) return guard;
 
   await initializeDatabase();
 

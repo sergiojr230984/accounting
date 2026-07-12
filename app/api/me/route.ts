@@ -42,9 +42,6 @@ export async function GET() {
     // ignore — diagnostic only
   }
 
-  const authSecretSet = !!process.env.AUTH_SECRET;
-  const authSecretLength = process.env.AUTH_SECRET?.length ?? 0;
-
   // List all cookie names so we can see exactly what NextAuth set
   const cookieStore = await cookies();
   const allCookieNames = cookieStore.getAll().map((c) => c.name);
@@ -70,11 +67,6 @@ export async function GET() {
       },
       // DB row found with the best available identity
       dbUser,
-      // Env diagnostics
-      env: {
-        authSecretSet,
-        authSecretLength,
-      },
       allCookieNames,
       hint: viewer.signedIn
         ? `resolveViewer sees you as ${viewer.role} (${viewer.email}). This is what the dashboard uses.`

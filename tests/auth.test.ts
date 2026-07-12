@@ -33,6 +33,194 @@ describe("login and logout", () => {
     });
     expect(res.status).toBe(401);
   });
+
+  // Fixed: NextAuth's JWT-strategy default session lifetime is 30 days --
+  // far too long a window for a session with access to customer/bank/
+  // financial data. lib/auth.ts now sets an explicit 12-hour maxAge.
+  it("a new session expires in roughly 12 hours, not the 30-day default", async () => {
+    const s = await loginAs("admin@lacuevita.com", "admin123");
+    const { body } = await s.getJson<{ expires: string }>("/api/auth/session");
+    const hoursFromNow = (new Date(body.expires).getTime() - Date.now()) / 3_600_000;
+    expect(hoursFromNow).toBeGreaterThan(11);
+    expect(hoursFromNow).toBeLessThan(13);
+  });
+});
+
+describe("security headers", () => {
+  // Fixed: next.config.ts now sets Content-Security-Policy and
+  // Strict-Transport-Security alongside the four headers that were already
+  // present (X-Frame-Options, X-Content-Type-Options, Referrer-Policy,
+  // Permissions-Policy). Verified against a real production build (this
+  // suite runs against `next dev`, where the CSP intentionally allows
+  // 'unsafe-eval' for React Refresh -- a dev-only requirement, not present
+  // in production) with a real browser: login, invoice list, and dashboard
+  // all render with zero CSP console violations.
+  it("responses include CSP and HSTS headers", async () => {
+    const res = await fetch(`${BASE_URL}/login`);
+    const csp = res.headers.get("content-security-policy");
+    expect(csp).toBeTruthy();
+    expect(csp).toContain("default-src 'self'");
+    expect(csp).toContain("frame-ancestors 'none'");
+    expect(res.headers.get("strict-transport-security")).toContain("max-age=");
+  });
+});
+
+describe("health check endpoints", () => {
+  // /api/health is Railway's liveness probe -- deliberately always 200 (a
+  // dependency-free check) so a transient DB blip doesn't trigger a Railway
+  // restart loop. DB status is still reported in the response body.
+  it("/api/health returns 200 with DB status in the body", async () => {
+    const res = await fetch(`${BASE_URL}/api/health`);
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.db.ok).toBe(true);
+  });
+
+  // Fixed: /api/health/full is the endpoint DEPLOYMENT.md documents for
+  // external uptime monitoring specifically because it's supposed to fail
+  // its HTTP status on a real DB outage -- it previously always returned
+  // 200 just like /api/health, silently defeating that purpose. The 200
+  // case (DB reachable) is what this shared test server can safely assert;
+  // the 503 case was verified manually against a server pointed at a
+  // genuinely unreachable DB host, since simulating a real outage inside
+  // this suite would take down the same database every other test file
+  // depends on.
+  it("/api/health/full returns 200 when the DB is reachable", async () => {
+    const res = await fetch(`${BASE_URL}/api/health/full`);
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.db.ok).toBe(true);
+  });
+});
+
+describe("CSRF defense-in-depth", () => {
+  // Fixed: middleware.ts now rejects a mutating API request whose Origin
+  // (or Referer, if Origin is absent) names a different host than the one
+  // the request arrived on. Live-tested in an earlier audit: a forged
+  // Origin header alone was enough to create a real customer, because the
+  // only defense was SameSite=Lax on the cookie -- real, but a single
+  // point of failure. This is a second, independent layer.
+  it("rejects a mutating request with a forged cross-origin Origin header, even with a valid session cookie", async () => {
+    const admin = await loginAs("admin@lacuevita.com", "admin123");
+    const res = await admin.fetch("/api/customers", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Origin: "https://evil-attacker.example",
+        Referer: "https://evil-attacker.example/csrf.html",
+      },
+      body: JSON.stringify({ name: "CSRF Origin Test Co" }),
+    });
+    expect(res.status).toBe(403);
+  });
+
+  it("still allows a same-origin mutating request through", async () => {
+    const admin = await loginAs("admin@lacuevita.com", "admin123");
+    const res = await admin.fetch("/api/customers", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Origin: BASE_URL },
+      body: JSON.stringify({ name: "Legit Same-Origin Co" }),
+    });
+    expect(res.status).toBe(201);
+  });
+
+  it("login itself is unaffected -- /api/auth/** is excluded so NextAuth's own CSRF token still governs it", async () => {
+    const s = anonymousSession();
+    const csrf = (await s.getJson<{ csrfToken: string }>("/api/auth/csrf")).body.csrfToken;
+    await s.fetch("/api/auth/callback/credentials", {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded", Origin: "https://evil-attacker.example" },
+      body: new URLSearchParams({
+        email: "admin@lacuevita.com",
+        password: "admin123",
+        csrfToken: csrf,
+        json: "true",
+      }).toString(),
+    });
+    expect(s.hasCookie("authjs.session-token")).toBe(true);
+  });
+});
+
+describe("login timing does not reveal account existence", () => {
+  // Fixed: authorize() now runs a real bcrypt.compare against a dummy hash
+  // for both an unknown email and a wrong password, instead of short-
+  // circuiting immediately for the unknown-email case. Averages a handful
+  // of samples each way with a generous tolerance, since exact timing is
+  // inherently noisy -- the property being asserted is "roughly the same
+  // order of magnitude", not an exact match. Previously this gap measured
+  // ~7-10x (known ~500-640ms vs unknown ~56-72ms) in the original audit.
+  it("an unknown email takes roughly as long to reject as a known email with a wrong password", async () => {
+    // Uses a disposable throwaway account, not the shared seeded admin
+    // account -- 5 wrong-password attempts here would otherwise eat into
+    // admin@lacuevita.com's per-email rate-limit budget (max 10 per 15
+    // minutes, added in the previous fix) that every other test file's
+    // beforeAll depends on to log in.
+    const admin = await loginAs("admin@lacuevita.com", "admin123");
+    const knownEmail = `timing-test-${Date.now()}@test.local`;
+    await admin.postJson("/api/users", { name: "Timing Test", email: knownEmail, password: "timingTest123", role: "SALES" });
+
+    const attemptTiming = async (email: string): Promise<number> => {
+      const s = anonymousSession();
+      const csrf = (await s.getJson<{ csrfToken: string }>("/api/auth/csrf")).body.csrfToken;
+      const start = Date.now();
+      await s.fetch("/api/auth/callback/credentials", {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({ email, password: "wrong-password-xyz", csrfToken: csrf, json: "true" }).toString(),
+      });
+      return Date.now() - start;
+    };
+
+    const SAMPLES = 5;
+    const knownTimes: number[] = [];
+    const unknownTimes: number[] = [];
+    for (let i = 0; i < SAMPLES; i++) {
+      knownTimes.push(await attemptTiming(knownEmail));
+      unknownTimes.push(await attemptTiming(`nonexistent-${Date.now()}-${i}@test.local`));
+    }
+    const avg = (arr: number[]) => arr.reduce((a, b) => a + b, 0) / arr.length;
+    const knownAvg = avg(knownTimes);
+    const unknownAvg = avg(unknownTimes);
+
+    // The old gap was ~7-10x; require the unknown-email path to cost at
+    // least half of the known-email path, which the old vulnerable code
+    // would fail by a wide margin.
+    expect(unknownAvg).toBeGreaterThan(knownAvg * 0.5);
+  });
+});
+
+describe("login rate limiting", () => {
+  // Fixed: lib/auth.ts now throttles login attempts per submitted email
+  // (and separately per IP) before ever touching the database or bcrypt.
+  // Uses a disposable throwaway account rather than the shared seeded admin
+  // account, so exhausting its rate-limit budget here doesn't lock out
+  // every other test file's beforeAll login for the rest of the suite run
+  // (the limiter is in-memory and lives for the whole server process).
+  it("throttles repeated failed attempts against the same account, even with the correct password", async () => {
+    const admin = await loginAs("admin@lacuevita.com", "admin123");
+    const email = `rate-limit-test-${Date.now()}@test.local`;
+    const password = "correctHorseBattery9";
+    await admin.postJson("/api/users", { name: "Rate Limit Test", email, password, role: "SALES" });
+
+    const attempt = async (attemptedPassword: string) => {
+      const s = anonymousSession();
+      const csrf = (await s.getJson<{ csrfToken: string }>("/api/auth/csrf")).body.csrfToken;
+      await s.fetch("/api/auth/callback/credentials", {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({ email, password: attemptedPassword, csrfToken: csrf, json: "true" }).toString(),
+      });
+      return s;
+    };
+
+    // Exhaust the per-email budget (max 10 within the window) with wrong passwords.
+    for (let i = 0; i < 10; i++) await attempt("wrong-password");
+
+    // The account is now throttled -- even the correct password is rejected,
+    // proving this isn't just "wrong credentials" but an active block.
+    const stillBlocked = await attempt(password);
+    expect(stillBlocked.hasCookie("authjs.session-token")).toBe(false);
+  });
 });
 
 describe("middleware is cookie-presence-only, not signature validation (by design, per code comment)", () => {
@@ -53,62 +241,51 @@ describe("middleware is cookie-presence-only, not signature validation (by desig
 });
 
 describe("critical: unauthenticated-in-practice admin endpoints", () => {
-  // Live-verified: with nothing but a forged cookie (no real login at all),
-  // this diagnostic endpoint reports whether AUTH_SECRET is set and its
-  // EXACT character length. That number materially narrows a brute-force
-  // search against app/api/admin/reset-admin-password, which uses
-  // AUTH_SECRET itself as a bearer token (see the test below).
-  it.fails("/api/me should not leak AUTH_SECRET length to an unauthenticated caller", async () => {
+  // Fixed: this diagnostic endpoint used to report whether AUTH_SECRET was
+  // set and its exact character length to anyone with a forged cookie (no
+  // real login at all). The env.authSecretLength/authSecretSet fields are
+  // removed entirely; the rest of the diagnostic endpoint (session/viewer
+  // shape, cookie names) is left as-is since it doesn't reveal anything an
+  // unauthenticated forged-cookie caller couldn't already see was absent.
+  it("/api/me should not leak AUTH_SECRET length to an unauthenticated caller", async () => {
     const res = await fetch(`${BASE_URL}/api/me`, {
       headers: { Cookie: "authjs.session-token=garbage-not-a-real-jwt" },
     });
     const body = await res.json();
-    expect(body.env?.authSecretLength).toBeUndefined(); // currently a real number
+    expect(body.env?.authSecretLength).toBeUndefined();
+    expect(body.env).toBeUndefined();
   });
 
-  // Live-verified: with a forged cookie and no real credentials, this route
-  // returns every user's email + role, and re-promotes hardcoded emails to
-  // ADMIN as a side effect of merely calling it.
-  it.fails("/api/admin/bootstrap should require real authentication", async () => {
+  // Fixed by removal: this route had no auth() call at all and returned
+  // every user's email + role to anyone with a forged cookie, re-promoting
+  // hardcoded emails to ADMIN as a side effect. It had no legitimate caller
+  // anywhere in the app (confirmed by a repo-wide reference search) and
+  // init-db.ts already performs the same admin force-promotion at boot, so
+  // the route was deleted rather than gated.
+  it("/api/admin/bootstrap no longer exists", async () => {
     const res = await fetch(`${BASE_URL}/api/admin/bootstrap`, {
       headers: { Cookie: "authjs.session-token=garbage-not-a-real-jwt" },
     });
-    expect(res.status).toBe(401); // currently 200 with a full user/role dump
+    expect(res.status).toBe(404);
   });
 
-  // Live-verified, full chain: with a forged cookie and AUTH_SECRET as a
-  // query-string token, this endpoint resets admin@lacuevita.com's password
-  // to a hardcoded literal and returns it in plaintext in the response body.
-  // AUTH_SECRET is the same secret that signs every session JWT -- reusing
-  // it as a bearer token for an admin-takeover endpoint is a severe secret-
-  // scope violation, compounded by /api/me leaking its length above.
-  // NOTE: this endpoint really does reset admin@lacuevita.com's live password
-  // as a side effect of merely calling it -- that's the vulnerability. Every
-  // other test file in this suite logs in as that same seeded admin account,
-  // so this test restores the known password afterward via the legitimate
-  // admin API, using the temporary password the exploit just handed back.
-  it.fails(
-    "resetting the admin password should not be possible with only AUTH_SECRET as a query param",
-    async () => {
-      const res = await fetch(
-        `${BASE_URL}/api/admin/reset-admin-password?token=${encodeURIComponent(
-          process.env.AUTH_SECRET ?? ""
-        )}`,
-        { headers: { Cookie: "authjs.session-token=garbage-not-a-real-jwt" } }
-      );
-      const body = await res.json().catch(() => ({}));
-      try {
-        expect(body.temporaryPassword).toBeUndefined(); // currently "LaCuevita2024!", in plaintext, in the response
-      } finally {
-        if (body?.temporaryPassword) {
-          const hijacked = await loginAs("admin@lacuevita.com", body.temporaryPassword);
-          const users = await hijacked.getJson<{ id: string; email: string }[]>("/api/users");
-          const me = users.body.find((u) => u.email === "admin@lacuevita.com");
-          if (me) await hijacked.postJson(`/api/users/${me.id}`, { password: "admin123" }, "PATCH");
-        }
-      }
-    }
-  );
+  // Fixed by removal: this endpoint accepted AUTH_SECRET itself -- the same
+  // secret that signs every session JWT -- as a URL query-string bearer
+  // token, and on match reset admin@lacuevita.com's password to a hardcoded
+  // literal returned in plaintext. Deleted rather than patched, since a
+  // secure version needs a real, independent credential rather than a
+  // reused signing secret, which isn't a minimal fix. The safety-net role
+  // this was meant to serve (recovering a fully-locked-out admin) is still
+  // covered by lib/init-db.ts's boot-time zero-admin fallback.
+  it("/api/admin/reset-admin-password no longer exists", async () => {
+    const res = await fetch(
+      `${BASE_URL}/api/admin/reset-admin-password?token=${encodeURIComponent(
+        process.env.AUTH_SECRET ?? ""
+      )}`,
+      { headers: { Cookie: "authjs.session-token=garbage-not-a-real-jwt" } }
+    );
+    expect(res.status).toBe(404);
+  });
 });
 
 describe("session revocation", () => {
@@ -136,10 +313,11 @@ describe("session revocation", () => {
     expect(after.status).toBe(200); // would be 403 if the role change hadn't propagated
   });
 
-  // NOT a fix: the session callback re-checks `role` but never re-checks
-  // `active`. Deactivating a user only blocks their *next login* -- an
-  // already-issued session keeps working until it naturally expires.
-  it.fails("deactivating a user should immediately revoke their existing session, not just block future logins", async () => {
+  // Fixed: the session callback now re-checks `active` on every session
+  // read, the same way it already re-checks `role`, so deactivating a user
+  // revokes their existing session immediately rather than only blocking
+  // their next login.
+  it("deactivating a user immediately revokes their existing session, not just future logins", async () => {
     const admin = await loginAs("admin@lacuevita.com", "admin123");
     const created = await admin.postJson<{ id: string }>("/api/users", {
       name: "Deactivate Test",
@@ -152,6 +330,6 @@ describe("session revocation", () => {
     await admin.postJson(`/api/users/${created.body.id}`, { active: false }, "PATCH");
 
     const stillWorks = await target.getJson("/api/customers");
-    expect(stillWorks.status).toBe(401); // currently still 200 -- the session outlives deactivation
+    expect(stillWorks.status).toBe(401);
   });
 });

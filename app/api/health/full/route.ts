@@ -50,6 +50,9 @@ export async function GET() {
       timestamp: new Date().toISOString(),
       checkLatencyMs: Date.now() - startedAt,
     },
-    { headers: { "Cache-Control": "no-store" } }
+    // Unlike /api/health, this endpoint is meant for external uptime
+    // monitoring (see its own doc comment above), so a DB outage should
+    // actually surface as a non-2xx status an uptime monitor can alert on.
+    { status: dbOk ? 200 : 503, headers: { "Cache-Control": "no-store" } }
   );
 }

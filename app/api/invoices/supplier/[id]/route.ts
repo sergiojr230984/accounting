@@ -67,6 +67,16 @@ export async function PATCH(
   const existing = await prisma.supplierInvoice.findUnique({ where: { id } });
   if (!existing) return NextResponse.json({ error: "Not found" }, { status: 404 });
 
+  // Once any payment has been recorded, line items (and the totals derived
+  // from them) are financial history -- same reasoning as the customer-
+  // invoice equivalent of this guard.
+  if (parsed.data.items !== undefined && existing.paymentStatus !== "UNPAID") {
+    return NextResponse.json(
+      { error: "This bill has a recorded payment and its line items can no longer be edited." },
+      { status: 409 }
+    );
+  }
+
   const data = parsed.data;
   const updateData: Record<string, unknown> = {};
 
@@ -89,9 +99,12 @@ export async function PATCH(
         const qty = new Decimal(item.quantity || "0");
         const cost = new Decimal(item.unitCost || "0");
         const rate = new Decimal(item.taxRate || "0");
-        const lineTotal = qty.times(cost);
+        // Round to 2 decimals FIRST, then sum the already-rounded values
+        // into subtotal/taxAmount -- same fix as invoice creation.
+        const lineTotal = qty.times(cost).toDecimalPlaces(2);
+        const lineTax = lineTotal.times(rate).toDecimalPlaces(2);
         subtotal = subtotal.plus(lineTotal);
-        taxAmount = taxAmount.plus(lineTotal.times(rate));
+        taxAmount = taxAmount.plus(lineTax);
         return {
           description: item.description,
           itemDescription: item.itemDescription,
@@ -112,8 +125,12 @@ export async function PATCH(
     updateData.taxAmount = taxAmount.toFixed(2);
     updateData.totalAmount = subtotal.plus(taxAmount).toFixed(2);
 
-    await prisma.supplierInvoiceItem.deleteMany({ where: { invoiceId: id } });
+    // Nested inside the single supplierInvoice.update() call's relation
+    // write (rather than a separate eager deleteMany() statement before
+    // it) so the delete+create runs as one atomic transaction -- same fix
+    // as the customer-invoice equivalent of this pattern.
     updateData.items = {
+      deleteMany: {},
       create: computedItems.map((item) => ({
         description: item.description,
         itemDescription: item.itemDescription ?? null,
@@ -123,6 +140,21 @@ export async function PATCH(
         lineTotal: item.lineTotal,
       })),
     };
+  }
+
+  // Reject an amount that would exceed what's actually owed -- same
+  // reasoning as the customer-invoice equivalent of this check.
+  if (data.paidAmount !== undefined) {
+    const newPaid = new Decimal(data.paidAmount);
+    const effectiveTotal = updateData.totalAmount !== undefined
+      ? new Decimal(updateData.totalAmount as string)
+      : new Decimal(existing.totalAmount.toString());
+    if (newPaid.gt(effectiveTotal)) {
+      return NextResponse.json(
+        { error: "paidAmount cannot exceed the bill total." },
+        { status: 400 }
+      );
+    }
   }
 
   // Auto-derive paymentStatus when paidAmount changes and the caller didn't
@@ -160,6 +192,17 @@ export async function DELETE(
   if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   const { id } = await params;
+
+  const existing = await prisma.supplierInvoice.findUnique({ where: { id } });
+  if (!existing) return NextResponse.json({ error: "Not found" }, { status: 404 });
+
+  if (existing.paymentStatus !== "UNPAID") {
+    return NextResponse.json(
+      { error: "This bill has a recorded payment and can no longer be deleted." },
+      { status: 409 }
+    );
+  }
+
   await prisma.supplierInvoice.delete({ where: { id } });
   return NextResponse.json({ ok: true });
 }

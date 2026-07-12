@@ -13,8 +13,12 @@ const schema = z.object({
 });
 
 export async function GET() {
+  // Any authenticated role can list employees (the invoice-creation "assign
+  // to" dropdown needs this for every role), but commissionRate is
+  // compensation data -- strip it for anyone who isn't ADMIN/MANAGER.
   const guard = await requireAuth();
   if (guard instanceof NextResponse) return guard;
+  const canSeeCommission = guard.user.role === "ADMIN" || guard.user.role === "MANAGER";
 
   await initializeDatabase();
   try {
@@ -22,7 +26,9 @@ export async function GET() {
       orderBy: [{ active: "desc" }, { name: "asc" }],
       include: { _count: { select: { invoices: true } } },
     });
-    return NextResponse.json(employees);
+    if (canSeeCommission) return NextResponse.json(employees);
+    const scrubbed = employees.map(({ commissionRate: _commissionRate, ...rest }) => rest);
+    return NextResponse.json(scrubbed);
   } catch (err) {
     return NextResponse.json({ error: (err as Error).message }, { status: 500 });
   }
