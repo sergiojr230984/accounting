@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { signIn } from "next-auth/react";
+import { signIn, getSession } from "next-auth/react";
 import { useRouter } from "next/navigation";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
@@ -46,12 +46,21 @@ export default function LoginPage() {
         setError(`Sign-in failed: ${result.error}`);
         return;
       }
+      // /dashboard is ADMIN-only (company-wide P&L/COGS) -- the API 403s
+      // any other role and the page has no graceful fallback for that, so
+      // sending every role there unconditionally used to crash the page
+      // immediately after login for every non-ADMIN user. Land ADMIN on the
+      // dashboard as before; everyone else on Invoices, which every role
+      // can actually see.
+      const freshSession = await getSession();
+      const sessionRole = (freshSession?.user as { role?: string } | undefined)?.role;
+      const landingPath = sessionRole === "ADMIN" ? "/dashboard" : "/invoices/customer";
       // Force same-origin navigation — never let a stale NEXTAUTH_URL env var
       // send the browser to localhost or any other host.
       if (typeof window !== "undefined") {
-        window.location.href = `${window.location.origin}/dashboard`;
+        window.location.href = `${window.location.origin}${landingPath}`;
       } else {
-        router.push("/dashboard");
+        router.push(landingPath);
       }
     } catch (e) {
       console.error("[login] signIn threw", e);

@@ -105,7 +105,11 @@ export default function DashboardPage() {
         fetch(`/api/dashboard`),
         fetch(`/api/invoices/customer?status=UNPAID&page=1&limit=20`),
       ]);
-      const dash = await dashRes.json();
+      // A non-ok response (e.g. 403 for a role that can't see company-wide
+      // P&L) still has a JSON body, but it's an error object, not real
+      // DashboardData -- setting it directly used to crash the whole page
+      // downstream (e.g. formatCurrency(undefined) throwing a DecimalError).
+      const dash = dashRes.ok ? await dashRes.json() : null;
       const inv = invRes.ok ? await invRes.json() : { invoices: [] };
       setData(dash);
       const today = new Date();
