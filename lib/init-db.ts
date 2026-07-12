@@ -1,4 +1,5 @@
 import bcrypt from "bcryptjs";
+import { randomBytes } from "crypto";
 import { prisma } from "./prisma";
 
 let initialized = false;
@@ -263,7 +264,13 @@ export async function initializeDatabase() {
 
     const adminCount = await prisma.user.count({ where: { role: "ADMIN" } });
     if (adminCount === 0) {
-      const hash = await bcrypt.hash("admin123", 12);
+      // Emergency safety net only (every ADMIN account was deleted/demoted).
+      // The password is random and never logged -- recovering access to
+      // this account requires setting a new password directly against the
+      // database, which is the correct floor for a last-resort recovery
+      // path, not something visible in ordinary application logs.
+      const randomPassword = randomBytes(24).toString("base64url");
+      const hash = await bcrypt.hash(randomPassword, 12);
       await prisma.user.create({
         data: {
           email: "admin@lacuevita.com",
@@ -272,7 +279,9 @@ export async function initializeDatabase() {
           role: "ADMIN",
         },
       });
-      console.log("[init-db] Default admin seeded: admin@lacuevita.com / admin123");
+      console.log(
+        "[init-db] No ADMIN users existed -- created a fallback admin@lacuevita.com account with a random password. Set its password directly in the database to recover access."
+      );
     }
   } catch (e) {
     console.error("[init-db] admin seed failed:", e);
