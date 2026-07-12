@@ -66,14 +66,17 @@ describe("critical: unauthenticated-in-practice admin endpoints", () => {
     expect(body.env?.authSecretLength).toBeUndefined(); // currently a real number
   });
 
-  // Live-verified: with a forged cookie and no real credentials, this route
-  // returns every user's email + role, and re-promotes hardcoded emails to
-  // ADMIN as a side effect of merely calling it.
-  it.fails("/api/admin/bootstrap should require real authentication", async () => {
+  // Fixed by removal: this route had no auth() call at all and returned
+  // every user's email + role to anyone with a forged cookie, re-promoting
+  // hardcoded emails to ADMIN as a side effect. It had no legitimate caller
+  // anywhere in the app (confirmed by a repo-wide reference search) and
+  // init-db.ts already performs the same admin force-promotion at boot, so
+  // the route was deleted rather than gated.
+  it("/api/admin/bootstrap no longer exists", async () => {
     const res = await fetch(`${BASE_URL}/api/admin/bootstrap`, {
       headers: { Cookie: "authjs.session-token=garbage-not-a-real-jwt" },
     });
-    expect(res.status).toBe(401); // currently 200 with a full user/role dump
+    expect(res.status).toBe(404);
   });
 
   // Live-verified, full chain: with a forged cookie and AUTH_SECRET as a
