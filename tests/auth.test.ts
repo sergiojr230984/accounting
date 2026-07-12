@@ -79,39 +79,23 @@ describe("critical: unauthenticated-in-practice admin endpoints", () => {
     expect(res.status).toBe(404);
   });
 
-  // Live-verified, full chain: with a forged cookie and AUTH_SECRET as a
-  // query-string token, this endpoint resets admin@lacuevita.com's password
-  // to a hardcoded literal and returns it in plaintext in the response body.
-  // AUTH_SECRET is the same secret that signs every session JWT -- reusing
-  // it as a bearer token for an admin-takeover endpoint is a severe secret-
-  // scope violation, compounded by /api/me leaking its length above.
-  // NOTE: this endpoint really does reset admin@lacuevita.com's live password
-  // as a side effect of merely calling it -- that's the vulnerability. Every
-  // other test file in this suite logs in as that same seeded admin account,
-  // so this test restores the known password afterward via the legitimate
-  // admin API, using the temporary password the exploit just handed back.
-  it.fails(
-    "resetting the admin password should not be possible with only AUTH_SECRET as a query param",
-    async () => {
-      const res = await fetch(
-        `${BASE_URL}/api/admin/reset-admin-password?token=${encodeURIComponent(
-          process.env.AUTH_SECRET ?? ""
-        )}`,
-        { headers: { Cookie: "authjs.session-token=garbage-not-a-real-jwt" } }
-      );
-      const body = await res.json().catch(() => ({}));
-      try {
-        expect(body.temporaryPassword).toBeUndefined(); // currently "LaCuevita2024!", in plaintext, in the response
-      } finally {
-        if (body?.temporaryPassword) {
-          const hijacked = await loginAs("admin@lacuevita.com", body.temporaryPassword);
-          const users = await hijacked.getJson<{ id: string; email: string }[]>("/api/users");
-          const me = users.body.find((u) => u.email === "admin@lacuevita.com");
-          if (me) await hijacked.postJson(`/api/users/${me.id}`, { password: "admin123" }, "PATCH");
-        }
-      }
-    }
-  );
+  // Fixed by removal: this endpoint accepted AUTH_SECRET itself -- the same
+  // secret that signs every session JWT -- as a URL query-string bearer
+  // token, and on match reset admin@lacuevita.com's password to a hardcoded
+  // literal returned in plaintext. Deleted rather than patched, since a
+  // secure version needs a real, independent credential rather than a
+  // reused signing secret, which isn't a minimal fix. The safety-net role
+  // this was meant to serve (recovering a fully-locked-out admin) is still
+  // covered by lib/init-db.ts's boot-time zero-admin fallback.
+  it("/api/admin/reset-admin-password no longer exists", async () => {
+    const res = await fetch(
+      `${BASE_URL}/api/admin/reset-admin-password?token=${encodeURIComponent(
+        process.env.AUTH_SECRET ?? ""
+      )}`,
+      { headers: { Cookie: "authjs.session-token=garbage-not-a-real-jwt" } }
+    );
+    expect(res.status).toBe(404);
+  });
 });
 
 describe("session revocation", () => {
