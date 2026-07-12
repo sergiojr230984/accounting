@@ -10,6 +10,12 @@ const loginSchema = z.object({
   password: z.string().min(6),
 });
 
+// A precomputed hash with no matching password, compared against on every
+// login attempt for an email that doesn't exist (or is deactivated) so the
+// response takes the same time as a real, known-account attempt -- login
+// timing shouldn't reveal which email addresses have accounts.
+const DUMMY_PASSWORD_HASH = bcrypt.hashSync("no-account-has-this-password", 12);
+
 const { handlers, auth: baseAuth, signIn, signOut } = NextAuth({
   trustHost: true,
   session: { strategy: "jwt" },
@@ -101,8 +107,13 @@ const { handlers, auth: baseAuth, signIn, signOut } = NextAuth({
         const user = await prisma.user.findUnique({
           where: { email: parsed.data.email },
         });
-        if (!user) return null;
-        if (user.active === false) return null; // deactivated account
+        if (!user || user.active === false) {
+          // Pay the same bcrypt cost as a real comparison, against a hash
+          // that can never match, so the response timing is indistinguishable
+          // from a real account with a wrong password.
+          await bcrypt.compare(parsed.data.password, DUMMY_PASSWORD_HASH);
+          return null;
+        }
 
         const valid = await bcrypt.compare(parsed.data.password, user.password);
         if (!valid) return null;

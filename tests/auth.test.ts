@@ -35,6 +35,54 @@ describe("login and logout", () => {
   });
 });
 
+describe("login timing does not reveal account existence", () => {
+  // Fixed: authorize() now runs a real bcrypt.compare against a dummy hash
+  // for both an unknown email and a wrong password, instead of short-
+  // circuiting immediately for the unknown-email case. Averages a handful
+  // of samples each way with a generous tolerance, since exact timing is
+  // inherently noisy -- the property being asserted is "roughly the same
+  // order of magnitude", not an exact match. Previously this gap measured
+  // ~7-10x (known ~500-640ms vs unknown ~56-72ms) in the original audit.
+  it("an unknown email takes roughly as long to reject as a known email with a wrong password", async () => {
+    // Uses a disposable throwaway account, not the shared seeded admin
+    // account -- 5 wrong-password attempts here would otherwise eat into
+    // admin@lacuevita.com's per-email rate-limit budget (max 10 per 15
+    // minutes, added in the previous fix) that every other test file's
+    // beforeAll depends on to log in.
+    const admin = await loginAs("admin@lacuevita.com", "admin123");
+    const knownEmail = `timing-test-${Date.now()}@test.local`;
+    await admin.postJson("/api/users", { name: "Timing Test", email: knownEmail, password: "timingTest123", role: "SALES" });
+
+    const attemptTiming = async (email: string): Promise<number> => {
+      const s = anonymousSession();
+      const csrf = (await s.getJson<{ csrfToken: string }>("/api/auth/csrf")).body.csrfToken;
+      const start = Date.now();
+      await s.fetch("/api/auth/callback/credentials", {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({ email, password: "wrong-password-xyz", csrfToken: csrf, json: "true" }).toString(),
+      });
+      return Date.now() - start;
+    };
+
+    const SAMPLES = 5;
+    const knownTimes: number[] = [];
+    const unknownTimes: number[] = [];
+    for (let i = 0; i < SAMPLES; i++) {
+      knownTimes.push(await attemptTiming(knownEmail));
+      unknownTimes.push(await attemptTiming(`nonexistent-${Date.now()}-${i}@test.local`));
+    }
+    const avg = (arr: number[]) => arr.reduce((a, b) => a + b, 0) / arr.length;
+    const knownAvg = avg(knownTimes);
+    const unknownAvg = avg(unknownTimes);
+
+    // The old gap was ~7-10x; require the unknown-email path to cost at
+    // least half of the known-email path, which the old vulnerable code
+    // would fail by a wide margin.
+    expect(unknownAvg).toBeGreaterThan(knownAvg * 0.5);
+  });
+});
+
 describe("login rate limiting", () => {
   // Fixed: lib/auth.ts now throttles login attempts per submitted email
   // (and separately per IP) before ever touching the database or bcrypt.
