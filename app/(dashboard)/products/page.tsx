@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { Fragment, useEffect, useState } from "react";
 import { Plus, Package, Loader2, Search, Pencil, Trash2, X, Check } from "lucide-react";
 import { formatCurrency } from "@/lib/money";
 
@@ -330,8 +330,8 @@ export default function ProductsPage() {
               </tr>
             ) : (
               filtered.map((p) => (
-                <>
-                  <tr key={p.id} className={`hover:bg-gray-50 transition-colors ${!p.active ? "opacity-50" : ""}`}>
+                <Fragment key={p.id}>
+                  <tr className={`hover:bg-gray-50 transition-colors ${!p.active ? "opacity-50" : ""}`}>
                     <td className="px-5 py-3 font-medium text-gray-900">{p.name}</td>
                     <td className="px-5 py-3 text-gray-500 max-w-xs truncate">{p.description ?? "—"}</td>
                     <td className="px-5 py-3 text-gray-500">{p.incomeAccount ?? "—"}</td>
@@ -400,7 +400,7 @@ export default function ProductsPage() {
                       </td>
                     </tr>
                   )}
-                </>
+                </Fragment>
               ))
             )}
           </tbody>
