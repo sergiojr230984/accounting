@@ -70,12 +70,13 @@ describe("still absent on this branch, same as main", () => {
 });
 
 describe("new on this branch, not requested in the original checklist but security-relevant", () => {
-  it("an unauthenticated (forged-cookie) caller can enumerate every user's email and role", async () => {
+  // Fixed: /api/admin/bootstrap was deleted (see auth.test.ts for the fix
+  // writeup) rather than gated, since it had no legitimate caller anywhere
+  // in the app.
+  it("the former user-enumeration endpoint (/api/admin/bootstrap) no longer exists", async () => {
     const res = await fetch(`${(await import("./setup/global-setup")).BASE_URL}/api/admin/bootstrap`, {
       headers: { Cookie: "authjs.session-token=garbage-not-a-real-jwt" },
     });
-    // Documented, not asserted as a bug here -- see auth.test.ts for the
-    // it.fails() version of this exact scenario with the full severity writeup.
-    expect(res.status).toBe(200);
+    expect(res.status).toBe(404);
   });
 });
