@@ -150,6 +150,79 @@ describe("overpayment handling", () => {
   });
 });
 
+describe("applied fees are re-derived server-side, not trusted from the client", () => {
+  let feeId: string;
+  const feeRate = 0.1; // 10%
+
+  beforeAll(async () => {
+    feeId = `fee-${Date.now()}`;
+    const { status } = await admin.postJson(
+      "/api/settings",
+      { customFees: [{ id: feeId, label: "Delivery fee", rate: feeRate }] },
+      "PATCH"
+    );
+    expect(status).toBe(200);
+  });
+
+  it("rejects a fee id that isn't a currently configured fee", async () => {
+    const { status, body } = await admin.postJson<{ error: string }>("/api/invoices/customer", {
+      customerId,
+      invoiceNumber: `FEE-UNKNOWN-${Date.now()}`,
+      invoiceDate: "2026-01-01",
+      dueDate: "2026-01-31",
+      items: [{ description: "Service", quantity: "1", unitPrice: "100" }],
+      appliedFees: [{ id: "not-a-real-fee", label: "Made-up fee", rate: 0.5, amount: "50" }],
+    });
+    expect(status).toBe(400);
+    expect(body.error).toContain("not a currently configured fee");
+  });
+
+  it("rejects an amount above what the configured rate allows, even for a real fee id", async () => {
+    // subtotal 100, fee rate 10% -> the true ceiling is $10, no matter what
+    // amount the client claims.
+    const { status, body } = await admin.postJson<{ error: string }>("/api/invoices/customer", {
+      customerId,
+      invoiceNumber: `FEE-INFLATED-${Date.now()}`,
+      invoiceDate: "2026-01-01",
+      dueDate: "2026-01-31",
+      items: [{ description: "Service", quantity: "1", unitPrice: "100" }],
+      appliedFees: [{ id: feeId, label: "Delivery fee", rate: feeRate, amount: "9999" }],
+    });
+    expect(status).toBe(400);
+    expect(body.error).toContain("exceeds what its configured rate allows");
+  });
+
+  it("accepts a legitimate fee within its configured rate's ceiling", async () => {
+    const { status, body } = await admin.postJson<{ totalAmount: string }>("/api/invoices/customer", {
+      customerId,
+      invoiceNumber: `FEE-LEGIT-${Date.now()}`,
+      invoiceDate: "2026-01-01",
+      dueDate: "2026-01-31",
+      items: [{ description: "Service", quantity: "1", unitPrice: "100" }],
+      appliedFees: [{ id: feeId, label: "Delivery fee", rate: feeRate, amount: "10.00" }],
+    });
+    expect(status).toBe(201);
+    expect(Number(body.totalAmount)).toBe(110); // 100 subtotal + 10 fee
+  });
+
+  it("rejects an inflated fee amount added via PATCH too", async () => {
+    const created = await admin.postJson<{ id: string }>("/api/invoices/customer", {
+      customerId,
+      invoiceNumber: `FEE-PATCH-${Date.now()}`,
+      invoiceDate: "2026-01-01",
+      dueDate: "2026-01-31",
+      items: [{ description: "Service", quantity: "1", unitPrice: "100" }],
+    });
+    const { status, body } = await admin.postJson<{ error: string }>(
+      `/api/invoices/customer/${created.body.id}`,
+      { appliedFees: [{ id: feeId, label: "Delivery fee", rate: feeRate, amount: "9999" }] },
+      "PATCH"
+    );
+    expect(status).toBe(400);
+    expect(body.error).toContain("exceeds what its configured rate allows");
+  });
+});
+
 describe("payment ledger — new on this branch, not present on main", () => {
   it("recording a payment creates a real Payment row and updates paidAmount/status", async () => {
     const created = await admin.postJson<{ id: string }>("/api/invoices/customer", {

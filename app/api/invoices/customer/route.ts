@@ -148,19 +148,50 @@ export async function POST(request: Request) {
 
   // Optional credit-card processing fee from company profile
   let creditCardFee = new Decimal(0);
-  if (addCreditCardFee) {
-    const profile = await prisma.companyProfile.findUnique({ where: { id: "default" } });
-    if (profile && Number(profile.creditCardFeeRate) > 0) {
-      creditCardFee = subtotal.plus(taxAmount).times(profile.creditCardFeeRate.toString());
-    }
+  let companyProfile: { creditCardFeeRate: unknown; customFees: unknown } | null = null;
+  if (addCreditCardFee || appliedFees.length > 0) {
+    companyProfile = await prisma.companyProfile.findUnique({ where: { id: "default" } });
+  }
+  if (addCreditCardFee && companyProfile && Number(companyProfile.creditCardFeeRate) > 0) {
+    creditCardFee = subtotal.plus(taxAmount).times(companyProfile.creditCardFeeRate as string);
   }
 
+  // Each fee is applied per-line-item at the client's discretion (e.g. a
+  // "delivery fee" toggled on for only some items), so the server can't
+  // reproduce the client's exact amount without the per-item selection,
+  // which isn't part of this API's payload. It CAN still enforce a hard
+  // ceiling: a fee can never legitimately total more than its configured
+  // rate times the whole invoice base (subtotal + tax) -- that's the
+  // amount if the fee applied to every single line. Anything above that,
+  // or a fee id that isn't one of the company's configured fees at all,
+  // means the client-submitted amount can't be trusted and is rejected.
   let customFeesSum = new Decimal(0);
-  for (const f of appliedFees) {
-    try {
-      customFeesSum = customFeesSum.plus(new Decimal(f.amount));
-    } catch {
-      // skip malformed entry
+  if (appliedFees.length > 0) {
+    const configuredFees =
+      (companyProfile?.customFees as { id: string; label: string; rate: number }[] | null) ?? [];
+    const feeBaseCap = subtotal.plus(taxAmount);
+    for (const f of appliedFees) {
+      const canonical = configuredFees.find((cf) => cf.id === f.id);
+      if (!canonical) {
+        return NextResponse.json(
+          { error: `Fee "${f.label}" is not a currently configured fee. Refresh and try again.` },
+          { status: 400 }
+        );
+      }
+      let amt: Decimal;
+      try {
+        amt = new Decimal(f.amount);
+      } catch {
+        return NextResponse.json({ error: `Invalid amount for fee "${f.label}".` }, { status: 400 });
+      }
+      const cap = feeBaseCap.times(canonical.rate);
+      if (amt.gt(cap)) {
+        return NextResponse.json(
+          { error: `Fee "${f.label}" amount exceeds what its configured rate allows.` },
+          { status: 400 }
+        );
+      }
+      customFeesSum = customFeesSum.plus(amt);
     }
   }
 

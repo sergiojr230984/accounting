@@ -37,6 +37,39 @@ const updateSchema = z.object({
     .optional(),
 });
 
+// A fee can never legitimately total more than its configured rate times
+// feeBase (subtotal + tax) -- the amount if it applied to every line item.
+// Rejects an unknown fee id or an amount above that ceiling rather than
+// trusting the client-submitted amount outright.
+function validateAppliedFees(
+  fees: { id: string; label: string; amount: string }[],
+  feeBase: Decimal,
+  configuredFees: { id: string; label: string; rate: number }[]
+): NextResponse | null {
+  for (const f of fees) {
+    const canonical = configuredFees.find((cf) => cf.id === f.id);
+    if (!canonical) {
+      return NextResponse.json(
+        { error: `Fee "${f.label}" is not a currently configured fee. Refresh and try again.` },
+        { status: 400 }
+      );
+    }
+    let amt: Decimal;
+    try {
+      amt = new Decimal(f.amount);
+    } catch {
+      return NextResponse.json({ error: `Invalid amount for fee "${f.label}".` }, { status: 400 });
+    }
+    if (amt.gt(feeBase.times(canonical.rate))) {
+      return NextResponse.json(
+        { error: `Fee "${f.label}" amount exceeds what its configured rate allows.` },
+        { status: 400 }
+      );
+    }
+  }
+  return null;
+}
+
 export async function GET(
   _request: Request,
   { params }: { params: Promise<{ id: string }> }
@@ -120,6 +153,27 @@ export async function PATCH(
   if (data.downPayment !== undefined) updateData.downPayment = data.downPayment;
   if (data.employeeId !== undefined) updateData.employeeId = data.employeeId || null;
   if (data.commissionRate !== undefined) updateData.commissionRate = data.commissionRate;
+
+  // Each fee is applied per-line-item at the client's discretion, so the
+  // server can't reproduce the client's exact amount, but it can enforce a
+  // hard ceiling: a fee can never legitimately total more than its
+  // configured rate times the invoice base (subtotal + tax) -- the amount
+  // if it applied to every line. A fee id that isn't one of the company's
+  // currently configured fees, or an amount above that ceiling, means the
+  // client-submitted value can't be trusted and the request is rejected.
+  // Validated against the *existing* subtotal/tax when the caller isn't
+  // also sending new items (below), so a fee can't be smuggled into
+  // storage just by leaving items out of the same request.
+  let configuredFees: { id: string; label: string; rate: number }[] | null = null;
+  if (data.appliedFees !== undefined && data.appliedFees.length > 0) {
+    const profile = await prisma.companyProfile.findUnique({ where: { id: "default" } });
+    configuredFees = (profile?.customFees as { id: string; label: string; rate: number }[] | null) ?? [];
+    if (!(data.items && data.items.length > 0)) {
+      const feeBase = new Decimal(existing.subtotal.toString()).plus(existing.taxAmount.toString());
+      const err = validateAppliedFees(data.appliedFees, feeBase, configuredFees);
+      if (err) return err;
+    }
+  }
   if (data.appliedFees !== undefined) updateData.appliedFees = data.appliedFees as unknown as object;
 
   // Only touch line items if the client actually sent a non-empty array.
@@ -158,12 +212,10 @@ export async function PATCH(
     }
 
     let feesSum = new Decimal(0);
-    for (const f of data.appliedFees ?? []) {
-      try {
-        feesSum = feesSum.plus(new Decimal(f.amount));
-      } catch {
-        // skip malformed entry
-      }
+    if (data.appliedFees !== undefined && data.appliedFees.length > 0 && configuredFees) {
+      const err = validateAppliedFees(data.appliedFees, subtotal.plus(taxAmount), configuredFees);
+      if (err) return err;
+      for (const f of data.appliedFees) feesSum = feesSum.plus(f.amount);
     }
 
     updateData.subtotal = subtotal.toFixed(2);
