@@ -54,6 +54,34 @@ describe("security headers", () => {
   });
 });
 
+describe("health check endpoints", () => {
+  // /api/health is Railway's liveness probe -- deliberately always 200 (a
+  // dependency-free check) so a transient DB blip doesn't trigger a Railway
+  // restart loop. DB status is still reported in the response body.
+  it("/api/health returns 200 with DB status in the body", async () => {
+    const res = await fetch(`${BASE_URL}/api/health`);
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.db.ok).toBe(true);
+  });
+
+  // Fixed: /api/health/full is the endpoint DEPLOYMENT.md documents for
+  // external uptime monitoring specifically because it's supposed to fail
+  // its HTTP status on a real DB outage -- it previously always returned
+  // 200 just like /api/health, silently defeating that purpose. The 200
+  // case (DB reachable) is what this shared test server can safely assert;
+  // the 503 case was verified manually against a server pointed at a
+  // genuinely unreachable DB host, since simulating a real outage inside
+  // this suite would take down the same database every other test file
+  // depends on.
+  it("/api/health/full returns 200 when the DB is reachable", async () => {
+    const res = await fetch(`${BASE_URL}/api/health/full`);
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.db.ok).toBe(true);
+  });
+});
+
 describe("login timing does not reveal account existence", () => {
   // Fixed: authorize() now runs a real bcrypt.compare against a dummy hash
   // for both an unknown email and a wrong password, instead of short-
