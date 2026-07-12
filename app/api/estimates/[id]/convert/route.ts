@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
+import { initializeDatabase } from "@/lib/init-db";
 
 export async function POST(
   _request: Request,
@@ -8,6 +9,8 @@ export async function POST(
 ) {
   const session = await auth();
   if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
+  await initializeDatabase();
 
   const { id } = await params;
 

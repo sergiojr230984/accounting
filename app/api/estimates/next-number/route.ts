@@ -1,12 +1,15 @@
 import { NextResponse } from "next/server";
 import { requireAuth } from "@/lib/api";
 import { prisma } from "@/lib/prisma";
+import { initializeDatabase } from "@/lib/init-db";
 
 const PREFIX = `EST-${new Date().getFullYear()}-`;
 
 export async function GET() {
   const guard = await requireAuth();
   if (guard instanceof NextResponse) return guard;
+
+  await initializeDatabase();
 
   const estimates = await prisma.estimate.findMany({
     where: { estimateNumber: { startsWith: PREFIX } },

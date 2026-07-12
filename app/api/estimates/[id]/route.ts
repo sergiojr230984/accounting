@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
+import { initializeDatabase } from "@/lib/init-db";
 import { z } from "zod";
 import Decimal from "decimal.js";
 
@@ -30,6 +31,8 @@ export async function GET(
   const session = await auth();
   if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
+  await initializeDatabase();
+
   const { id } = await params;
   const estimate = await prisma.estimate.findUnique({
     where: { id },
@@ -46,6 +49,8 @@ export async function PATCH(
 ) {
   const session = await auth();
   if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
+  await initializeDatabase();
 
   const { id } = await params;
   const body = await request.json();
@@ -127,6 +132,8 @@ export async function DELETE(
 ) {
   const session = await auth();
   if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
+  await initializeDatabase();
 
   const { id } = await params;
   await prisma.estimate.delete({ where: { id } });

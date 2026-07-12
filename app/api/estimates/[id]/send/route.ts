@@ -4,6 +4,7 @@ import { prisma } from "@/lib/prisma";
 import { sendEmail } from "@/lib/email";
 import { formatCurrency } from "@/lib/money";
 import { requireAuth, checkRateLimit } from "@/lib/api";
+import { initializeDatabase } from "@/lib/init-db";
 
 function genToken() {
   return randomBytes(18).toString("base64url");
@@ -24,6 +25,8 @@ export async function POST(
   if (guard instanceof NextResponse) return guard;
   const limited = checkRateLimit(request, "estimate-send", { windowMs: 60_000, max: 30 });
   if (limited) return limited;
+
+  await initializeDatabase();
 
   const { id } = await params;
 
