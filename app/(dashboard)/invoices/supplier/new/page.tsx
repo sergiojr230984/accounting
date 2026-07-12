@@ -65,7 +65,7 @@ export default function NewSupplierInvoicePage() {
 
   async function loadSuppliers() {
     const res = await fetch("/api/suppliers");
-    const list = await res.json();
+    const list = res.ok ? await res.json() : [];
     setSuppliers(list);
     return list as Supplier[];
   }
