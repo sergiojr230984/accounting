@@ -89,6 +89,18 @@ export async function PATCH(
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 
+  // Once any payment has been recorded, the line items (and the totals
+  // derived from them) are financial history, not a draft -- rewriting them
+  // after money has changed hands should go through a correction/void flow,
+  // not a silent overwrite. That flow doesn't exist yet, so for now this
+  // blocks the dangerous edit outright rather than allowing it silently.
+  if (parsed.data.items !== undefined && existing.paymentStatus !== "UNPAID") {
+    return NextResponse.json(
+      { error: "This invoice has a recorded payment and its line items can no longer be edited." },
+      { status: 409 }
+    );
+  }
+
   const data = parsed.data;
   const updateData: Record<string, unknown> = {};
 
@@ -236,6 +248,16 @@ export async function DELETE(
   const scope = await scopeInvoicesToOwnEmployee(guard);
   if (scope && existing.employeeId !== scope.employeeId) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  }
+
+  // An invoice with a recorded payment is a financial record, not a draft
+  // -- deleting it destroys the only evidence money was collected against
+  // it. Same reasoning as the PATCH guard above.
+  if (existing.paymentStatus !== "UNPAID") {
+    return NextResponse.json(
+      { error: "This invoice has a recorded payment and can no longer be deleted." },
+      { status: 409 }
+    );
   }
 
   await prisma.customerInvoice.delete({ where: { id } });

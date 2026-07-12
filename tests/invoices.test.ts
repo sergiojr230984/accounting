@@ -84,20 +84,30 @@ describe("paid-invoice protection", () => {
     return id;
   }
 
-  it.fails("a PAID invoice should not accept line-item edits", async () => {
+  it("a PAID invoice does not accept line-item edits", async () => {
     const id = await createAndFullyPayInvoice();
     const { status } = await admin.postJson(
       `/api/invoices/customer/${id}`,
       { items: [{ description: "rewritten after payment", quantity: "1", unitPrice: "1" }] },
       "PATCH"
     );
-    expect(status).toBe(409); // currently 200
+    expect(status).toBe(409);
   });
 
-  it.fails("a PAID invoice should not be deletable", async () => {
+  it("a PAID invoice is not deletable", async () => {
     const id = await createAndFullyPayInvoice();
     const { status } = await admin.postJson(`/api/invoices/customer/${id}`, {}, "DELETE");
-    expect(status).toBe(409); // currently 200
+    expect(status).toBe(409);
+  });
+
+  it("a PAID invoice still accepts non-item edits (e.g. notes)", async () => {
+    const id = await createAndFullyPayInvoice();
+    const { status } = await admin.postJson(
+      `/api/invoices/customer/${id}`,
+      { notes: "Called customer to confirm receipt" },
+      "PATCH"
+    );
+    expect(status).toBe(200);
   });
 });
 

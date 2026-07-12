@@ -67,6 +67,16 @@ export async function PATCH(
   const existing = await prisma.supplierInvoice.findUnique({ where: { id } });
   if (!existing) return NextResponse.json({ error: "Not found" }, { status: 404 });
 
+  // Once any payment has been recorded, line items (and the totals derived
+  // from them) are financial history -- same reasoning as the customer-
+  // invoice equivalent of this guard.
+  if (parsed.data.items !== undefined && existing.paymentStatus !== "UNPAID") {
+    return NextResponse.json(
+      { error: "This bill has a recorded payment and its line items can no longer be edited." },
+      { status: 409 }
+    );
+  }
+
   const data = parsed.data;
   const updateData: Record<string, unknown> = {};
 
@@ -160,6 +170,17 @@ export async function DELETE(
   if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   const { id } = await params;
+
+  const existing = await prisma.supplierInvoice.findUnique({ where: { id } });
+  if (!existing) return NextResponse.json({ error: "Not found" }, { status: 404 });
+
+  if (existing.paymentStatus !== "UNPAID") {
+    return NextResponse.json(
+      { error: "This bill has a recorded payment and can no longer be deleted." },
+      { status: 409 }
+    );
+  }
+
   await prisma.supplierInvoice.delete({ where: { id } });
   return NextResponse.json({ ok: true });
 }
