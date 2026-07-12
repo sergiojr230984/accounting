@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { requireAuth, requireRole, scopeInvoicesToOwnEmployee } from "@/lib/api";
+import { syncProductCatalog } from "@/lib/product-catalog";
 import { z } from "zod";
 import Decimal from "decimal.js";
 
@@ -243,37 +244,9 @@ export async function PATCH(
       })),
     };
 
-    // Auto-save new line items to the product catalog. Batched into one
-    // existence-check query plus one createMany -- same fix as invoice
-    // creation's equivalent of this loop.
+    // Auto-save new line items to the product catalog.
     try {
-      const names = Array.from(new Set(data.items.map((item) => item.description.trim()).filter(Boolean)));
-      if (names.length > 0) {
-        const existingProducts = await prisma.product.findMany({
-          where: { OR: names.map((name) => ({ name: { equals: name, mode: "insensitive" as const } })) },
-          select: { name: true },
-        });
-        const existingLower = new Set(existingProducts.map((p) => p.name.toLowerCase()));
-        const seen = new Set<string>();
-        const creates: { name: string; description: string | null; price: string; taxRate: string; active: boolean }[] = [];
-        for (const item of data.items) {
-          const name = item.description.trim();
-          if (!name) continue;
-          const key = name.toLowerCase();
-          if (existingLower.has(key) || seen.has(key)) continue;
-          seen.add(key);
-          creates.push({
-            name,
-            description: item.itemDescription ?? null,
-            price: item.unitPrice,
-            taxRate: item.taxRate,
-            active: true,
-          });
-        }
-        if (creates.length > 0) {
-          await prisma.product.createMany({ data: creates });
-        }
-      }
+      await syncProductCatalog(prisma, data.items);
     } catch {
       // Product sync failure must never break invoice update
     }
