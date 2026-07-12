@@ -122,8 +122,12 @@ export async function PATCH(
     updateData.taxAmount = taxAmount.toFixed(2);
     updateData.totalAmount = subtotal.plus(taxAmount).toFixed(2);
 
-    await prisma.supplierInvoiceItem.deleteMany({ where: { invoiceId: id } });
+    // Nested inside the single supplierInvoice.update() call's relation
+    // write (rather than a separate eager deleteMany() statement before
+    // it) so the delete+create runs as one atomic transaction -- same fix
+    // as the customer-invoice equivalent of this pattern.
     updateData.items = {
+      deleteMany: {},
       create: computedItems.map((item) => ({
         description: item.description,
         itemDescription: item.itemDescription ?? null,

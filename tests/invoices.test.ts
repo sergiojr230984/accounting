@@ -173,13 +173,14 @@ describe("payment ledger — new on this branch, not present on main", () => {
     expect(full.body.payments.length).toBe(1);
   });
 
-  // Confirmed via code review: payment creation reads the invoice's current
-  // paidAmount, adds the new amount in application code, then writes it back
-  // -- two concurrent payments can both read the same base value and the
-  // second write clobbers the first's contribution to paidAmount (though
-  // both Payment rows persist, so the ledger and the denormalized total
-  // silently disagree).
-  it.fails("two concurrent payments on the same invoice should both be reflected in paidAmount", async () => {
+  // Fixed: payment creation now acquires a real row lock (a raw
+  // SELECT ... FOR UPDATE inside an interactive transaction) before reading
+  // and updating paidAmount, so concurrent payments serialize instead of
+  // racing on a stale read. Re-run several times (including as part of a
+  // full-suite run, not just in isolation) to confirm the fix is robust,
+  // not just narrowing the window -- consistently correct across all of
+  // them.
+  it("eight concurrent payments on the same invoice are all correctly reflected in paidAmount", async () => {
     const created = await admin.postJson<{ id: string }>("/api/invoices/customer", {
       customerId,
       invoiceNumber: `PAYRACE-${Date.now()}`,
@@ -189,17 +190,15 @@ describe("payment ledger — new on this branch, not present on main", () => {
     });
     const id = created.body.id;
 
-    // A 2-request race doesn't reliably overlap at the DB layer against a
-    // fast local server; widen it the same way the invoice-numbering race
-    // test does, so the read-modify-write window is actually likely to be hit.
     await Promise.all(
       Array.from({ length: 8 }, () =>
         admin.postJson(`/api/invoices/customer/${id}/payments`, { amount: "100", paymentDate: "2026-01-05" })
       )
     );
 
-    const final = await admin.getJson<{ paidAmount: string }>(`/api/invoices/customer/${id}`);
-    expect(Number(final.body.paidAmount)).toBe(800); // currently can land below 800 -- writes clobber each other
+    const final = await admin.getJson<{ paidAmount: string; payments: unknown[] }>(`/api/invoices/customer/${id}`);
+    expect(Number(final.body.paidAmount)).toBe(800);
+    expect(final.body.payments.length).toBe(8);
   });
 });
 

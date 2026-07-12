@@ -167,9 +167,17 @@ export async function PATCH(
     updateData.taxAmount = taxAmount.toFixed(2);
     updateData.totalAmount = subtotal.plus(taxAmount).plus(feesSum).toFixed(2);
 
-    // Delete existing items only AFTER successful computation
-    await prisma.customerInvoiceItem.deleteMany({ where: { invoiceId: id } });
+    // The delete and the create used to be two separate statements (an
+    // eager deleteMany() here, then a create nested in the update() call
+    // below) -- a crash or error between them permanently lost the
+    // invoice's line items while the parent record survived with stale
+    // totals. Both are now nested inside the single customerInvoice.update()
+    // call's relation write instead: Prisma runs a nested relation write
+    // (deleteMany + create on the same relation, in one .update() call) as
+    // one atomic transaction, so there's no longer a window where the
+    // items are gone but the parent hasn't been updated yet.
     updateData.items = {
+      deleteMany: {},
       create: computedItems.map((item) => ({
         description: item.description,
         itemDescription: item.itemDescription ?? null,

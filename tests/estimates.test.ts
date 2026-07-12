@@ -58,11 +58,13 @@ describe("convert to invoice", () => {
     expect(Number(invoice.body.totalAmount)).toBe(Number(est.body.totalAmount));
   });
 
-  // Confirmed via code review: convert does a plain findUnique + null-check
-  // on convertedInvoiceId with no transaction or row lock. Two concurrent
-  // convert requests can both pass the check and both create a real invoice
-  // -- duplicate revenue booked from a single estimate.
-  it.fails("converting the same estimate twice concurrently should not create two invoices", async () => {
+  // Fixed: convert now acquires a real row lock (a raw SELECT ... FOR
+  // UPDATE inside an interactive transaction) on the estimate before
+  // checking and setting convertedInvoiceId, so concurrent conversion
+  // requests serialize instead of racing past the check together.
+  // Re-confirmed correct across multiple separate full-suite runs, not
+  // just in isolation.
+  it("converting the same estimate 8 times concurrently creates exactly one invoice", async () => {
     const est = await admin.postJson<{ id: string }>("/api/estimates", {
       customerId,
       estimateNumber: `EST-RACE-${Date.now()}`,
@@ -70,15 +72,13 @@ describe("convert to invoice", () => {
       items: [{ description: "Race me", quantity: "1", unitPrice: "1000" }],
     });
 
-    // A 2-request race doesn't reliably overlap at the DB layer against a
-    // fast local server; widen it the same way the invoice-numbering and
-    // payment-ledger race tests do, so the check-then-act window is
-    // actually likely to be hit.
     const results = await Promise.all(
       Array.from({ length: 8 }, () => admin.postJson(`/api/estimates/${est.body.id}/convert`, {}))
     );
     const succeeded = results.filter((r) => r.status === 200);
-    expect(succeeded.length).toBe(1); // currently can be >1 -- multiple requests create an invoice
+    const conflicted = results.filter((r) => r.status === 409);
+    expect(succeeded.length).toBe(1);
+    expect(conflicted.length).toBe(7);
   });
 
   it("converting an already-converted estimate a second time (sequentially) is rejected", async () => {
