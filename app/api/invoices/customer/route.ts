@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { requireAuth, scopeInvoicesToOwnEmployee } from "@/lib/api";
+import { requireAuth, scopeInvoicesToOwnEmployee, NO_MATCHING_EMPLOYEE_ID } from "@/lib/api";
 import { syncProductCatalog } from "@/lib/product-catalog";
 import { z } from "zod";
 import Decimal from "decimal.js";
@@ -60,6 +60,7 @@ export async function GET(request: Request) {
   // SALES only sees invoices linked to their own Employee record.
   const scope = await scopeInvoicesToOwnEmployee(guard);
   if (scope) where.employeeId = scope.employeeId;
+  const notLinked = scope?.employeeId === NO_MATCHING_EMPLOYEE_ID;
 
   const [invoices, total] = await Promise.all([
     prisma.customerInvoice.findMany({
@@ -76,7 +77,7 @@ export async function GET(request: Request) {
     prisma.customerInvoice.count({ where }),
   ]);
 
-  return NextResponse.json({ invoices, total, page, limit });
+  return NextResponse.json({ invoices, total, page, limit, notLinked });
 }
 
 export async function POST(request: Request) {

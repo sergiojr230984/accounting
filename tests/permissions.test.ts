@@ -184,4 +184,23 @@ describe("horizontal isolation between two salespeople -- rebuilt, matching main
     expect(asAdmin.status).toBe(200);
     expect(asManager.status).toBe(200);
   });
+
+  // A SALES login with no same-email Employee row is scoped to a sentinel
+  // id that matches nothing (see lib/api.ts's NO_MATCHING_EMPLOYEE_ID), so
+  // the invoice list is legitimately empty. The list endpoint must still
+  // flag that with `notLinked: true` -- otherwise this is indistinguishable
+  // from "you just have zero invoices" and there's no way for the user (or
+  // the UI) to know an admin needs to link their Employee record.
+  it("an unlinked SALES account gets notLinked: true instead of a silent empty list", async () => {
+    const email = `unlinked-${Date.now()}@test.local`;
+    const password = "unlinkedTest#1pw";
+    await admin.postJson("/api/users", { name: "Unlinked Sales", email, password, role: "SALES" });
+    const unlinked = await loginAs(email, password);
+    const { status, body } = await unlinked.getJson<{ invoices: unknown[]; notLinked?: boolean }>(
+      "/api/invoices/customer"
+    );
+    expect(status).toBe(200);
+    expect(body.invoices).toEqual([]);
+    expect(body.notLinked).toBe(true);
+  });
 });
