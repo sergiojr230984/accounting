@@ -44,7 +44,9 @@ async function resolveEmployeeForSales(
   userEmail: string | null | undefined
 ): Promise<{ id: string } | null> {
   if (!userEmail) return null;
-  return prisma.employee.findFirst({ where: { email: userEmail } });
+  return prisma.employee.findFirst({
+    where: { email: { equals: userEmail, mode: "insensitive" } },
+  });
 }
 
 export async function GET(
