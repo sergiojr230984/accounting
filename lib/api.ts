@@ -163,6 +163,12 @@ export async function requireRole(
   return guard;
 }
 
+// Sentinel employeeId used to scope an unlinked SALES account to "nothing"
+// (see scopeInvoicesToOwnEmployee below). Exported so callers can tell that
+// case apart from a real, matched employee and surface it to the user
+// instead of just rendering a silent empty list.
+export const NO_MATCHING_EMPLOYEE_ID = "__no-matching-employee__";
+
 /**
  * Horizontal scoping for customer invoices. ADMIN/MANAGER see everything
  * (returns null -- no filter to apply). A SALES caller is scoped to
@@ -178,12 +184,12 @@ export async function scopeInvoicesToOwnEmployee(
 ): Promise<{ employeeId: string } | null> {
   if (session.user.role !== "SALES") return null;
   const email = (session.user.email ?? "").toLowerCase().trim();
-  if (!email) return { employeeId: "__no-matching-employee__" };
+  if (!email) return { employeeId: NO_MATCHING_EMPLOYEE_ID };
   const employee = await prisma.employee.findFirst({
     where: { email: { equals: email, mode: "insensitive" } },
     select: { id: true },
   });
-  return { employeeId: employee?.id ?? "__no-matching-employee__" };
+  return { employeeId: employee?.id ?? NO_MATCHING_EMPLOYEE_ID };
 }
 
 /**
