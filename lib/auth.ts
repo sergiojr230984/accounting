@@ -110,7 +110,18 @@ const { handlers, auth: baseAuth, signIn, signOut } = NextAuth({
           windowMs: 15 * 60_000,
           max: 10,
         });
-        if (!ipLimit.ok || !emailLimit.ok) return null;
+        if (!ipLimit.ok || !emailLimit.ok) {
+          // Server-log only -- the client always sees the same generic
+          // CredentialsSignin error either way (leaking *why* a login was
+          // rejected would help an attacker enumerate accounts / probe the
+          // limiter). Without this, a rate-limited legitimate user is
+          // indistinguishable from a wrong password from the outside, and
+          // nobody with prod log access can tell which one actually happened.
+          console.warn(
+            `[auth] login blocked by rate limit for "${parsed.data.email}" (ipOk=${ipLimit.ok}, emailOk=${emailLimit.ok})`
+          );
+          return null;
+        }
 
         // Case-insensitive: emails are treated as case-insensitive everywhere
         // else in this app (session role lookup below, SALES employee
@@ -126,11 +137,19 @@ const { handlers, auth: baseAuth, signIn, signOut } = NextAuth({
           // that can never match, so the response timing is indistinguishable
           // from a real account with a wrong password.
           await bcrypt.compare(parsed.data.password, DUMMY_PASSWORD_HASH);
+          console.warn(
+            user
+              ? `[auth] login rejected for "${parsed.data.email}": account is inactive`
+              : `[auth] login rejected for "${parsed.data.email}": no matching user`
+          );
           return null;
         }
 
         const valid = await bcrypt.compare(parsed.data.password, user.password);
-        if (!valid) return null;
+        if (!valid) {
+          console.warn(`[auth] login rejected for "${parsed.data.email}": wrong password`);
+          return null;
+        }
 
         await prisma.user
           .update({ where: { id: user.id }, data: { lastLogin: new Date() } })
