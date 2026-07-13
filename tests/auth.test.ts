@@ -26,6 +26,19 @@ describe("login and logout", () => {
     expect(status).toBe(200);
   });
 
+  // Fixed: the login lookup used a case-sensitive exact match on email while
+  // every other email lookup in this app (session role refresh, SALES
+  // employee scoping) is case-insensitive. A user typing their email with
+  // different casing than stored -- autocapitalized by a mobile keyboard, or
+  // just habit -- got an opaque CredentialsSignin failure despite a correct
+  // password.
+  it("logs in successfully when the email is typed with different casing than stored", async () => {
+    const s = await loginAs("Admin@Lacuevita.com", "admin123");
+    expect(s.hasCookie("authjs.session-token")).toBe(true);
+    const { status } = await s.getJson("/api/customers");
+    expect(status).toBe(200);
+  });
+
   it("rejects a completely invalid/forged session cookie on a real API route", async () => {
     const s = anonymousSession();
     const res = await s.fetch("/api/customers", {

@@ -112,8 +112,14 @@ const { handlers, auth: baseAuth, signIn, signOut } = NextAuth({
         });
         if (!ipLimit.ok || !emailLimit.ok) return null;
 
-        const user = await prisma.user.findUnique({
-          where: { email: parsed.data.email },
+        // Case-insensitive: emails are treated as case-insensitive everywhere
+        // else in this app (session role lookup below, SALES employee
+        // scoping in lib/api.ts), so a login typed with different casing
+        // than the stored email (autocapitalized by a mobile keyboard, or
+        // just habit) must still match the same account rather than
+        // failing with an opaque CredentialsSignin error.
+        const user = await prisma.user.findFirst({
+          where: { email: { equals: parsed.data.email, mode: "insensitive" } },
         });
         if (!user || user.active === false) {
           // Pay the same bcrypt cost as a real comparison, against a hash
