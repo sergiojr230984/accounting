@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { Fragment, useEffect, useState } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
@@ -177,7 +177,11 @@ export default function SuppliersPage() {
     setLoading(true);
     try {
       const res = await fetch("/api/suppliers");
-      setSuppliers(await res.json());
+      // A non-ok response (e.g. 403 for a role that can't see supplier bank
+      // details) still has a JSON body, but it's an error object, not an
+      // array -- setting it directly used to crash the whole page the
+      // moment `suppliers.filter(...)` ran below.
+      setSuppliers(res.ok ? await res.json() : []);
     } finally {
       setLoading(false);
     }
@@ -323,8 +327,8 @@ export default function SuppliersPage() {
               </tr>
             ) : (
               filtered.map((s) => (
-                <>
-                  <tr key={s.id} className="hover:bg-gray-50 transition-colors">
+                <Fragment key={s.id}>
+                  <tr className="hover:bg-gray-50 transition-colors">
                     <td className="px-5 py-3 font-medium text-gray-900">{s.name}</td>
                     <td className="px-5 py-3 text-gray-500">{s.email ?? "—"}</td>
                     <td className="px-5 py-3 text-gray-500">{s.phone ?? "—"}</td>
@@ -398,7 +402,7 @@ export default function SuppliersPage() {
                       </td>
                     </tr>
                   )}
-                </>
+                </Fragment>
               ))
             )}
           </tbody>

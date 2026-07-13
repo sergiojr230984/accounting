@@ -80,6 +80,14 @@ export async function POST(request: Request) {
   const { supplierId, invoiceNumber, invoiceDate, dueDate, category, items, notes, paymentStatus, paidAmount, customerInvoiceRef } =
     parsed.data;
 
+  // supplierId is a foreign key the DB will reject with a raw constraint-
+  // violation error if it references a row that doesn't exist -- checked
+  // here so that's a clean 404 instead of an unhandled 500.
+  const supplierExists = await prisma.supplier.findUnique({ where: { id: supplierId }, select: { id: true } });
+  if (!supplierExists) {
+    return NextResponse.json({ error: "Selected supplier no longer exists." }, { status: 404 });
+  }
+
   const existing = await prisma.supplierInvoice.findUnique({
     where: { invoiceNumber_supplierId: { invoiceNumber, supplierId } },
   });

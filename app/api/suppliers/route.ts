@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { initializeDatabase } from "@/lib/init-db";
-import { requireRole } from "@/lib/api";
+import { requireAuth, requireRole } from "@/lib/api";
 import { z } from "zod";
 
 const schema = z.object({
@@ -24,10 +24,16 @@ const schema = z.object({
 });
 
 export async function GET() {
-  // Suppliers include bank account/routing/Zelle details -- ADMIN/MANAGER
-  // only, matching every other financial resource in the app.
-  const guard = await requireRole("ADMIN", "MANAGER");
+  // Any authenticated role can list suppliers -- the "Create Bill" flow
+  // (open to every role) needs a supplier picker, and the Suppliers nav
+  // item's role gate (ADMIN/MANAGER only) already keeps the full
+  // management page away from SALES. But bank account/routing/Zelle
+  // details are compensation-adjacent secrets, not contact info -- strip
+  // those unless the caller is ADMIN/MANAGER, same as employees'
+  // commissionRate.
+  const guard = await requireAuth();
   if (guard instanceof NextResponse) return guard;
+  const canSeeBankDetails = guard.user.role === "ADMIN" || guard.user.role === "MANAGER";
 
   await initializeDatabase();
   try {
@@ -37,7 +43,11 @@ export async function GET() {
         _count: { select: { invoices: true } },
       },
     });
-    return NextResponse.json(suppliers);
+    if (canSeeBankDetails) return NextResponse.json(suppliers);
+    const scrubbed = suppliers.map(
+      ({ bankName: _bn, bankAccountNumber: _ban, bankRouting: _br, zelle: _z, paymentInstructions: _pi, ...rest }) => rest
+    );
+    return NextResponse.json(scrubbed);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     return NextResponse.json({ error: msg }, { status: 500 });

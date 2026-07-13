@@ -379,3 +379,59 @@ describe("concurrency — invoice numbering", () => {
     expect(errored.length).toBe(0);
   });
 });
+
+describe("invalid foreign keys are rejected cleanly, not a raw DB-constraint 500", () => {
+  it("rejects invoice creation with a customerId that doesn't exist", async () => {
+    const { status, body } = await admin.postJson<{ error: string }>("/api/invoices/customer", {
+      customerId: "not-a-real-customer-id",
+      invoiceNumber: `FK-BADCUST-${Date.now()}`,
+      invoiceDate: "2026-01-01",
+      dueDate: "2026-01-31",
+      items: [{ description: "x", quantity: "1", unitPrice: "1" }],
+    });
+    expect(status).toBe(404);
+    expect(body.error).toContain("customer");
+  });
+
+  it("rejects invoice creation with an employeeId that doesn't exist", async () => {
+    const { status, body } = await admin.postJson<{ error: string }>("/api/invoices/customer", {
+      customerId,
+      invoiceNumber: `FK-BADEMP-${Date.now()}`,
+      invoiceDate: "2026-01-01",
+      dueDate: "2026-01-31",
+      items: [{ description: "x", quantity: "1", unitPrice: "1" }],
+      employeeId: "not-a-real-employee-id",
+    });
+    expect(status).toBe(400);
+    expect(body.error).toContain("sales rep");
+  });
+
+  it("rejects a PATCH that assigns an employeeId that doesn't exist", async () => {
+    const created = await admin.postJson<{ id: string }>("/api/invoices/customer", {
+      customerId,
+      invoiceNumber: `FK-PATCHEMP-${Date.now()}`,
+      invoiceDate: "2026-01-01",
+      dueDate: "2026-01-31",
+      items: [{ description: "x", quantity: "1", unitPrice: "1" }],
+    });
+    const { status, body } = await admin.postJson<{ error: string }>(
+      `/api/invoices/customer/${created.body.id}`,
+      { employeeId: "not-a-real-employee-id" },
+      "PATCH"
+    );
+    expect(status).toBe(400);
+    expect(body.error).toContain("sales rep");
+  });
+
+  it("rejects a bill (supplier invoice) with a supplierId that doesn't exist", async () => {
+    const { status, body } = await admin.postJson<{ error: string }>("/api/invoices/supplier", {
+      supplierId: "not-a-real-supplier-id",
+      invoiceNumber: `FK-BADSUP-${Date.now()}`,
+      invoiceDate: "2026-01-01",
+      category: "OPERATING_EXPENSE",
+      items: [{ description: "x", quantity: "1", unitCost: "1" }],
+    });
+    expect(status).toBe(404);
+    expect(body.error).toContain("supplier");
+  });
+});

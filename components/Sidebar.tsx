@@ -54,7 +54,11 @@ const navItems: NavItem[] = [
     icon: ShoppingCart,
     children: [
       { href: "/invoices/supplier", label: "Bills" },
-      { href: "/suppliers", label: "Suppliers" },
+      // Suppliers include bank account/routing/Zelle details -- the API
+      // (app/api/suppliers/route.ts) restricts this to ADMIN/MANAGER, but
+      // this nav item wasn't updated to match, so SALES could click through
+      // to a page that 403s and crashes. Matches the API's own restriction.
+      { href: "/suppliers", label: "Suppliers", roles: ["ADMIN", "MANAGER"] },
     ],
   },
   {

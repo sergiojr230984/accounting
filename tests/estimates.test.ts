@@ -109,3 +109,16 @@ describe("convert to invoice", () => {
     expect(second.status).not.toBe(200); // sequential double-conversion is correctly blocked
   });
 });
+
+describe("invalid foreign keys are rejected cleanly, not a raw DB-constraint 500", () => {
+  it("rejects estimate creation with a customerId that doesn't exist", async () => {
+    const { status, body } = await admin.postJson<{ error: string }>("/api/estimates", {
+      customerId: "not-a-real-customer-id",
+      estimateNumber: `FK-BADCUST-${Date.now()}`,
+      estimateDate: "2026-01-01",
+      items: [{ description: "x", quantity: "1", unitPrice: "1" }],
+    });
+    expect(status).toBe(404);
+    expect(body.error).toContain("customer");
+  });
+});

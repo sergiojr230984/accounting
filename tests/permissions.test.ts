@@ -65,11 +65,25 @@ describe("previously had no role gate at all -- now fixed", () => {
     expect(status).toBe(403);
   });
 
-  // Regression vs. main, now restored: on main, suppliers/[id] was one of
-  // the *correctly*-gated routes (via the now-removed lib/permissions.ts).
-  it("SALES cannot see supplier bank account details", async () => {
-    const { status } = await sales1.getJson("/api/suppliers");
-    expect(status).toBe(403);
+  // Fixed: the list itself stays visible to any authenticated role (the
+  // "Create Bill" flow, open to every role, needs a supplier picker), but
+  // bank account/routing/Zelle details are stripped unless the caller is
+  // ADMIN/MANAGER -- same pattern as employees' commissionRate below.
+  // Previously this returned 403, which crashed the Suppliers page and the
+  // Create Bill page for SALES (both blindly called array methods on the
+  // 403's error-object body).
+  it("SALES does not see supplier bank account details", async () => {
+    await admin.postJson("/api/suppliers", {
+      name: "Bank Details Leak Test",
+      bankName: "First National",
+      bankAccountNumber: "12345678",
+      bankRouting: "021000021",
+      zelle: "ops@test.local",
+    });
+    const { status, body } = await sales1.getJson<Record<string, unknown>[]>("/api/suppliers");
+    expect(status).toBe(200); // the list itself stays visible (Create Bill supplier picker)
+    const anyHasBankDetails = Array.isArray(body) && body.some((s) => "bankName" in s || "bankAccountNumber" in s || "bankRouting" in s || "zelle" in s);
+    expect(anyHasBankDetails).toBe(false); // but the sensitive fields are stripped
   });
 
   it("SALES cannot delete a supplier", async () => {

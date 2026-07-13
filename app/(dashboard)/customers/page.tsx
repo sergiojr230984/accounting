@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { Fragment, useEffect, useState } from "react";
 import { useForm, Controller } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
@@ -282,8 +282,8 @@ export default function CustomersPage() {
               </tr>
             ) : (
               filtered.map((c) => (
-                <>
-                  <tr key={c.id} className="hover:bg-gray-50 transition-colors">
+                <Fragment key={c.id}>
+                  <tr className="hover:bg-gray-50 transition-colors">
                     <td className="px-5 py-3 font-medium text-gray-900">{c.name}</td>
                     <td className="px-5 py-3 text-gray-500">{c.email ?? "—"}</td>
                     <td className="px-5 py-3 text-gray-500">{c.phone ?? "—"}</td>
@@ -351,7 +351,7 @@ export default function CustomersPage() {
                       </td>
                     </tr>
                   )}
-                </>
+                </Fragment>
               ))
             )}
           </tbody>

@@ -69,6 +69,14 @@ export async function POST(request: Request) {
 
   const { customerId, estimateNumber, estimateDate, expiryDate, items, notes } = parsed.data;
 
+  // customerId is a foreign key the DB will reject with a raw constraint-
+  // violation error if it references a row that doesn't exist -- checked
+  // here so that's a clean 404 instead of an unhandled 500.
+  const customerExists = await prisma.customer.findUnique({ where: { id: customerId }, select: { id: true } });
+  if (!customerExists) {
+    return NextResponse.json({ error: "Selected customer no longer exists." }, { status: 404 });
+  }
+
   const existing = await prisma.estimate.findUnique({
     where: { estimateNumber_customerId: { estimateNumber, customerId } },
   });

@@ -152,7 +152,21 @@ export async function PATCH(
   }
   if (data.paidAmount !== undefined) updateData.paidAmount = data.paidAmount;
   if (data.downPayment !== undefined) updateData.downPayment = data.downPayment;
-  if (data.employeeId !== undefined) updateData.employeeId = data.employeeId || null;
+  if (data.employeeId !== undefined) {
+    // employeeId is a foreign key the DB will reject with a raw constraint-
+    // violation error if it references a row that doesn't exist -- checked
+    // here so that's a clean 400 instead of an unhandled 500.
+    if (data.employeeId) {
+      const employeeExists = await prisma.employee.findUnique({ where: { id: data.employeeId }, select: { id: true } });
+      if (!employeeExists) {
+        return NextResponse.json(
+          { error: "Selected sales rep no longer exists. Please pick another." },
+          { status: 400 }
+        );
+      }
+    }
+    updateData.employeeId = data.employeeId || null;
+  }
   if (data.commissionRate !== undefined) updateData.commissionRate = data.commissionRate;
 
   // Each fee is applied per-line-item at the client's discretion, so the
