@@ -6,6 +6,10 @@ import type { NextAuthConfig } from "next-auth";
  * lib/auth.ts spreads this and adds the full Credentials provider.
  */
 export const authConfig = {
+  // Railway (and most PaaS) terminate TLS in front of the app and proxy over
+  // an internal host, so NextAuth's own Host-header check must be disabled —
+  // otherwise every request 500s with "UntrustedHost".
+  trustHost: true,
   session: { strategy: "jwt" as const },
   pages: {
     signIn: "/login",
