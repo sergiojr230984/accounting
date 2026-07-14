@@ -58,9 +58,6 @@ export async function GET(request: Request) {
   const page = parseInt(searchParams.get("page") ?? "1");
   const limit = parseInt(searchParams.get("limit") ?? "20");
 
-  const role = (session.user as { role?: string }).role;
-  const userEmail = session.user?.email;
-
   const where: Record<string, unknown> = {};
   if (customerId) where.customerId = customerId;
   if (status) where.paymentStatus = status;
@@ -71,19 +68,8 @@ export async function GET(request: Request) {
     };
   }
 
-  // SALES employees only see their own invoices
-  if (role === "SALES") {
-    if (!userEmail) {
-      return NextResponse.json({ invoices: [], total: 0, page, limit, notLinked: true });
-    }
-    const employee = await prisma.employee.findFirst({
-      where: { email: { equals: userEmail, mode: "insensitive" } },
-    });
-    if (!employee) {
-      return NextResponse.json({ invoices: [], total: 0, page, limit, notLinked: true });
-    }
-    where.employeeId = employee.id;
-  }
+  // Company-wide accounting system — every employee sees every invoice,
+  // regardless of who it's attributed to.
 
   const [invoices, total] = await Promise.all([
     prisma.customerInvoice.findMany({

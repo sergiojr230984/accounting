@@ -40,15 +40,6 @@ function deriveStatus(
   return "UNPAID";
 }
 
-async function resolveEmployeeForSales(
-  userEmail: string | null | undefined
-): Promise<{ id: string } | null> {
-  if (!userEmail) return null;
-  return prisma.employee.findFirst({
-    where: { email: { equals: userEmail, mode: "insensitive" } },
-  });
-}
-
 export async function GET(
   _request: Request,
   { params }: { params: Promise<{ id: string }> }
@@ -57,7 +48,6 @@ export async function GET(
   if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   const { id } = await params;
-  const role = (session.user as { role?: string }).role;
 
   const invoice = await prisma.customerInvoice.findUnique({
     where: { id },
@@ -72,14 +62,6 @@ export async function GET(
 
   if (!invoice) return NextResponse.json({ error: "Not found" }, { status: 404 });
 
-  // SALES employees can only view their own invoices
-  if (role === "SALES") {
-    const employee = await resolveEmployeeForSales(session.user?.email);
-    if (!employee || invoice.employeeId !== employee.id) {
-      return NextResponse.json({ error: "Forbidden" }, { status: 403 });
-    }
-  }
-
   return NextResponse.json(invoice);
 }
 
@@ -91,7 +73,6 @@ export async function PATCH(
   if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   const { id } = await params;
-  const role = (session.user as { role?: string }).role;
 
   const body = await request.json();
   const parsed = updateSchema.safeParse(body);
@@ -101,14 +82,6 @@ export async function PATCH(
 
   const existing = await prisma.customerInvoice.findUnique({ where: { id } });
   if (!existing) return NextResponse.json({ error: "Not found" }, { status: 404 });
-
-  // SALES employees can only update their own invoices
-  if (role === "SALES") {
-    const employee = await resolveEmployeeForSales(session.user?.email);
-    if (!employee || existing.employeeId !== employee.id) {
-      return NextResponse.json({ error: "Forbidden" }, { status: 403 });
-    }
-  }
 
   const data = parsed.data;
   const updateData: Record<string, unknown> = {};

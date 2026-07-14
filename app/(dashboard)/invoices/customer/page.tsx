@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback } from "react";
 import Link from "next/link";
-import { Plus, Search, Filter, AlertTriangle } from "lucide-react";
+import { Plus, Search, Filter } from "lucide-react";
 import PaymentBadge from "@/components/PaymentBadge";
 import { formatCurrency } from "@/lib/money";
 import { formatDateOnly } from "@/lib/date";
@@ -22,7 +22,6 @@ export default function CustomerInvoicesPage() {
   const [invoices, setInvoices] = useState<Invoice[]>([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
-  const [notLinked, setNotLinked] = useState(false);
   const [search, setSearch] = useState("");
   const [status, setStatus] = useState("");
   const [from, setFrom] = useState("");
@@ -41,7 +40,6 @@ export default function CustomerInvoicesPage() {
       const data = await res.json();
       setInvoices(data.invoices ?? []);
       setTotal(data.total ?? 0);
-      setNotLinked(data.notLinked ?? false);
     } finally {
       setLoading(false);
     }
@@ -69,19 +67,6 @@ export default function CustomerInvoicesPage() {
           New Invoice
         </Link>
       </div>
-
-      {notLinked && (
-        <div className="flex items-start gap-3 bg-amber-50 border border-amber-200 rounded-xl p-4">
-          <AlertTriangle className="w-5 h-5 text-amber-500 flex-shrink-0 mt-0.5" />
-          <div>
-            <p className="text-sm font-medium text-amber-800">Your account is not linked to an employee profile</p>
-            <p className="text-sm text-amber-600 mt-0.5">
-              Contact your administrator to link your login email to your employee record.
-              Until then, your invoices will not appear here.
-            </p>
-          </div>
-        </div>
-      )}
 
       {/* Filters */}
       <div className="card py-4">
@@ -164,7 +149,7 @@ export default function CustomerInvoicesPage() {
           </tbody>
         </table>
 
-        {!loading && !notLinked && filtered.length === 0 && (
+        {!loading && filtered.length === 0 && (
           <div className="text-center py-12 text-gray-400">
             <p>No invoices found</p>
           </div>
