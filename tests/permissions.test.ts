@@ -108,14 +108,13 @@ describe("previously had no role gate at all -- now fixed", () => {
   });
 });
 
-describe("horizontal isolation between two salespeople -- rebuilt, matching main's original behavior", () => {
-  // Rebuilt without a schema change: User and Employee both already had a
-  // unique `email` field, so SALES scoping matches on that (see
-  // lib/api.ts's scopeInvoicesToOwnEmployee) instead of needing a new
-  // relation column. seed-test-fixtures.ts links each SALES test account to
-  // a same-email Employee row so invoice creation (which auto-assigns
-  // employeeId from the caller's own linked record for SALES) has
-  // something real to link to.
+describe("shared visibility -- this is a company-wide ledger, not per-salesperson silos", () => {
+  // seed-test-fixtures.ts links each SALES test account to a same-email
+  // Employee row so invoice creation (which auto-assigns employeeId from
+  // the caller's own linked record for SALES, for commission attribution)
+  // has something real to link to. That attribution no longer restricts
+  // who can subsequently see or edit the invoice -- every authenticated
+  // role sees and can edit every invoice.
   it("a salesperson can see their own invoice in their own list", async () => {
     const customer = await admin.postJson<{ id: string }>("/api/customers", { name: "Own Invoice Test Co" });
     const inv = await sales1.postJson<{ id: string }>("/api/invoices/customer", {
@@ -130,7 +129,7 @@ describe("horizontal isolation between two salespeople -- rebuilt, matching main
     expect(body.invoices.map((i) => i.id)).toContain(inv.body.id);
   });
 
-  it("one salesperson's invoice list does not include invoices created by another salesperson", async () => {
+  it("one salesperson's invoice list includes invoices created by another salesperson", async () => {
     const customer = await admin.postJson<{ id: string }>("/api/customers", { name: "Horizontal Test Co" });
     const inv = await sales1.postJson<{ id: string; invoiceNumber: string }>("/api/invoices/customer", {
       customerId: customer.body.id,
@@ -141,10 +140,10 @@ describe("horizontal isolation between two salespeople -- rebuilt, matching main
     });
     const { body } = await sales2.getJson<{ invoices: { id: string }[] }>("/api/invoices/customer?limit=100");
     const ids = body.invoices.map((i) => i.id);
-    expect(ids).not.toContain(inv.body.id);
+    expect(ids).toContain(inv.body.id);
   });
 
-  it("one salesperson cannot view another salesperson's invoice by id", async () => {
+  it("one salesperson can view another salesperson's invoice by id", async () => {
     const customer = await admin.postJson<{ id: string }>("/api/customers", { name: "Horizontal Test Co 3" });
     const inv = await sales1.postJson<{ id: string }>("/api/invoices/customer", {
       customerId: customer.body.id,
@@ -154,10 +153,10 @@ describe("horizontal isolation between two salespeople -- rebuilt, matching main
       items: [{ description: "x", quantity: "1", unitPrice: "1" }],
     });
     const { status } = await sales2.getJson(`/api/invoices/customer/${inv.body.id}`);
-    expect(status).toBe(403);
+    expect(status).toBe(200);
   });
 
-  it("one salesperson cannot edit an invoice created by another salesperson", async () => {
+  it("one salesperson can edit an invoice created by another salesperson", async () => {
     const customer = await admin.postJson<{ id: string }>("/api/customers", { name: "Horizontal Test Co 2" });
     const inv = await sales1.postJson<{ id: string }>("/api/invoices/customer", {
       customerId: customer.body.id,
@@ -167,10 +166,10 @@ describe("horizontal isolation between two salespeople -- rebuilt, matching main
       items: [{ description: "x", quantity: "1", unitPrice: "1" }],
     });
     const { status } = await sales2.postJson(`/api/invoices/customer/${inv.body.id}`, { commissionRate: "0.99" }, "PATCH");
-    expect(status).toBe(403);
+    expect(status).toBe(200);
   });
 
-  it("ADMIN and MANAGER are not scoped -- they see every invoice regardless of who created it", async () => {
+  it("ADMIN and MANAGER see every invoice regardless of who created it", async () => {
     const customer = await admin.postJson<{ id: string }>("/api/customers", { name: "Horizontal Test Co 4" });
     const inv = await sales1.postJson<{ id: string }>("/api/invoices/customer", {
       customerId: customer.body.id,
@@ -185,22 +184,29 @@ describe("horizontal isolation between two salespeople -- rebuilt, matching main
     expect(asManager.status).toBe(200);
   });
 
-  // A SALES login with no same-email Employee row is scoped to a sentinel
-  // id that matches nothing (see lib/api.ts's NO_MATCHING_EMPLOYEE_ID), so
-  // the invoice list is legitimately empty. The list endpoint must still
-  // flag that with `notLinked: true` -- otherwise this is indistinguishable
-  // from "you just have zero invoices" and there's no way for the user (or
-  // the UI) to know an admin needs to link their Employee record.
-  it("an unlinked SALES account gets notLinked: true instead of a silent empty list", async () => {
+  // A SALES login with no same-email Employee row (e.g. never linked by an
+  // admin) used to be scoped to a sentinel id that matched nothing, leaving
+  // them looking at an empty list. Since invoice visibility is no longer
+  // scoped to the caller's own Employee record at all, an unlinked account
+  // sees the same company-wide list as everyone else.
+  it("an unlinked SALES account still sees the company's invoices, not an empty list", async () => {
+    const customer = await admin.postJson<{ id: string }>("/api/customers", { name: "Unlinked Visibility Test Co" });
+    const inv = await admin.postJson<{ id: string }>("/api/invoices/customer", {
+      customerId: customer.body.id,
+      invoiceNumber: `UNLINKED-${Date.now()}`,
+      invoiceDate: "2026-01-01",
+      dueDate: "2026-01-31",
+      items: [{ description: "x", quantity: "1", unitPrice: "1" }],
+    });
+
     const email = `unlinked-${Date.now()}@test.local`;
     const password = "unlinkedTest#1pw";
     await admin.postJson("/api/users", { name: "Unlinked Sales", email, password, role: "SALES" });
     const unlinked = await loginAs(email, password);
-    const { status, body } = await unlinked.getJson<{ invoices: unknown[]; notLinked?: boolean }>(
-      "/api/invoices/customer"
+    const { status, body } = await unlinked.getJson<{ invoices: { id: string }[] }>(
+      "/api/invoices/customer?limit=100"
     );
     expect(status).toBe(200);
-    expect(body.invoices).toEqual([]);
-    expect(body.notLinked).toBe(true);
+    expect(body.invoices.map((i) => i.id)).toContain(inv.body.id);
   });
 });

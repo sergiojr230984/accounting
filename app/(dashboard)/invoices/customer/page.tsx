@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback, useMemo } from "react";
 import Link from "next/link";
-import { Plus, Search, ChevronRight, DollarSign, AlertTriangle } from "lucide-react";
+import { Plus, Search, ChevronRight, DollarSign } from "lucide-react";
 import PaymentBadge from "@/components/PaymentBadge";
 import { formatCurrency } from "@/lib/money";
 import { formatDateOnly } from "@/lib/date";
@@ -31,7 +31,6 @@ export default function CustomerInvoicesPage() {
   const [invoices, setInvoices] = useState<Invoice[]>([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
-  const [notLinked, setNotLinked] = useState(false);
   const [search, setSearch] = useState("");
   const [customerFilter, setCustomerFilter] = useState("");
   const [statusFilter, setStatusFilter] = useState("");
@@ -63,7 +62,6 @@ export default function CustomerInvoicesPage() {
       const data = await res.json();
       setInvoices(data.invoices);
       setTotal(data.total);
-      setNotLinked(data.notLinked ?? false);
     } finally {
       setLoading(false);
     }
@@ -113,19 +111,6 @@ export default function CustomerInvoicesPage() {
           Create an invoice
         </Link>
       </div>
-
-      {notLinked && (
-        <div className="flex items-start gap-3 bg-amber-50 border border-amber-200 rounded-xl p-4">
-          <AlertTriangle className="w-5 h-5 text-amber-500 flex-shrink-0 mt-0.5" />
-          <div>
-            <p className="text-sm font-medium text-amber-800">Your account is not linked to an employee profile</p>
-            <p className="text-sm text-amber-600 mt-0.5">
-              Contact your administrator to link your login email to your employee record in Admin &rarr; Employees.
-              Until then, your invoices will not appear here.
-            </p>
-          </div>
-        </div>
-      )}
 
       {/* Stats banner */}
       <div className="bg-white border border-gray-200 rounded-2xl p-6">
@@ -262,9 +247,7 @@ export default function CustomerInvoicesPage() {
               <tr>
                 <td colSpan={7} className="text-center py-16 text-gray-400">
                   <DollarSign className="w-10 h-10 mx-auto mb-3 opacity-40" />
-                  <p className="font-medium">
-                    {notLinked ? "No invoices to show until your account is linked" : "No invoices match your filters"}
-                  </p>
+                  <p className="font-medium">No invoices match your filters</p>
                 </td>
               </tr>
             ) : (

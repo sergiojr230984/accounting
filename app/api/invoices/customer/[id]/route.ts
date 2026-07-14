@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { requireAuth, requireRole, scopeInvoicesToOwnEmployee } from "@/lib/api";
+import { requireAuth, requireRole } from "@/lib/api";
 import { syncProductCatalog } from "@/lib/product-catalog";
 import { z } from "zod";
 import Decimal from "decimal.js";
@@ -93,11 +93,6 @@ export async function GET(
 
   if (!invoice) return NextResponse.json({ error: "Not found" }, { status: 404 });
 
-  const scope = await scopeInvoicesToOwnEmployee(guard);
-  if (scope && invoice.employeeId !== scope.employeeId) {
-    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
-  }
-
   return NextResponse.json(invoice);
 }
 
@@ -117,11 +112,6 @@ export async function PATCH(
 
   const existing = await prisma.customerInvoice.findUnique({ where: { id } });
   if (!existing) return NextResponse.json({ error: "Not found" }, { status: 404 });
-
-  const scope = await scopeInvoicesToOwnEmployee(guard);
-  if (scope && existing.employeeId !== scope.employeeId) {
-    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
-  }
 
   // Once any payment has been recorded, the line items (and the totals
   // derived from them) are financial history, not a draft -- rewriting them
@@ -324,11 +314,6 @@ export async function DELETE(
 
   const existing = await prisma.customerInvoice.findUnique({ where: { id } });
   if (!existing) return NextResponse.json({ error: "Not found" }, { status: 404 });
-
-  const scope = await scopeInvoicesToOwnEmployee(guard);
-  if (scope && existing.employeeId !== scope.employeeId) {
-    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
-  }
 
   // An invoice with a recorded payment is a financial record, not a draft
   // -- deleting it destroys the only evidence money was collected against
