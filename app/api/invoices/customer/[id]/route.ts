@@ -172,7 +172,17 @@ export async function PATCH(
   let configuredFees: { id: string; label: string; rate: number }[] | null = null;
   if (data.appliedFees !== undefined && data.appliedFees.length > 0) {
     const profile = await prisma.companyProfile.findUnique({ where: { id: "default" } });
-    configuredFees = (profile?.customFees as { id: string; label: string; rate: number }[] | null) ?? [];
+    // The built-in card fee is a company-profile field (creditCardFeeRate),
+    // not one of the "custom fees" in customFees -- but the client applies
+    // it per-line the same way it applies a custom fee, tagged with the
+    // synthetic id "__cc__". Without adding it here, every invoice using the
+    // built-in card fee would fail validation as an "unconfigured" fee.
+    configuredFees = [
+      ...(profile && Number(profile.creditCardFeeRate) > 0
+        ? [{ id: "__cc__", label: "CARD FEE", rate: Number(profile.creditCardFeeRate) }]
+        : []),
+      ...((profile?.customFees as { id: string; label: string; rate: number }[] | null) ?? []),
+    ];
     if (!(data.items && data.items.length > 0)) {
       const feeBase = new Decimal(existing.subtotal.toString());
       const err = validateAppliedFees(data.appliedFees, feeBase, configuredFees);

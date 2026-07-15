@@ -188,8 +188,17 @@ export async function POST(request: Request) {
   // client-submitted amount can't be trusted and is rejected.
   let customFeesSum = new Decimal(0);
   if (appliedFees.length > 0) {
-    const configuredFees =
-      (companyProfile?.customFees as { id: string; label: string; rate: number }[] | null) ?? [];
+    // The built-in card fee is a company-profile field (creditCardFeeRate),
+    // not one of the "custom fees" in customFees -- but the client applies
+    // it per-line the same way it applies a custom fee, tagged with the
+    // synthetic id "__cc__". Without adding it here, every invoice using the
+    // built-in card fee would fail validation as an "unconfigured" fee.
+    const configuredFees: { id: string; label: string; rate: number }[] = [
+      ...(companyProfile && Number(companyProfile.creditCardFeeRate) > 0
+        ? [{ id: "__cc__", label: "CARD FEE", rate: Number(companyProfile.creditCardFeeRate) }]
+        : []),
+      ...((companyProfile?.customFees as { id: string; label: string; rate: number }[] | null) ?? []),
+    ];
     const feeBaseCap = subtotal;
     for (const f of appliedFees) {
       const canonical = configuredFees.find((cf) => cf.id === f.id);

@@ -330,6 +330,35 @@ describe("applied fees are re-derived server-side, not trusted from the client",
     expect(Number(atCeiling.body.totalAmount)).toBe(410.66); // 370 + 25.90 + 14.76
   });
 
+  it("accepts the built-in card fee (synthetic id \"__cc__\", backed by companyProfile.creditCardFeeRate, not customFees)", async () => {
+    // The client applies the built-in credit-card fee the same way it applies
+    // a custom fee, tagged with the synthetic id "__cc__" -- but that fee's
+    // rate lives on companyProfile.creditCardFeeRate, not in the customFees
+    // array. The ceiling check must recognize "__cc__" too, or every invoice
+    // using the built-in card fee is wrongly rejected as "not configured".
+    const settingsRes = await admin.postJson(
+      "/api/settings",
+      { creditCardFeeRate: "0.0399" },
+      "PATCH"
+    );
+    expect(settingsRes.status).toBe(200);
+
+    const { status, body } = await admin.postJson<{ error: string; subtotal: string; totalAmount: string }>(
+      "/api/invoices/customer",
+      {
+        customerId,
+        invoiceNumber: `FEE-CC-BUILTIN-${Date.now()}`,
+        invoiceDate: "2026-01-01",
+        dueDate: "2026-01-31",
+        items: [{ description: "adorno", quantity: "1", unitPrice: "89" }],
+        appliedFees: [{ id: "__cc__", label: "CARD FEE", rate: 0.0399, amount: "3.55" }],
+      }
+    );
+    expect(status).toBe(201);
+    expect(Number(body.subtotal)).toBe(89);
+    expect(Number(body.totalAmount)).toBe(92.55); // 89 + 3.55 card fee, no tax
+  });
+
   it("rejects an inflated fee amount added via PATCH too", async () => {
     const created = await admin.postJson<{ id: string }>("/api/invoices/customer", {
       customerId,
