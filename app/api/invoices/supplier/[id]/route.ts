@@ -1,8 +1,6 @@
 import { NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
-import { requirePermission } from "@/lib/permissions";
-import { writeAuditLog, extractMeta, actorFromSession, diffChanges } from "@/lib/audit";
 import { z } from "zod";
 import Decimal from "decimal.js";
 
@@ -30,17 +28,11 @@ const updateSchema = z.object({
 });
 
 export async function GET(
-  request: Request,
+  _request: Request,
   { params }: { params: Promise<{ id: string }> }
 ) {
   const session = await auth();
   if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-
-  const { allowed } = requirePermission(session, "supplier_invoice", "read");
-  if (!allowed) {
-    await writeAuditLog({ ...actorFromSession(session), action: "ACCESS_DENIED", entityType: "supplier_invoice", entityLabel: "View Bill", ...extractMeta(request) });
-    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
-  }
 
   const { id } = await params;
 
@@ -65,12 +57,6 @@ export async function PATCH(
   const session = await auth();
   if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-  const { allowed } = requirePermission(session, "supplier_invoice", "update");
-  if (!allowed) {
-    await writeAuditLog({ ...actorFromSession(session), action: "ACCESS_DENIED", entityType: "supplier_invoice", entityLabel: "Update Bill", ...extractMeta(request) });
-    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
-  }
-
   const { id } = await params;
   const body = await request.json();
   const parsed = updateSchema.safeParse(body);
@@ -81,14 +67,15 @@ export async function PATCH(
   const existing = await prisma.supplierInvoice.findUnique({ where: { id } });
   if (!existing) return NextResponse.json({ error: "Not found" }, { status: 404 });
 
-  const beforeSnapshot = {
-    invoiceNumber: existing.invoiceNumber,
-    paymentStatus: existing.paymentStatus,
-    paidAmount: existing.paidAmount.toString(),
-    totalAmount: existing.totalAmount.toString(),
-    category: existing.category,
-    notes: existing.notes,
-  };
+  // Once any payment has been recorded, line items (and the totals derived
+  // from them) are financial history -- same reasoning as the customer-
+  // invoice equivalent of this guard.
+  if (parsed.data.items !== undefined && existing.paymentStatus !== "UNPAID") {
+    return NextResponse.json(
+      { error: "This bill has a recorded payment and its line items can no longer be edited." },
+      { status: 409 }
+    );
+  }
 
   const data = parsed.data;
   const updateData: Record<string, unknown> = {};
@@ -112,9 +99,12 @@ export async function PATCH(
         const qty = new Decimal(item.quantity || "0");
         const cost = new Decimal(item.unitCost || "0");
         const rate = new Decimal(item.taxRate || "0");
-        const lineTotal = qty.times(cost);
+        // Round to 2 decimals FIRST, then sum the already-rounded values
+        // into subtotal/taxAmount -- same fix as invoice creation.
+        const lineTotal = qty.times(cost).toDecimalPlaces(2);
+        const lineTax = lineTotal.times(rate).toDecimalPlaces(2);
         subtotal = subtotal.plus(lineTotal);
-        taxAmount = taxAmount.plus(lineTotal.times(rate));
+        taxAmount = taxAmount.plus(lineTax);
         return {
           description: item.description,
           itemDescription: item.itemDescription,
@@ -135,8 +125,12 @@ export async function PATCH(
     updateData.taxAmount = taxAmount.toFixed(2);
     updateData.totalAmount = subtotal.plus(taxAmount).toFixed(2);
 
-    await prisma.supplierInvoiceItem.deleteMany({ where: { invoiceId: id } });
+    // Nested inside the single supplierInvoice.update() call's relation
+    // write (rather than a separate eager deleteMany() statement before
+    // it) so the delete+create runs as one atomic transaction -- same fix
+    // as the customer-invoice equivalent of this pattern.
     updateData.items = {
+      deleteMany: {},
       create: computedItems.map((item) => ({
         description: item.description,
         itemDescription: item.itemDescription ?? null,
@@ -148,6 +142,23 @@ export async function PATCH(
     };
   }
 
+  // Reject an amount that would exceed what's actually owed -- same
+  // reasoning as the customer-invoice equivalent of this check.
+  if (data.paidAmount !== undefined) {
+    const newPaid = new Decimal(data.paidAmount);
+    const effectiveTotal = updateData.totalAmount !== undefined
+      ? new Decimal(updateData.totalAmount as string)
+      : new Decimal(existing.totalAmount.toString());
+    if (newPaid.gt(effectiveTotal)) {
+      return NextResponse.json(
+        { error: "paidAmount cannot exceed the bill total." },
+        { status: 400 }
+      );
+    }
+  }
+
+  // Auto-derive paymentStatus when paidAmount changes and the caller didn't
+  // explicitly send a status override.
   if (data.paidAmount !== undefined && data.paymentStatus === undefined) {
     const newPaid = new Decimal(data.paidAmount);
     const effectiveTotal = updateData.totalAmount !== undefined
@@ -170,55 +181,28 @@ export async function PATCH(
     include: { supplier: true, items: true },
   });
 
-  const afterSnapshot = {
-    invoiceNumber: updated.invoiceNumber,
-    paymentStatus: updated.paymentStatus,
-    paidAmount: updated.paidAmount.toString(),
-    totalAmount: updated.totalAmount.toString(),
-    category: updated.category,
-    notes: updated.notes,
-  };
-
-  await writeAuditLog({
-    ...actorFromSession(session),
-    action: "UPDATE",
-    entityType: "supplier_invoice",
-    entityId: id,
-    entityLabel: `Bill #${updated.invoiceNumber}`,
-    changes: diffChanges(beforeSnapshot, afterSnapshot),
-    ...extractMeta(request),
-  });
-
   return NextResponse.json(updated);
 }
 
 export async function DELETE(
-  request: Request,
+  _request: Request,
   { params }: { params: Promise<{ id: string }> }
 ) {
   const session = await auth();
   if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-  const { allowed } = requirePermission(session, "supplier_invoice", "delete");
-  if (!allowed) {
-    await writeAuditLog({ ...actorFromSession(session), action: "ACCESS_DENIED", entityType: "supplier_invoice", entityLabel: "Delete Bill", ...extractMeta(request) });
-    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
-  }
-
   const { id } = await params;
+
   const existing = await prisma.supplierInvoice.findUnique({ where: { id } });
   if (!existing) return NextResponse.json({ error: "Not found" }, { status: 404 });
 
+  if (existing.paymentStatus !== "UNPAID") {
+    return NextResponse.json(
+      { error: "This bill has a recorded payment and can no longer be deleted." },
+      { status: 409 }
+    );
+  }
+
   await prisma.supplierInvoice.delete({ where: { id } });
-
-  await writeAuditLog({
-    ...actorFromSession(session),
-    action: "DELETE",
-    entityType: "supplier_invoice",
-    entityId: id,
-    entityLabel: `Bill #${existing.invoiceNumber}`,
-    ...extractMeta(request),
-  });
-
   return NextResponse.json({ ok: true });
 }

@@ -38,24 +38,23 @@ describe("file upload validation", () => {
     expect(body.storedName).toMatch(/\.pdf$/);
   });
 
-  // Documents a real, live-verified stored-XSS vulnerability from the companion
-  // OWASP audit: the declared Content-Type (checked against the allowlist) and
-  // the filename (used to derive the stored extension) are validated
-  // independently, so a file claiming application/pdf but named *.html is
-  // stored — and served back — as HTML, executing any embedded <script>.
-  it.fails("the stored file extension should follow the validated MIME type, not the client-supplied filename", async () => {
+  // Fixed: lib/upload.ts now derives the stored extension from a fixed
+  // MIME-type lookup table, never from the client-supplied filename, so a
+  // file claiming application/pdf but named *.html is stored -- and served
+  // back -- as .pdf regardless of what the filename says.
+  it("the stored file extension should follow the validated MIME type, not the client-supplied filename", async () => {
     const form = new FormData();
     form.append(
       "file",
       new Blob(["<html><body><script>document.title='xss'</script></body></html>"], {
-        type: "application/pdf", // passes the allowlist
+        type: "application/pdf",
       }),
-      "innocuous.html" // but this is what actually gets stored
+      "innocuous.html"
     );
     form.append("customerInvoiceId", invoiceId);
     const res = await admin.fetch("/api/upload", { method: "POST", body: form });
     const body = await res.json();
-    expect(body.storedName).toMatch(/\.pdf$/); // currently ends in .html
+    expect(body.storedName).toMatch(/\.pdf$/);
   });
 
   it("a path-traversal filename does not escape the uploads directory", async () => {
@@ -67,11 +66,25 @@ describe("file upload validation", () => {
     );
     form.append("customerInvoiceId", invoiceId);
     const res = await admin.fetch("/api/upload", { method: "POST", body: form });
-    // Whatever the status, the stored path (if any) must stay inside the uploads dir.
     if (res.status === 201) {
       const body = await res.json();
       expect(body.path.startsWith("public/uploads/")).toBe(true);
       expect(body.path).not.toContain("..");
     }
+  });
+
+  // No ownership/relationship check exists between the caller and the
+  // invoice ID being attached to -- confirmed via code review of
+  // app/api/upload/route.ts. Any authenticated user, any role, can attach a
+  // file to any invoice in the system.
+  it.fails("SALES should not be able to attach a file to an invoice they have no relationship to", async () => {
+    const { loginAs: login } = await import("./helpers/client");
+    const { TEST_SALES_PASSWORD } = await import("./setup/seed-test-fixtures");
+    const sales = await login("sales1@test.local", TEST_SALES_PASSWORD);
+    const form = new FormData();
+    form.append("file", new Blob(["%PDF-1.4 test"], { type: "application/pdf" }), "test.pdf");
+    form.append("customerInvoiceId", invoiceId);
+    const res = await sales.fetch("/api/upload", { method: "POST", body: form });
+    expect(res.status).toBe(403); // currently 201 -- no ownership check exists on this route
   });
 });

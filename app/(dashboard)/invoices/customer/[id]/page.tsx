@@ -27,10 +27,10 @@ const editSchema = z.object({
   employeeId: z.string().default(""),
   commissionRate: z.string().default("0"),
   notes: z.string().optional(),
+  customerAddress: z.string().optional(),
   items: z.array(
     z.object({
       description: z.string().min(1),
-      itemDescription: z.string().optional(),
       quantity: z.string(),
       unitPrice: z.string(),
       taxRate: z.string().default("0"),
@@ -59,12 +59,13 @@ interface InvoiceDetail {
   employee: { id: string; name: string } | null;
   appliedFees: { id?: string; label: string; rate?: number; amount: string }[];
   customer: { id: string; name: string; email: string | null; phone: string | null; address: string | null; emergencyContactName: string | null; emergencyContactPhone: string | null };
-  items: { id: string; description: string; itemDescription: string | null; quantity: string; unitPrice: string; taxRate: string; lineTotal: string }[];
+  items: { id: string; description: string; quantity: string; unitPrice: string; taxRate: string; lineTotal: string }[];
   payments: { id: string; amount: string; paymentDate: string; notes: string | null }[];
   files: { id: string; originalName: string; mimeType: string }[];
 }
 
 interface EmployeeOpt { id: string; name: string; commissionRate: string }
+interface FeeOption { id: string; label: string; rate: number }
 
 export default function CustomerInvoiceDetailPage() {
   const { id } = useParams() as { id: string };
@@ -80,19 +81,23 @@ export default function CustomerInvoiceDetailPage() {
   const [linkCopied, setLinkCopied] = useState(false);
   const [employees, setEmployees] = useState<EmployeeOpt[]>([]);
 
+  // Record new payment
   const [showPaymentForm, setShowPaymentForm] = useState(false);
   const [paymentForm, setPaymentForm] = useState({ amount: "", paymentDate: new Date().toISOString().split("T")[0], notes: "" });
   const [paymentSubmitting, setPaymentSubmitting] = useState(false);
   const [paymentError, setPaymentError] = useState("");
 
+  // Edit existing payment
   const [editingPaymentId, setEditingPaymentId] = useState<string | null>(null);
   const [editPaymentForm, setEditPaymentForm] = useState({ amount: "", paymentDate: "", notes: "" });
   const [editPaymentSubmitting, setEditPaymentSubmitting] = useState(false);
   const [editPaymentError, setEditPaymentError] = useState("");
 
+  // Remove payment
   const [deletingPaymentId, setDeletingPaymentId] = useState<string | null>(null);
   const [confirmDeletePaymentId, setConfirmDeletePaymentId] = useState<string | null>(null);
 
+  // Preview state
   const [showPreview, setShowPreview] = useState(false);
   const [previewUrl, setPreviewUrl] = useState("");
   const [previewing, setPreviewing] = useState(false);
@@ -100,10 +105,19 @@ export default function CustomerInvoiceDetailPage() {
   const [userRole, setUserRole] = useState<string | null>(null);
   const canSeeCommission = userRole === "ADMIN" || userRole === "MANAGER";
 
+  // Fees (credit card fee + custom fees from Settings) — selected per line
+  // item inside InvoiceItemsEditor; this page just tracks the aggregated
+  // result for submission and for the live preview.
+  const [feeOptions, setFeeOptions] = useState<FeeOption[]>([]);
+  const [computedAppliedFees, setComputedAppliedFees] = useState<
+    { id: string; label: string; rate: number; amount: string }[]
+  >([]);
+
   const { register, handleSubmit, control, reset, getValues, setValue, watch, formState: { errors } } = useForm<EditForm>({
     resolver: zodResolver(editSchema),
   });
 
+  // Watch paidAmount and downPayment to auto-derive paymentStatus in real-time
   const watchedPaid = watch("paidAmount");
   const watchedDown = watch("downPayment");
   const watchedItems = watch("items");
@@ -128,9 +142,9 @@ export default function CustomerInvoiceDetailPage() {
       employeeId: data.employeeId ?? "",
       commissionRate: data.commissionRate ?? "0",
       notes: data.notes ?? "",
+      customerAddress: data.customer.address ?? "",
       items: data.items.map((item: InvoiceDetail["items"][0]) => ({
         description: item.description,
-        itemDescription: item.itemDescription ?? "",
         quantity: item.quantity,
         unitPrice: item.unitPrice,
         taxRate: item.taxRate,
@@ -147,12 +161,25 @@ export default function CustomerInvoiceDetailPage() {
         setEmployees(list.filter((e) => e.active).map((e) => ({ id: e.id, name: e.name, commissionRate: e.commissionRate })))
       )
       .catch(() => {});
-    fetch("/api/auth/session")
+    fetch("/api/me")
       .then((r) => (r.ok ? r.json() : null))
-      .then((s: { user?: { role?: string } } | null) => setUserRole(s?.user?.role ?? null))
+      .then((d: { viewer?: { role?: string } } | null) => setUserRole(d?.viewer?.role ?? null))
+      .catch(() => {});
+    fetch("/api/settings")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((p: { creditCardFeeRate?: string; customFees?: { id: string; label: string; rate: number }[] } | null) => {
+        if (!p) return;
+        const options: FeeOption[] = [];
+        if (Number(p.creditCardFeeRate) > 0) {
+          options.push({ id: "__cc__", label: "CARD FEE", rate: Number(p.creditCardFeeRate) });
+        }
+        if (Array.isArray(p.customFees)) options.push(...p.customFees);
+        setFeeOptions(options);
+      })
       .catch(() => {});
   }, []);
 
+  // Auto-update paymentStatus when paidAmount or downPayment changes in edit mode
   useEffect(() => {
     if (!editing || !invoice) return;
     try {
@@ -170,7 +197,7 @@ export default function CustomerInvoiceDetailPage() {
       }
       setValue("paymentStatus", status, { shouldValidate: false });
     } catch {
-      // ignore
+      // Ignore Decimal parse errors on incomplete / empty input
     }
   }, [watchedPaid, watchedDown, editing, invoice, setValue]);
 
@@ -181,7 +208,7 @@ export default function CustomerInvoiceDetailPage() {
       const res = await fetch(`/api/invoices/customer/${id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(data),
+        body: JSON.stringify({ ...data, appliedFees: computedAppliedFees }),
       });
       if (!res.ok) {
         const d = await res.json();
@@ -395,6 +422,7 @@ export default function CustomerInvoiceDetailPage() {
 
   return (
     <>
+      {/* Preview modal */}
       {showPreview && (
         <div className="fixed inset-0 z-50 flex flex-col bg-black/70 backdrop-blur-sm">
           <div className="flex items-center justify-between px-4 py-3 bg-white border-b shadow-sm shrink-0">
@@ -508,7 +536,10 @@ export default function CustomerInvoiceDetailPage() {
               {errors.paidAmount && <li>Amount paid must be a number</li>}
               {errors.downPayment && <li>Down payment must be a number</li>}
               {errors.items && (
-                <li>One or more line items are missing a description, quantity, or price.</li>
+                <li>
+                  One or more line items are missing a description, quantity, or price.
+                  Open the Line Items section and fill in every row, or remove empty rows.
+                </li>
               )}
             </ul>
           </div>
@@ -567,31 +598,41 @@ export default function CustomerInvoiceDetailPage() {
                   <label className="label">Down payment ($)</label>
                   <input type="number" step="0.01" min="0" className="input" {...register("downPayment")} />
                 </div>
+                <div>
+                  <label className="label">Sales rep</label>
+                  <select className="input" {...register("employeeId")}>
+                    <option value="">— None —</option>
+                    {employees.map((e) => (
+                      <option key={e.id} value={e.id}>{e.name}</option>
+                    ))}
+                  </select>
+                </div>
                 {canSeeCommission && (
-                  <>
-                    <div>
-                      <label className="label">Sales rep</label>
-                      <select className="input" {...register("employeeId")}>
-                        <option value="">— None —</option>
-                        {employees.map((e) => (
-                          <option key={e.id} value={e.id}>{e.name}</option>
-                        ))}
-                      </select>
-                    </div>
-                    <div>
-                      <label className="label">Commission rate (decimal)</label>
-                      <input type="number" step="0.0001" min="0" max="1" className="input" {...register("commissionRate")} />
-                    </div>
-                  </>
+                  <div>
+                    <label className="label">Commission rate (decimal)</label>
+                    <input type="number" step="0.0001" min="0" max="1" className="input" {...register("commissionRate")} />
+                  </div>
                 )}
               </div>
               <div>
                 <label className="label">Notes</label>
                 <textarea className="input" rows={2} {...register("notes")} />
               </div>
+              <div>
+                <label className="label">Customer Address</label>
+                <input className="input" placeholder="Street, City, State ZIP" {...register("customerAddress")} />
+                <p className="text-xs text-gray-400 mt-1">Updates the customer record</p>
+              </div>
             </div>
             <div className="card">
-              <InvoiceItemsEditor control={control} register={register} type="customer" />
+              <InvoiceItemsEditor
+                control={control}
+                register={register}
+                type="customer"
+                feeOptions={feeOptions}
+                initialAppliedFeeIds={invoice.appliedFees.map((f) => f.id).filter((fid): fid is string => !!fid)}
+                onFeesChange={setComputedAppliedFees}
+              />
             </div>
 
             <InvoiceDocumentPreview
@@ -611,6 +652,7 @@ export default function CustomerInvoiceDetailPage() {
                 price: item.unitPrice,
                 taxRate: item.taxRate,
               }))}
+              fees={computedAppliedFees}
               notes={watchedNotes}
               paymentStatus={watchedPaymentStatus}
               paidAmount={watchedPaid}
@@ -634,12 +676,12 @@ export default function CustomerInvoiceDetailPage() {
                     <span className="text-gray-500">Status</span>
                     <PaymentBadge status={invoice.paymentStatus} />
                   </div>
-                  {canSeeCommission && invoice.employeeId && (
+                  {invoice.employeeId && (
                     <div className="flex justify-between pt-2 border-t">
                       <span className="text-gray-500">Sales rep</span>
                       <span className="font-medium">
                         {employees.find((e) => e.id === invoice.employeeId)?.name ?? "—"}
-                        {parseFloat(invoice.commissionRate) > 0 && (
+                        {canSeeCommission && parseFloat(invoice.commissionRate) > 0 && (
                           <span className="text-green-700 text-xs ml-2">
                             ({(parseFloat(invoice.commissionRate) * 100).toFixed(1)}% = {formatCurrency((parseFloat(invoice.totalAmount) * parseFloat(invoice.commissionRate)).toFixed(2))})
                           </span>
@@ -661,7 +703,6 @@ export default function CustomerInvoiceDetailPage() {
                   <p className="font-medium">{invoice.customer.name}</p>
                   {invoice.customer.email && <p className="text-gray-500">{invoice.customer.email}</p>}
                   {invoice.customer.phone && <p className="text-gray-500">{invoice.customer.phone}</p>}
-                  {invoice.customer.address && <p className="text-gray-500">{invoice.customer.address}</p>}
                   {(invoice.customer.emergencyContactName || invoice.customer.emergencyContactPhone) && (
                     <div className="pt-2 border-t border-gray-100">
                       <p className="text-[10px] font-semibold uppercase text-gray-400 tracking-wide">Emergency contact</p>
@@ -691,12 +732,7 @@ export default function CustomerInvoiceDetailPage() {
                 <tbody className="divide-y divide-gray-50">
                   {invoice.items.map((item) => (
                     <tr key={item.id}>
-                      <td className="py-2">
-                        <div>{item.description}</div>
-                        {item.itemDescription && (
-                          <div className="text-xs text-gray-400 mt-0.5">{item.itemDescription}</div>
-                        )}
-                      </td>
+                      <td className="py-2">{item.description}</td>
                       <td className="py-2 text-right">{item.quantity}</td>
                       <td className="py-2 text-right">{formatCurrency(item.unitPrice)}</td>
                       <td className="py-2 text-right">{(parseFloat(item.taxRate) * 100).toFixed(0)}%</td>
@@ -743,6 +779,7 @@ export default function CustomerInvoiceDetailPage() {
               </div>
             </div>
 
+            {/* Payments section */}
             <div className="card">
               <div className="flex items-center justify-between mb-4">
                 <h2 className="font-semibold text-gray-800">Payments</h2>
@@ -757,6 +794,7 @@ export default function CustomerInvoiceDetailPage() {
                 )}
               </div>
 
+              {/* New payment form */}
               {showPaymentForm && (
                 <form onSubmit={handleRecordPayment} className="mb-4 p-4 bg-blue-50 rounded-lg border border-blue-100">
                   <p className="text-xs font-semibold text-blue-700 uppercase tracking-wide mb-3">New payment</p>
@@ -799,11 +837,13 @@ export default function CustomerInvoiceDetailPage() {
                 </form>
               )}
 
+              {/* Payment list */}
               {invoice.payments.length > 0 ? (
                 <div className="divide-y divide-gray-100">
                   {invoice.payments.map((p) => (
                     <div key={p.id}>
                       {editingPaymentId === p.id ? (
+                        /* Inline edit form */
                         <form onSubmit={handleEditPayment} className="py-3 px-4 bg-amber-50 rounded-lg border border-amber-100 my-2">
                           <p className="text-xs font-semibold text-amber-700 uppercase tracking-wide mb-3">Edit payment</p>
                           <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
@@ -844,6 +884,7 @@ export default function CustomerInvoiceDetailPage() {
                           </div>
                         </form>
                       ) : (
+                        /* Display row */
                         <div className="py-3 flex items-start justify-between gap-4">
                           <div className="text-sm">
                             <span className="font-semibold text-green-700">{formatCurrency(p.amount)}</span>

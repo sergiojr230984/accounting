@@ -1,11 +1,13 @@
 import { NextResponse } from "next/server";
-import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
+import { requireRole } from "@/lib/api";
 import Decimal from "decimal.js";
 
 export async function GET(request: Request) {
-  const session = await auth();
-  if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  // Company-wide P&L, COGS, and unpaid totals -- not something every
+  // authenticated role should see, including SALES.
+  const guard = await requireRole("ADMIN", "MANAGER");
+  if (guard instanceof NextResponse) return guard;
 
   const { searchParams } = new URL(request.url);
   const from = searchParams.get("from");
@@ -91,7 +93,7 @@ export async function GET(request: Request) {
 
   customerInvoices.forEach((inv) => {
     const d = new Date(inv.invoiceDate);
-    const key = `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}`;
+    const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
     if (monthlyMap.has(key)) {
       monthlyMap.get(key)!.income = monthlyMap
         .get(key)!
@@ -101,7 +103,7 @@ export async function GET(request: Request) {
 
   supplierInvoices.forEach((inv) => {
     const d = new Date(inv.invoiceDate);
-    const key = `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}`;
+    const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
     if (monthlyMap.has(key)) {
       monthlyMap.get(key)!.expenses = monthlyMap
         .get(key)!

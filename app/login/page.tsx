@@ -1,12 +1,18 @@
 "use client";
 
 import { useState } from "react";
-import { signIn } from "next-auth/react";
+import { signIn, getSession } from "next-auth/react";
 import { useRouter } from "next/navigation";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
-import { MessageSquare, Loader2 } from "lucide-react";
+import {
+  BookOpen,
+  Loader2,
+  CheckCircle2,
+  Eye,
+  EyeOff,
+} from "lucide-react";
 
 const schema = z.object({
   email: z.string().email("Invalid email"),
@@ -17,6 +23,7 @@ type FormData = z.infer<typeof schema>;
 export default function LoginPage() {
   const router = useRouter();
   const [error, setError] = useState("");
+  const [showPw, setShowPw] = useState(false);
   const {
     register,
     handleSubmit,
@@ -24,43 +31,127 @@ export default function LoginPage() {
   } = useForm<FormData>({ resolver: zodResolver(schema) });
 
   async function onSubmit(data: FormData) {
+    console.log("[login] onSubmit fired", { email: data.email, hasPassword: !!data.password });
     setError("");
-    const result = await signIn("credentials", {
-      email: data.email,
-      password: data.password,
-      redirect: false,
-    });
-    if (result?.error) {
-      setError("Invalid email or password");
-    } else {
-      router.push("/invoices/customer");
-      router.refresh();
+    const origin = typeof window !== "undefined" ? window.location.origin : "";
+    try {
+      const result = await signIn("credentials", {
+        email: data.email,
+        password: data.password,
+        redirect: false,
+        callbackUrl: `${origin}/dashboard`,
+      });
+      console.log("[login] signIn result", result);
+      if (result?.error) {
+        setError(`Sign-in failed: ${result.error}`);
+        return;
+      }
+      // /dashboard is ADMIN-only (company-wide P&L/COGS) -- the API 403s
+      // any other role and the page has no graceful fallback for that, so
+      // sending every role there unconditionally used to crash the page
+      // immediately after login for every non-ADMIN user. Land ADMIN on the
+      // dashboard as before; everyone else on Invoices, which every role
+      // can actually see.
+      const freshSession = await getSession();
+      const sessionRole = (freshSession?.user as { role?: string } | undefined)?.role;
+      const landingPath = sessionRole === "ADMIN" ? "/dashboard" : "/invoices/customer";
+      // Force same-origin navigation — never let a stale NEXTAUTH_URL env var
+      // send the browser to localhost or any other host.
+      if (typeof window !== "undefined") {
+        window.location.href = `${window.location.origin}${landingPath}`;
+      } else {
+        router.push(landingPath);
+      }
+    } catch (e) {
+      console.error("[login] signIn threw", e);
+      setError(`Sign-in error: ${e instanceof Error ? e.message : String(e)}`);
     }
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-brand-900 to-brand-700 flex items-center justify-center p-4">
-      <div className="w-full max-w-md">
-        <div className="text-center mb-8">
-          <div className="inline-flex items-center justify-center w-16 h-16 bg-white rounded-2xl shadow-lg mb-4">
-            <MessageSquare className="w-8 h-8 text-brand-600" />
+    <div className="min-h-screen bg-gradient-to-br from-orange-50 via-white to-orange-50 flex items-center justify-center p-4">
+      <div className="w-full max-w-5xl bg-white rounded-3xl shadow-xl overflow-hidden grid grid-cols-1 lg:grid-cols-2 border border-orange-100">
+        {/* Left column — brand panel */}
+        <div className="bg-gradient-to-br from-brand-700 to-brand-900 text-white p-10 lg:p-12 hidden lg:flex flex-col justify-between">
+          <div>
+            <div className="flex items-center gap-3 mb-8">
+              <div className="w-11 h-11 bg-white rounded-xl flex items-center justify-center">
+                <BookOpen className="w-6 h-6 text-brand-600" />
+              </div>
+              <div className="leading-tight">
+                <p className="font-bold text-lg">La Cuevita</p>
+                <p className="text-brand-100 text-xs uppercase tracking-wider">Furniture</p>
+              </div>
+            </div>
+
+            <h1 className="text-3xl font-bold leading-tight mb-3">
+              Run the shop, not the spreadsheets.
+            </h1>
+            <p className="text-brand-100 text-sm mb-10 leading-relaxed">
+              Invoices, customers, suppliers, and team performance — all in one
+              place built for La Cuevita Furniture.
+            </p>
+
+            <ul className="space-y-4 text-sm">
+              {[
+                "Print invoices with your logo in one click",
+                "Track down payments and remaining balances",
+                "Commissions and performance per sales rep",
+                "Tax rates and credit-card fees configured once",
+              ].map((line) => (
+                <li key={line} className="flex items-start gap-3">
+                  <CheckCircle2 className="w-5 h-5 text-brand-200 flex-shrink-0 mt-0.5" />
+                  <span className="text-brand-50">{line}</span>
+                </li>
+              ))}
+            </ul>
           </div>
-          <h1 className="text-3xl font-bold text-white">La Cuevita</h1>
-          <p className="text-brand-100 mt-1">CRM &amp; Contabilidad</p>
+
+          <p className="text-brand-200 text-xs mt-10">
+            v{process.env.NEXT_PUBLIC_APP_VERSION ?? "1.1.0"} · Need help? Talk
+            to your administrator.
+          </p>
         </div>
 
-        <div className="bg-white rounded-2xl shadow-xl p-8">
-          <h2 className="text-xl font-semibold text-gray-800 mb-6">Sign in to your account</h2>
+        {/* Right column — sign-in form */}
+        <div className="p-8 lg:p-12 flex flex-col justify-center">
+          {/* Mobile-only brand */}
+          <div className="lg:hidden flex items-center gap-3 mb-8">
+            <div className="w-10 h-10 bg-brand-600 rounded-xl flex items-center justify-center">
+              <BookOpen className="w-5 h-5 text-white" />
+            </div>
+            <div className="leading-tight">
+              <p className="font-bold text-gray-900">La Cuevita</p>
+              <p className="text-gray-500 text-xs uppercase tracking-wider">Furniture</p>
+            </div>
+          </div>
 
-          <form onSubmit={handleSubmit(onSubmit)} className="space-y-5">
+          <div className="mb-6">
+            <h2 className="text-2xl font-bold text-gray-900">Sign in</h2>
+            <p className="text-sm text-gray-500 mt-1">
+              Use the email and password your admin set up for you.
+            </p>
+          </div>
+
+          <form
+            onSubmit={(e) => {
+              console.log("[login] form submit event fired", {
+                hasErrors: Object.keys(errors).length,
+                errors,
+              });
+              return handleSubmit(onSubmit)(e);
+            }}
+            className="space-y-4"
+            noValidate
+          >
             <div>
-              <label className="label" htmlFor="email">Email address</label>
+              <label className="label" htmlFor="email">Email</label>
               <input
                 id="email"
                 type="email"
                 autoComplete="email"
                 className="input"
-                placeholder="you@company.com"
+                placeholder="you@lacuevitafurniture.com"
                 {...register("email")}
               />
               {errors.email && (
@@ -69,10 +160,20 @@ export default function LoginPage() {
             </div>
 
             <div>
-              <label className="label" htmlFor="password">Password</label>
+              <div className="flex items-center justify-between">
+                <label className="label" htmlFor="password">Password</label>
+                <button
+                  type="button"
+                  onClick={() => setShowPw((v) => !v)}
+                  className="text-xs text-brand-600 hover:text-brand-700 inline-flex items-center gap-1 mb-1"
+                >
+                  {showPw ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                  {showPw ? "Hide" : "Show"}
+                </button>
+              </div>
               <input
                 id="password"
-                type="password"
+                type={showPw ? "text" : "password"}
                 autoComplete="current-password"
                 className="input"
                 placeholder="••••••••"
@@ -92,13 +193,17 @@ export default function LoginPage() {
             <button
               type="submit"
               disabled={isSubmitting}
-              className="btn-primary w-full justify-center"
+              className="btn-primary w-full justify-center py-2.5 mt-2"
             >
-              {isSubmitting ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
+              {isSubmitting && <Loader2 className="w-4 h-4 animate-spin" />}
               {isSubmitting ? "Signing in…" : "Sign in"}
             </button>
           </form>
 
+          <p className="text-xs text-gray-400 mt-8 text-center">
+            Forgot your password? Ask your administrator to reset it from
+            Settings → Users.
+          </p>
         </div>
       </div>
     </div>

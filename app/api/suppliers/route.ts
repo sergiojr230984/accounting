@@ -1,9 +1,7 @@
 import { NextResponse } from "next/server";
-import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
-import { requirePermission } from "@/lib/permissions";
-import { writeAuditLog, extractMeta, actorFromSession } from "@/lib/audit";
 import { initializeDatabase } from "@/lib/init-db";
+import { requireAuth, requireRole } from "@/lib/api";
 import { z } from "zod";
 
 const schema = z.object({
@@ -11,17 +9,31 @@ const schema = z.object({
   email: z.string().email().optional().or(z.literal("")),
   phone: z.string().optional(),
   address: z.string().optional(),
+  paymentTermsDays: z.number().int().min(0).max(365).default(30),
+  defaultCategory: z
+    .enum(["COGS", "SERVICES_EXPENSE", "OPERATING_EXPENSE", "OTHER"])
+    .or(z.literal(""))
+    .optional()
+    .nullable()
+    .transform((v) => (v === "" ? null : v ?? null)),
+  bankName: z.string().optional(),
+  bankAccountNumber: z.string().optional(),
+  bankRouting: z.string().optional(),
+  zelle: z.string().optional(),
+  paymentInstructions: z.string().optional(),
 });
 
-export async function GET(request: Request) {
-  const session = await auth();
-  if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-
-  const { allowed } = requirePermission(session, "supplier", "read");
-  if (!allowed) {
-    await writeAuditLog({ ...actorFromSession(session), action: "ACCESS_DENIED", entityType: "supplier", entityLabel: "Supplier List", ...extractMeta(request) });
-    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
-  }
+export async function GET() {
+  // Any authenticated role can list suppliers -- the "Create Bill" flow
+  // (open to every role) needs a supplier picker, and the Suppliers nav
+  // item's role gate (ADMIN/MANAGER only) already keeps the full
+  // management page away from SALES. But bank account/routing/Zelle
+  // details are compensation-adjacent secrets, not contact info -- strip
+  // those unless the caller is ADMIN/MANAGER, same as employees'
+  // commissionRate.
+  const guard = await requireAuth();
+  if (guard instanceof NextResponse) return guard;
+  const canSeeBankDetails = guard.user.role === "ADMIN" || guard.user.role === "MANAGER";
 
   await initializeDatabase();
   try {
@@ -31,7 +43,11 @@ export async function GET(request: Request) {
         _count: { select: { invoices: true } },
       },
     });
-    return NextResponse.json(suppliers);
+    if (canSeeBankDetails) return NextResponse.json(suppliers);
+    const scrubbed = suppliers.map(
+      ({ bankName: _bn, bankAccountNumber: _ban, bankRouting: _br, zelle: _z, paymentInstructions: _pi, ...rest }) => rest
+    );
+    return NextResponse.json(scrubbed);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     return NextResponse.json({ error: msg }, { status: 500 });
@@ -39,14 +55,8 @@ export async function GET(request: Request) {
 }
 
 export async function POST(request: Request) {
-  const session = await auth();
-  if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-
-  const { allowed } = requirePermission(session, "supplier", "create");
-  if (!allowed) {
-    await writeAuditLog({ ...actorFromSession(session), action: "ACCESS_DENIED", entityType: "supplier", entityLabel: "Create Supplier", ...extractMeta(request) });
-    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
-  }
+  const guard = await requireRole("ADMIN", "MANAGER");
+  if (guard instanceof NextResponse) return guard;
 
   let body: unknown;
   try {
@@ -68,18 +78,15 @@ export async function POST(request: Request) {
         email: parsed.data.email || null,
         phone: parsed.data.phone || null,
         address: parsed.data.address || null,
+        paymentTermsDays: parsed.data.paymentTermsDays,
+        defaultCategory: parsed.data.defaultCategory ?? null,
+        bankName: parsed.data.bankName || null,
+        bankAccountNumber: parsed.data.bankAccountNumber || null,
+        bankRouting: parsed.data.bankRouting || null,
+        zelle: parsed.data.zelle || null,
+        paymentInstructions: parsed.data.paymentInstructions || null,
       },
     });
-
-    await writeAuditLog({
-      ...actorFromSession(session),
-      action: "CREATE",
-      entityType: "supplier",
-      entityId: supplier.id,
-      entityLabel: supplier.name,
-      ...extractMeta(request),
-    });
-
     return NextResponse.json(supplier, { status: 201 });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);

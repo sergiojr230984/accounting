@@ -51,7 +51,6 @@ interface Employee {
 
 interface LineItem {
   description: string;
-  itemDescription: string;
   quantity: string;
   unitPrice: string;
   taxRate: string;
@@ -60,7 +59,6 @@ interface LineItem {
 
 const blankItem = (): LineItem => ({
   description: "",
-  itemDescription: "",
   quantity: "1",
   unitPrice: "0",
   taxRate: "0",
@@ -115,12 +113,13 @@ export default function NewCustomerInvoicePage() {
   const [saving, setSaving] = useState<"idle" | "save" | "print" | "send">("idle");
   const [error, setError] = useState("");
 
+  const [userRole, setUserRole] = useState<string | null>(null);
+  const canSeeCommission = userRole === "ADMIN" || userRole === "MANAGER";
+
+  // Preview modal state
   const [showPreview, setShowPreview] = useState(false);
   const [previewUrl, setPreviewUrl] = useState("");
   const [previewing, setPreviewing] = useState(false);
-
-  const [userRole, setUserRole] = useState<string | null>(null);
-  const canSeeCommission = userRole === "ADMIN" || userRole === "MANAGER";
 
   async function loadCustomers() {
     const res = await fetch("/api/customers");
@@ -132,9 +131,9 @@ export default function NewCustomerInvoicePage() {
 
   useEffect(() => {
     loadCustomers();
-    fetch("/api/auth/session")
+    fetch("/api/me")
       .then((r) => (r.ok ? r.json() : null))
-      .then((s: { user?: { role?: string } } | null) => setUserRole(s?.user?.role ?? null))
+      .then((d: { viewer?: { role?: string } } | null) => setUserRole(d?.viewer?.role ?? null))
       .catch(() => {});
     fetch("/api/employees")
       .then((r) => (r.ok ? r.json() : []))
@@ -150,23 +149,24 @@ export default function NewCustomerInvoicePage() {
       .then((r) => (r.ok ? r.json() : []))
       .then((list: Product[]) => setProducts(list.filter((p) => p.active)))
       .catch(() => {});
-    fetch("/api/settings")
-      .then((r) => (r.ok ? r.json() : null))
-      .then(
-        (p: { creditCardFeeRate: string; customFees?: { id: string; label: string; rate: number }[] } | null) => {
-          if (!p) return;
-          setCcFeeRate(p.creditCardFeeRate);
-          if (Array.isArray(p.customFees) && p.customFees.length > 0) {
-            setCustomFees(p.customFees);
-          }
+    Promise.all([
+      fetch("/api/settings").then((r) => (r.ok ? r.json() : null)).catch(() => null),
+      fetch("/api/invoices/customer/next-number").then((r) => (r.ok ? r.json() : null)).catch(() => null),
+    ]).then(([settings, nextNum]) => {
+      if (settings) {
+        setCcFeeRate(settings.creditCardFeeRate);
+        if (Array.isArray(settings.customFees) && settings.customFees.length > 0) {
+          setCustomFees(settings.customFees);
         }
-      )
-      .catch(() => {});
-    // Use the real max invoice number from the DB so manually-entered numbers are respected
-    fetch("/api/invoices/customer/next-number")
-      .then((r) => (r.ok ? r.json() : null))
-      .then((d: { nextNumber?: string } | null) => { if (d?.nextNumber) setInvoiceNumber(d.nextNumber); })
-      .catch(() => {});
+      }
+      if (nextNum?.nextNumber) {
+        setInvoiceNumber(nextNum.nextNumber);
+      } else if (settings) {
+        const prefix = settings.customerInvoicePrefix ?? "INV-2026-";
+        const seq = settings.customerInvoiceNextSeq ?? 1001;
+        setInvoiceNumber(`${prefix}${String(seq).padStart(4, "0")}`);
+      }
+    });
   }, []);
 
   useEffect(() => {
@@ -201,7 +201,10 @@ export default function NewCustomerInvoicePage() {
       } catch {}
       taxAmount = taxAmount.plus(lineTax);
 
-      const base = lineTotal.plus(lineTax);
+      // Card fee (and other configured fees) apply to the pre-tax line
+      // amount only, matching the accounting system of record -- not to
+      // price + tax.
+      const base = lineTotal;
       for (const feeId of item.fees || []) {
         if (!feeId) continue;
         const f = allFees.find((cf) => cf.id === feeId);
@@ -286,7 +289,6 @@ export default function NewCustomerInvoicePage() {
       next[idx] = {
         ...next[idx],
         description: product.name,
-        itemDescription: product.description ?? "",
         unitPrice: product.price,
         taxRate: product.taxRate,
       };
@@ -315,7 +317,6 @@ export default function NewCustomerInvoicePage() {
     if (data.items?.length) {
       const fresh: LineItem[] = data.items.map((i) => ({
         ...i,
-        itemDescription: "",
         taxRate: i.taxRate || "0",
         fees: allFees.length > 0 ? [null] : [],
       }));
@@ -359,7 +360,6 @@ export default function NewCustomerInvoicePage() {
       },
       items: real.map((i) => ({
         description: i.description,
-        itemDescription: i.itemDescription,
         quantity: i.quantity,
         unitPrice: i.unitPrice,
         taxRate: i.taxRate,
@@ -425,7 +425,7 @@ export default function NewCustomerInvoicePage() {
           employeeId: employeeId || null,
           commissionRate: commissionRate || "0",
           paidAmount: "0",
-          paymentStatus: "UNPAID",
+          paymentStatus: totals.balance.lte(0) ? "PAID" : totals.downPayment.gt(0) ? "PARTIALLY_PAID" : "UNPAID",
           appliedFees: totals.appliedFees,
         }),
       });
@@ -459,6 +459,7 @@ export default function NewCustomerInvoicePage() {
 
   return (
     <>
+      {/* ── Preview modal ── */}
       {showPreview && (
         <div className="fixed inset-0 z-50 flex flex-col bg-black/70 backdrop-blur-sm">
           <div className="flex items-center justify-between px-4 py-3 bg-white border-b shadow-sm shrink-0">
@@ -468,7 +469,10 @@ export default function NewCustomerInvoicePage() {
               <span className="text-xs text-gray-400 bg-gray-100 px-2 py-0.5 rounded-full">not saved yet</span>
             </div>
             <div className="flex items-center gap-2">
-              <button onClick={closePreview} className="btn-secondary">
+              <button
+                onClick={closePreview}
+                className="btn-secondary"
+              >
                 <X className="w-4 h-4" /> Close
               </button>
               <button
@@ -498,12 +502,17 @@ export default function NewCustomerInvoicePage() {
             </div>
           </div>
           <div className="flex-1 overflow-hidden">
-            <iframe src={previewUrl} className="w-full h-full border-0" title="Invoice Preview" />
+            <iframe
+              src={previewUrl}
+              className="w-full h-full border-0"
+              title="Invoice Preview"
+            />
           </div>
         </div>
       )}
 
       <div className="flex flex-col lg:flex-row gap-6 max-w-7xl mx-auto">
+        {/* Main column */}
         <div className="flex-1 min-w-0 space-y-5">
           <div className="flex items-center justify-between gap-3 flex-wrap">
             <div className="flex items-center gap-3">
@@ -531,6 +540,7 @@ export default function NewCustomerInvoicePage() {
             </div>
           </div>
 
+          {/* Optional AI extractor */}
           <details className="card group">
             <summary className="cursor-pointer flex items-center justify-between list-none">
               <div>
@@ -545,6 +555,7 @@ export default function NewCustomerInvoicePage() {
             </div>
           </details>
 
+          {/* Bill To + Invoice meta */}
           <div className="card space-y-5">
             <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
               <div>
@@ -619,6 +630,7 @@ export default function NewCustomerInvoicePage() {
             </div>
           </div>
 
+          {/* Line items */}
           <div className="card p-0 overflow-hidden">
             <div className="px-5 py-3 border-b bg-gray-50">
               <h2 className="font-semibold text-gray-800 text-sm">Items</h2>
@@ -626,7 +638,7 @@ export default function NewCustomerInvoicePage() {
             <table className="w-full text-sm">
               <thead className="border-b">
                 <tr className="text-left text-gray-500">
-                  <th className="px-3 py-2 text-xs font-medium uppercase">Item / Description</th>
+                  <th className="px-3 py-2 text-xs font-medium uppercase">Description</th>
                   <th className="px-3 py-2 text-xs font-medium uppercase w-20 text-right">Qty</th>
                   <th className="px-3 py-2 text-xs font-medium uppercase w-28 text-right">Unit price</th>
                   <th className="px-3 py-2 text-xs font-medium uppercase w-20 text-right">Tax</th>
@@ -651,17 +663,11 @@ export default function NewCustomerInvoicePage() {
                         <td className="px-2 py-1 relative">
                           <input
                             className="w-full px-2 py-1.5 border-0 focus:outline-none focus:bg-brand-50 rounded text-sm"
-                            placeholder="Item name"
+                            placeholder="Item or service description"
                             value={item.description}
                             onChange={(e) => updateItem(idx, "description", e.target.value)}
                             onFocus={() => setProductFocusIdx(idx)}
                             onBlur={() => setTimeout(() => setProductFocusIdx(null), 150)}
-                          />
-                          <input
-                            className="w-full px-2 py-1 border-0 focus:outline-none focus:bg-gray-50 rounded text-xs text-gray-500"
-                            placeholder="Description (optional)"
-                            value={item.itemDescription}
-                            onChange={(e) => updateItem(idx, "itemDescription", e.target.value)}
                           />
                           {productFocusIdx === idx && (() => {
                             const q = item.description.toLowerCase();
@@ -694,7 +700,9 @@ export default function NewCustomerInvoicePage() {
                         </td>
                         <td className="px-2 py-1">
                           <input
-                            type="number" step="0.01" min="0"
+                            type="number"
+                            step="0.01"
+                            min="0"
                             className="w-full px-2 py-1.5 border-0 focus:outline-none focus:bg-brand-50 rounded text-sm text-right"
                             value={item.quantity}
                             onChange={(e) => updateItem(idx, "quantity", e.target.value)}
@@ -702,7 +710,9 @@ export default function NewCustomerInvoicePage() {
                         </td>
                         <td className="px-2 py-1">
                           <input
-                            type="number" step="0.01" min="0"
+                            type="number"
+                            step="0.01"
+                            min="0"
                             className="w-full px-2 py-1.5 border-0 focus:outline-none focus:bg-brand-50 rounded text-sm text-right"
                             value={item.unitPrice}
                             onChange={(e) => updateItem(idx, "unitPrice", e.target.value)}
@@ -731,7 +741,10 @@ export default function NewCustomerInvoicePage() {
                             </select>
                           ) : (
                             <input
-                              type="number" step="0.0001" min="0" max="1"
+                              type="number"
+                              step="0.0001"
+                              min="0"
+                              max="1"
                               className="w-full px-2 py-1.5 border-0 focus:outline-none focus:bg-brand-50 rounded text-sm text-right"
                               value={item.taxRate}
                               onChange={(e) => updateItem(idx, "taxRate", e.target.value)}
@@ -752,7 +765,7 @@ export default function NewCustomerInvoicePage() {
 
                       {feeSlots.map((feeId, fIdx) => {
                         const f = feeId ? allFees.find((cf) => cf.id === feeId) : null;
-                        const base = line.plus(lineTax);
+                        const base = line;
                         let amt = new Decimal(0);
                         if (f) {
                           try { amt = base.times(new Decimal(f.rate)); } catch {}
@@ -819,6 +832,7 @@ export default function NewCustomerInvoicePage() {
             </button>
           </div>
 
+          {/* Notes */}
           <div className="card space-y-3">
             <label className="label">Notes / Terms</label>
             <textarea
@@ -859,6 +873,7 @@ export default function NewCustomerInvoicePage() {
           )}
         </div>
 
+        {/* Sticky totals panel */}
         <aside className="lg:w-80 lg:shrink-0 w-full">
           <div className="lg:sticky lg:top-6 space-y-4">
             <div className="card space-y-3">
@@ -895,7 +910,10 @@ export default function NewCustomerInvoicePage() {
               <div>
                 <label className="label">Down payment ($)</label>
                 <input
-                  type="number" step="0.01" min="0" className="input"
+                  type="number"
+                  step="0.01"
+                  min="0"
+                  className="input"
                   value={downPayment}
                   onChange={(e) => setDownPayment(e.target.value)}
                 />
@@ -906,47 +924,54 @@ export default function NewCustomerInvoicePage() {
               </div>
             </div>
 
-            {canSeeCommission && (
-              <div className="card space-y-3">
-                <h3 className="font-semibold text-gray-800 text-sm uppercase tracking-wide">Sales rep</h3>
-                <div>
-                  <label className="label">Employee</label>
-                  <select
-                    className="input"
-                    value={employeeId}
-                    onChange={(e) => {
-                      const id = e.target.value;
-                      setEmployeeId(id);
-                      const match = employees.find((emp) => emp.id === id);
-                      if (match) setCommissionRate(match.commissionRate);
-                      if (!id) setCommissionRate("0");
-                    }}
-                  >
-                    <option value="">— None —</option>
-                    {employees.map((emp) => (
-                      <option key={emp.id} value={emp.id}>
-                        {emp.name} ({(parseFloat(emp.commissionRate) * 100).toFixed(1)}%)
-                      </option>
-                    ))}
-                  </select>
-                </div>
-                <div>
-                  <label className="label">Commission rate (decimal)</label>
-                  <input
-                    type="number" step="0.0001" min="0" max="1" className="input"
-                    value={commissionRate}
-                    onChange={(e) => setCommissionRate(e.target.value)}
-                    disabled={!employeeId}
-                  />
-                </div>
-                {employeeId && (
-                  <div className="flex justify-between text-sm pt-1 border-t">
-                    <span className="text-gray-500">Commission earned</span>
-                    <span className="font-bold text-green-700">{formatCurrency(totals.commission.toFixed(2))}</span>
-                  </div>
-                )}
+            <div className="card space-y-3">
+              <h3 className="font-semibold text-gray-800 text-sm uppercase tracking-wide">Sales rep</h3>
+              <div>
+                <label className="label">Employee</label>
+                <select
+                  className="input"
+                  value={employeeId}
+                  onChange={(e) => {
+                    const id = e.target.value;
+                    setEmployeeId(id);
+                    const match = employees.find((emp) => emp.id === id);
+                    if (match) setCommissionRate(match.commissionRate);
+                    if (!id) setCommissionRate("0");
+                  }}
+                >
+                  <option value="">— None —</option>
+                  {employees.map((emp) => (
+                    <option key={emp.id} value={emp.id}>
+                      {emp.name}
+                      {canSeeCommission ? ` (${(parseFloat(emp.commissionRate) * 100).toFixed(1)}%)` : ""}
+                    </option>
+                  ))}
+                </select>
               </div>
-            )}
+              {canSeeCommission && (
+                <>
+                  <div>
+                    <label className="label">Commission rate (decimal)</label>
+                    <input
+                      type="number"
+                      step="0.0001"
+                      min="0"
+                      max="1"
+                      className="input"
+                      value={commissionRate}
+                      onChange={(e) => setCommissionRate(e.target.value)}
+                      disabled={!employeeId}
+                    />
+                  </div>
+                  {employeeId && (
+                    <div className="flex justify-between text-sm pt-1 border-t">
+                      <span className="text-gray-500">Commission earned</span>
+                      <span className="font-bold text-green-700">{formatCurrency(totals.commission.toFixed(2))}</span>
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
 
             <div className="space-y-2">
               <button

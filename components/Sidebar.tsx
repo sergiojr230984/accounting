@@ -44,6 +44,7 @@ const navItems: NavItem[] = [
     icon: FileText,
     children: [
       { href: "/invoices/customer", label: "Invoices" },
+      { href: "/estimates", label: "Estimates" },
       { href: "/customers", label: "Customers" },
       { href: "/products", label: "Products & Services", icon: Package, roles: ["ADMIN", "SALES"] },
     ],
@@ -53,7 +54,11 @@ const navItems: NavItem[] = [
     icon: ShoppingCart,
     children: [
       { href: "/invoices/supplier", label: "Bills" },
-      { href: "/suppliers", label: "Suppliers" },
+      // Suppliers include bank account/routing/Zelle details -- the API
+      // (app/api/suppliers/route.ts) restricts this to ADMIN/MANAGER, but
+      // this nav item wasn't updated to match, so SALES could click through
+      // to a page that 403s and crashes. Matches the API's own restriction.
+      { href: "/suppliers", label: "Suppliers", roles: ["ADMIN", "MANAGER"] },
     ],
   },
   {
@@ -70,8 +75,8 @@ const navItems: NavItem[] = [
     icon: BarChart3,
     roles: ["ADMIN", "MANAGER"],
     children: [
-      { href: "/reports", label: "Reportes Financieros" },
-      { href: "/reports/frequency", label: "Frecuencia de Productos", roles: ["ADMIN"] },
+      { href: "/reports", label: "Financial Reports" },
+      { href: "/reports/frequency", label: "Product Frequency", roles: ["ADMIN"] },
     ],
   },
   { href: "/settings", label: "Settings", icon: Settings, roles: ["ADMIN"] },

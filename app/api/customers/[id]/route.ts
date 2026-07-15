@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
+import { requireRole } from "@/lib/api";
 import { z } from "zod";
 
 const updateSchema = z.object({
@@ -8,6 +9,8 @@ const updateSchema = z.object({
   email: z.string().email("Invalid email").optional().or(z.literal("")).or(z.null()),
   phone: z.string().optional().or(z.null()),
   address: z.string().optional().or(z.null()),
+  emergencyContactName: z.string().optional().or(z.null()),
+  emergencyContactPhone: z.string().optional().or(z.null()),
 });
 
 export async function PATCH(
@@ -31,6 +34,8 @@ export async function PATCH(
       email: parsed.data.email || null,
       phone: parsed.data.phone || null,
       address: parsed.data.address || null,
+      emergencyContactName: parsed.data.emergencyContactName || null,
+      emergencyContactPhone: parsed.data.emergencyContactPhone || null,
     },
   });
   return NextResponse.json(customer);
@@ -40,8 +45,11 @@ export async function DELETE(
   _request: Request,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  const session = await auth();
-  if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  // Editing a customer's contact info is a routine sales task (PATCH above
+  // stays open to any authenticated role), but deleting the record entirely
+  // is not.
+  const guard = await requireRole("ADMIN", "MANAGER");
+  if (guard instanceof NextResponse) return guard;
 
   const { id } = await params;
 

@@ -9,6 +9,8 @@ const schema = z.object({
   email: z.string().email().optional().or(z.literal("")),
   phone: z.string().optional(),
   address: z.string().optional(),
+  emergencyContactName: z.string().optional(),
+  emergencyContactPhone: z.string().optional(),
 });
 
 export async function GET() {
@@ -54,6 +56,8 @@ export async function POST(request: Request) {
         email: parsed.data.email || null,
         phone: parsed.data.phone || null,
         address: parsed.data.address || null,
+        emergencyContactName: parsed.data.emergencyContactName || null,
+        emergencyContactPhone: parsed.data.emergencyContactPhone || null,
       },
     });
     return NextResponse.json(customer, { status: 201 });
