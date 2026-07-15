@@ -201,7 +201,10 @@ export default function NewCustomerInvoicePage() {
       } catch {}
       taxAmount = taxAmount.plus(lineTax);
 
-      const base = lineTotal.plus(lineTax);
+      // Card fee (and other configured fees) apply to the pre-tax line
+      // amount only, matching the accounting system of record -- not to
+      // price + tax.
+      const base = lineTotal;
       for (const feeId of item.fees || []) {
         if (!feeId) continue;
         const f = allFees.find((cf) => cf.id === feeId);
@@ -762,7 +765,7 @@ export default function NewCustomerInvoicePage() {
 
                       {feeSlots.map((feeId, fIdx) => {
                         const f = feeId ? allFees.find((cf) => cf.id === feeId) : null;
-                        const base = line.plus(lineTax);
+                        const base = line;
                         let amt = new Decimal(0);
                         if (f) {
                           try { amt = base.times(new Decimal(f.rate)); } catch {}

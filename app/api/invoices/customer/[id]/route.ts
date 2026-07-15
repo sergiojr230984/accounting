@@ -39,9 +39,9 @@ const updateSchema = z.object({
 });
 
 // A fee can never legitimately total more than its configured rate times
-// feeBase (subtotal + tax) -- the amount if it applied to every line item.
-// Rejects an unknown fee id or an amount above that ceiling rather than
-// trusting the client-submitted amount outright.
+// feeBase (the pre-tax subtotal) -- the amount if it applied to every line
+// item. Rejects an unknown fee id or an amount above that ceiling rather
+// than trusting the client-submitted amount outright.
 function validateAppliedFees(
   fees: { id: string; label: string; amount: string }[],
   feeBase: Decimal,
@@ -162,19 +162,19 @@ export async function PATCH(
   // Each fee is applied per-line-item at the client's discretion, so the
   // server can't reproduce the client's exact amount, but it can enforce a
   // hard ceiling: a fee can never legitimately total more than its
-  // configured rate times the invoice base (subtotal + tax) -- the amount
-  // if it applied to every line. A fee id that isn't one of the company's
+  // configured rate times the invoice's pre-tax subtotal -- the amount if it
+  // applied to every line. A fee id that isn't one of the company's
   // currently configured fees, or an amount above that ceiling, means the
   // client-submitted value can't be trusted and the request is rejected.
-  // Validated against the *existing* subtotal/tax when the caller isn't
-  // also sending new items (below), so a fee can't be smuggled into
-  // storage just by leaving items out of the same request.
+  // Validated against the *existing* subtotal when the caller isn't also
+  // sending new items (below), so a fee can't be smuggled into storage just
+  // by leaving items out of the same request.
   let configuredFees: { id: string; label: string; rate: number }[] | null = null;
   if (data.appliedFees !== undefined && data.appliedFees.length > 0) {
     const profile = await prisma.companyProfile.findUnique({ where: { id: "default" } });
     configuredFees = (profile?.customFees as { id: string; label: string; rate: number }[] | null) ?? [];
     if (!(data.items && data.items.length > 0)) {
-      const feeBase = new Decimal(existing.subtotal.toString()).plus(existing.taxAmount.toString());
+      const feeBase = new Decimal(existing.subtotal.toString());
       const err = validateAppliedFees(data.appliedFees, feeBase, configuredFees);
       if (err) return err;
     }
@@ -218,7 +218,7 @@ export async function PATCH(
 
     let feesSum = new Decimal(0);
     if (data.appliedFees !== undefined && data.appliedFees.length > 0 && configuredFees) {
-      const err = validateAppliedFees(data.appliedFees, subtotal.plus(taxAmount), configuredFees);
+      const err = validateAppliedFees(data.appliedFees, subtotal, configuredFees);
       if (err) return err;
       for (const f of data.appliedFees) feesSum = feesSum.plus(f.amount);
     }

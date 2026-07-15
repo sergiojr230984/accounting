@@ -290,6 +290,46 @@ describe("applied fees are re-derived server-side, not trusted from the client",
     expect(Number(body.totalAmount)).toBe(110); // 100 subtotal + 10 fee
   });
 
+  it("caps a fee's ceiling on the pre-tax subtotal, not subtotal + tax (matches the accounting system of record)", async () => {
+    // item is $370 @ 7% tax -> subtotal 370, tax 25.90. A 3.99% card fee's
+    // true ceiling is 3.99% of the pre-tax 370 ($14.76), not of 395.90
+    // ($15.79) -- an amount above the pre-tax ceiling must be rejected.
+    const cardFeeId = `cardfee-${Date.now()}`;
+    const settingsRes = await admin.postJson(
+      "/api/settings",
+      { customFees: [{ id: feeId, label: "Delivery fee", rate: feeRate }, { id: cardFeeId, label: "CARD FEE", rate: 0.0399 }] },
+      "PATCH"
+    );
+    expect(settingsRes.status).toBe(200);
+
+    const overCeiling = await admin.postJson<{ error: string }>("/api/invoices/customer", {
+      customerId,
+      invoiceNumber: `FEE-TAX-CEILING-${Date.now()}`,
+      invoiceDate: "2026-01-01",
+      dueDate: "2026-01-31",
+      items: [{ description: "TO/2000/1000 5pc SET BROWN", quantity: "1", unitPrice: "370", taxRate: "0.07" }],
+      appliedFees: [{ id: cardFeeId, label: "CARD FEE", rate: 0.0399, amount: "15.80" }],
+    });
+    expect(overCeiling.status).toBe(400);
+    expect(overCeiling.body.error).toContain("exceeds what its configured rate allows");
+
+    const atCeiling = await admin.postJson<{ subtotal: string; taxAmount: string; totalAmount: string }>(
+      "/api/invoices/customer",
+      {
+        customerId,
+        invoiceNumber: `FEE-TAX-OK-${Date.now()}`,
+        invoiceDate: "2026-01-01",
+        dueDate: "2026-01-31",
+        items: [{ description: "TO/2000/1000 5pc SET BROWN", quantity: "1", unitPrice: "370", taxRate: "0.07" }],
+        appliedFees: [{ id: cardFeeId, label: "CARD FEE", rate: 0.0399, amount: "14.76" }],
+      }
+    );
+    expect(atCeiling.status).toBe(201);
+    expect(Number(atCeiling.body.subtotal)).toBe(370);
+    expect(Number(atCeiling.body.taxAmount)).toBe(25.9);
+    expect(Number(atCeiling.body.totalAmount)).toBe(410.66); // 370 + 25.90 + 14.76
+  });
+
   it("rejects an inflated fee amount added via PATCH too", async () => {
     const created = await admin.postJson<{ id: string }>("/api/invoices/customer", {
       customerId,

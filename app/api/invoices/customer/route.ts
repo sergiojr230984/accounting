@@ -172,7 +172,9 @@ export async function POST(request: Request) {
     companyProfile = await prisma.companyProfile.findUnique({ where: { id: "default" } });
   }
   if (addCreditCardFee && companyProfile && Number(companyProfile.creditCardFeeRate) > 0) {
-    creditCardFee = subtotal.plus(taxAmount).times(companyProfile.creditCardFeeRate as string);
+    // Card fee applies to the pre-tax subtotal only, matching the
+    // accounting system of record -- not to subtotal + tax.
+    creditCardFee = subtotal.times(companyProfile.creditCardFeeRate as string);
   }
 
   // Each fee is applied per-line-item at the client's discretion (e.g. a
@@ -180,15 +182,15 @@ export async function POST(request: Request) {
   // reproduce the client's exact amount without the per-item selection,
   // which isn't part of this API's payload. It CAN still enforce a hard
   // ceiling: a fee can never legitimately total more than its configured
-  // rate times the whole invoice base (subtotal + tax) -- that's the
-  // amount if the fee applied to every single line. Anything above that,
-  // or a fee id that isn't one of the company's configured fees at all,
-  // means the client-submitted amount can't be trusted and is rejected.
+  // rate times the whole invoice's pre-tax subtotal -- that's the amount if
+  // the fee applied to every single line. Anything above that, or a fee id
+  // that isn't one of the company's configured fees at all, means the
+  // client-submitted amount can't be trusted and is rejected.
   let customFeesSum = new Decimal(0);
   if (appliedFees.length > 0) {
     const configuredFees =
       (companyProfile?.customFees as { id: string; label: string; rate: number }[] | null) ?? [];
-    const feeBaseCap = subtotal.plus(taxAmount);
+    const feeBaseCap = subtotal;
     for (const f of appliedFees) {
       const canonical = configuredFees.find((cf) => cf.id === f.id);
       if (!canonical) {

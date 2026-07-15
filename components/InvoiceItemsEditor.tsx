@@ -148,15 +148,16 @@ export default function InvoiceItemsEditor<T extends FieldValues = any>({
     const feeAgg = new Map<string, AppliedFee>();
     (items ?? []).forEach((item, idx) => {
       let lineTotal = new Decimal(0);
-      let lineTax = new Decimal(0);
       try {
         const price = (item as unknown as Record<string, string>)[priceField] ?? "0";
         lineTotal = new Decimal(item.quantity || "0").times(price || "0");
-        lineTax = lineTotal.times(item.taxRate || "0");
       } catch {
         // ignore unparsable rows while the user is still typing
       }
-      const base = lineTotal.plus(lineTax);
+      // Card fee (and other configured fees) apply to the pre-tax line
+      // amount only, matching the accounting system of record -- not to
+      // price + tax.
+      const base = lineTotal;
       for (const feeId of itemFeeSlots[idx] ?? []) {
         if (!feeId) continue;
         const opt = feeOptions.find((f) => f.id === feeId);
@@ -324,8 +325,9 @@ export default function InvoiceItemsEditor<T extends FieldValues = any>({
                   try {
                     const price = (items?.[index] as unknown as Record<string, string>)?.[priceField] ?? "0";
                     const lineTotal = new Decimal(items?.[index]?.quantity || "0").times(price || "0");
-                    const lineTax = lineTotal.times(items?.[index]?.taxRate || "0");
-                    amt = lineTotal.plus(lineTax).times(opt.rate);
+                    // Card fee (and other configured fees) apply to the pre-tax
+                    // line amount only, matching the accounting system of record.
+                    amt = lineTotal.times(opt.rate);
                   } catch {
                     amt = new Decimal(0);
                   }
