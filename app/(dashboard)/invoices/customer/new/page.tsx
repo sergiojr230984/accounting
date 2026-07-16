@@ -13,7 +13,6 @@ import {
   Search,
   X,
   Printer,
-  Eye,
 } from "lucide-react";
 import Decimal from "decimal.js";
 import CustomerCreateModal from "@/components/CustomerCreateModal";
@@ -115,11 +114,6 @@ export default function NewCustomerInvoicePage() {
 
   const [userRole, setUserRole] = useState<string | null>(null);
   const canSeeCommission = userRole === "ADMIN" || userRole === "MANAGER";
-
-  // Preview modal state
-  const [showPreview, setShowPreview] = useState(false);
-  const [previewUrl, setPreviewUrl] = useState("");
-  const [previewing, setPreviewing] = useState(false);
 
   async function loadCustomers() {
     const res = await fetch("/api/customers");
@@ -373,31 +367,6 @@ export default function NewCustomerInvoicePage() {
     };
   }
 
-  async function handlePreview() {
-    if (!customerId) { setError("Please select a customer"); return; }
-    const real = items.filter((i) => i.description.trim() !== "");
-    if (real.length === 0) { setError("Add at least one line item"); return; }
-    setError("");
-    setPreviewing(true);
-    try {
-      const company = await fetch("/api/settings").then((r) => (r.ok ? r.json() : null)).catch(() => null);
-      const doc = generateInvoicePDF(buildPdfData(company));
-      const blob = doc.output("blob");
-      if (previewUrl) URL.revokeObjectURL(previewUrl);
-      const url = URL.createObjectURL(blob);
-      setPreviewUrl(url);
-      setShowPreview(true);
-    } finally {
-      setPreviewing(false);
-    }
-  }
-
-  function closePreview() {
-    setShowPreview(false);
-    if (previewUrl) URL.revokeObjectURL(previewUrl);
-    setPreviewUrl("");
-  }
-
   async function save(action: "save" | "print" | "send"): Promise<void> {
     setError("");
     if (!customerId) {
@@ -459,58 +428,6 @@ export default function NewCustomerInvoicePage() {
 
   return (
     <>
-      {/* ── Preview modal ── */}
-      {showPreview && (
-        <div className="fixed inset-0 z-50 flex flex-col bg-black/70 backdrop-blur-sm">
-          <div className="flex items-center justify-between px-4 py-3 bg-white border-b shadow-sm shrink-0">
-            <div className="flex items-center gap-3">
-              <Eye className="w-5 h-5 text-brand-600" />
-              <h2 className="font-semibold text-gray-800">Invoice Preview</h2>
-              <span className="text-xs text-gray-400 bg-gray-100 px-2 py-0.5 rounded-full">not saved yet</span>
-            </div>
-            <div className="flex items-center gap-2">
-              <button
-                onClick={closePreview}
-                className="btn-secondary"
-              >
-                <X className="w-4 h-4" /> Close
-              </button>
-              <button
-                onClick={async () => { closePreview(); await save("save"); }}
-                disabled={saving !== "idle"}
-                className="btn-secondary"
-              >
-                {saving === "save" ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
-                Save draft
-              </button>
-              <button
-                onClick={async () => { closePreview(); await save("send"); }}
-                disabled={saving !== "idle"}
-                className="btn-secondary"
-              >
-                {saving === "send" ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
-                Save &amp; Email
-              </button>
-              <button
-                onClick={async () => { closePreview(); await save("print"); }}
-                disabled={saving !== "idle"}
-                className="btn-primary"
-              >
-                {saving === "print" ? <Loader2 className="w-4 h-4 animate-spin" /> : <Printer className="w-4 h-4" />}
-                Save &amp; Print
-              </button>
-            </div>
-          </div>
-          <div className="flex-1 overflow-hidden">
-            <iframe
-              src={previewUrl}
-              className="w-full h-full border-0"
-              title="Invoice Preview"
-            />
-          </div>
-        </div>
-      )}
-
       <div className="flex flex-col lg:flex-row gap-6 max-w-7xl mx-auto">
         {/* Main column */}
         <div className="flex-1 min-w-0 space-y-5">
@@ -520,15 +437,6 @@ export default function NewCustomerInvoicePage() {
               <h1 className="text-3xl font-bold text-gray-900">New invoice</h1>
             </div>
             <div className="flex items-center gap-2">
-              <button
-                onClick={handlePreview}
-                disabled={previewing || saving !== "idle"}
-                className="btn-secondary"
-                title="Preview the invoice without saving"
-              >
-                {previewing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Eye className="w-4 h-4" />}
-                Preview
-              </button>
               <button
                 onClick={() => save("save")}
                 disabled={saving !== "idle"}
@@ -863,6 +771,7 @@ export default function NewCustomerInvoicePage() {
                 price: item.unitPrice,
                 taxRate: item.taxRate,
               }))}
+            fees={totals.appliedFees}
             notes={notes}
             paymentStatus="UNPAID"
             paidAmount="0"
@@ -975,17 +884,9 @@ export default function NewCustomerInvoicePage() {
 
             <div className="space-y-2">
               <button
-                onClick={handlePreview}
-                disabled={previewing || saving !== "idle"}
-                className="btn-primary w-full justify-center"
-              >
-                {previewing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Eye className="w-4 h-4" />}
-                Preview invoice
-              </button>
-              <button
                 onClick={() => save("print")}
                 disabled={saving !== "idle"}
-                className="btn-secondary w-full justify-center"
+                className="btn-primary w-full justify-center"
               >
                 {saving === "print" ? <Loader2 className="w-4 h-4 animate-spin" /> : <Printer className="w-4 h-4" />}
                 Save &amp; Print PDF

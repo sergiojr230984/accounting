@@ -6,7 +6,7 @@ import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import Link from "next/link";
-import { ArrowLeft, Edit2, Save, X, Trash2, Loader2, Send, Copy, Check, Printer, Plus, Eye } from "lucide-react";
+import { ArrowLeft, Edit2, Save, X, Trash2, Loader2, Send, Copy, Check, Printer, Plus } from "lucide-react";
 import { generateInvoicePDF } from "@/lib/invoice-pdf";
 import { format } from "date-fns";
 import PaymentBadge from "@/components/PaymentBadge";
@@ -97,11 +97,6 @@ export default function CustomerInvoiceDetailPage() {
   const [deletingPaymentId, setDeletingPaymentId] = useState<string | null>(null);
   const [confirmDeletePaymentId, setConfirmDeletePaymentId] = useState<string | null>(null);
 
-  // Preview state
-  const [showPreview, setShowPreview] = useState(false);
-  const [previewUrl, setPreviewUrl] = useState("");
-  const [previewing, setPreviewing] = useState(false);
-
   const [userRole, setUserRole] = useState<string | null>(null);
   const canSeeCommission = userRole === "ADMIN" || userRole === "MANAGER";
 
@@ -113,7 +108,7 @@ export default function CustomerInvoiceDetailPage() {
     { id: string; label: string; rate: number; amount: string }[]
   >([]);
 
-  const { register, handleSubmit, control, reset, getValues, setValue, watch, formState: { errors } } = useForm<EditForm>({
+  const { register, handleSubmit, control, reset, setValue, watch, formState: { errors } } = useForm<EditForm>({
     resolver: zodResolver(editSchema),
   });
 
@@ -356,101 +351,12 @@ export default function CustomerInvoiceDetailPage() {
     window.open(url, "_blank");
   }
 
-  async function handlePreview() {
-    if (!invoice) return;
-    setPreviewing(true);
-    try {
-      const vals = getValues();
-      const company = await fetchCompany();
-
-      let subtotal = new Decimal(0);
-      let taxAmount = new Decimal(0);
-      const computedItems = (vals.items ?? invoice.items).map((item) => {
-        const qty = new Decimal(item.quantity || "0");
-        const price = new Decimal(item.unitPrice || "0");
-        const rate = new Decimal(item.taxRate || "0");
-        const lineTotal = qty.times(price);
-        subtotal = subtotal.plus(lineTotal);
-        taxAmount = taxAmount.plus(lineTotal.times(rate));
-        return { ...item, lineTotal: lineTotal.toFixed(2) };
-      });
-      const total = subtotal.plus(taxAmount);
-      const paid = new Decimal(vals.paidAmount || "0");
-      const down = new Decimal(vals.downPayment || "0");
-
-      const empId = vals.employeeId || (invoice.employeeId ?? "");
-      const emp = employees.find((e) => e.id === empId);
-
-      const doc = generateInvoicePDF({
-        invoiceNumber: vals.invoiceNumber || invoice.invoiceNumber,
-        invoiceDate: vals.invoiceDate || invoice.invoiceDate,
-        dueDate: vals.dueDate || invoice.dueDate,
-        subtotal: subtotal.toFixed(2),
-        taxAmount: taxAmount.toFixed(2),
-        totalAmount: total.toFixed(2),
-        paidAmount: paid.toFixed(2),
-        downPayment: down.toFixed(2),
-        creditCardFee: invoice.creditCardFee,
-        appliedFees: invoice.appliedFees,
-        notes: (vals.notes ?? invoice.notes) ?? "",
-        customer: invoice.customer,
-        items: computedItems,
-        payments: invoice.payments,
-        employee: emp ? { id: emp.id, name: emp.name } : invoice.employee,
-        company,
-      });
-
-      const blob = doc.output("blob");
-      if (previewUrl) URL.revokeObjectURL(previewUrl);
-      const url = URL.createObjectURL(blob);
-      setPreviewUrl(url);
-      setShowPreview(true);
-    } finally {
-      setPreviewing(false);
-    }
-  }
-
-  function closePreview() {
-    setShowPreview(false);
-    if (previewUrl) URL.revokeObjectURL(previewUrl);
-    setPreviewUrl("");
-  }
-
   if (!invoice) {
     return <div className="flex items-center justify-center h-48"><Loader2 className="w-6 h-6 animate-spin text-brand-500" /></div>;
   }
 
   return (
     <>
-      {/* Preview modal */}
-      {showPreview && (
-        <div className="fixed inset-0 z-50 flex flex-col bg-black/70 backdrop-blur-sm">
-          <div className="flex items-center justify-between px-4 py-3 bg-white border-b shadow-sm shrink-0">
-            <div className="flex items-center gap-3">
-              <Eye className="w-5 h-5 text-brand-600" />
-              <h2 className="font-semibold text-gray-800">Invoice Preview</h2>
-              <span className="text-xs text-gray-400 bg-gray-100 px-2 py-0.5 rounded-full">unsaved changes</span>
-            </div>
-            <div className="flex items-center gap-2">
-              <button onClick={closePreview} className="btn-secondary">
-                <X className="w-4 h-4" /> Close
-              </button>
-              <button
-                onClick={() => { closePreview(); handleSubmit(onSave)(); }}
-                disabled={saving}
-                className="btn-primary"
-              >
-                {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
-                Save changes
-              </button>
-            </div>
-          </div>
-          <div className="flex-1 overflow-hidden">
-            <iframe src={previewUrl} className="w-full h-full border-0" title="Invoice Preview" />
-          </div>
-        </div>
-      )}
-
       <div className="max-w-4xl mx-auto space-y-6">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-3">
@@ -508,10 +414,6 @@ export default function CustomerInvoiceDetailPage() {
                 <button onClick={() => { setEditing(false); setError(""); reset(); }} className="btn-secondary">
                   <X className="w-4 h-4" />
                   Cancel
-                </button>
-                <button onClick={handlePreview} disabled={previewing || saving} className="btn-secondary">
-                  {previewing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Eye className="w-4 h-4" />}
-                  Preview
                 </button>
                 <button onClick={handleSubmit(onSave)} disabled={saving} className="btn-primary">
                   {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
