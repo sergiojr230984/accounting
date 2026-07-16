@@ -7,11 +7,20 @@ import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import {
-  BookOpen,
-  Loader2,
-  CheckCircle2,
+  BarChart3,
+  Mail,
+  Lock,
   Eye,
   EyeOff,
+  Loader2,
+  ShieldCheck,
+  LockKeyhole,
+  Headset,
+  TrendingUp,
+  Package,
+  Users,
+  FileText,
+  PieChart,
 } from "lucide-react";
 
 const schema = z.object({
@@ -20,10 +29,18 @@ const schema = z.object({
 });
 type FormData = z.infer<typeof schema>;
 
+const features = [
+  { icon: TrendingUp, label: "Financial Management" },
+  { icon: Package, label: "Inventory Control" },
+  { icon: Users, label: "Customers & Suppliers" },
+  { icon: FileText, label: "Invoicing & Payments" },
+  { icon: PieChart, label: "Reports & Analytics" },
+];
+
 export default function LoginPage() {
   const router = useRouter();
   const [error, setError] = useState("");
-  const [showPw, setShowPw] = useState(false);
+  const [showPassword, setShowPassword] = useState(false);
   const {
     register,
     handleSubmit,
@@ -69,140 +86,166 @@ export default function LoginPage() {
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-orange-50 via-white to-orange-50 flex items-center justify-center p-4">
-      <div className="w-full max-w-5xl bg-white rounded-3xl shadow-xl overflow-hidden grid grid-cols-1 lg:grid-cols-2 border border-orange-100">
-        {/* Left column — brand panel */}
-        <div className="bg-gradient-to-br from-brand-700 to-brand-900 text-white p-10 lg:p-12 hidden lg:flex flex-col justify-between">
-          <div>
-            <div className="flex items-center gap-3 mb-8">
-              <div className="w-11 h-11 bg-white rounded-xl flex items-center justify-center">
-                <BookOpen className="w-6 h-6 text-brand-600" />
-              </div>
-              <div className="leading-tight">
-                <p className="font-bold text-lg">La Cuevita</p>
-                <p className="text-brand-100 text-xs uppercase tracking-wider">Furniture</p>
-              </div>
-            </div>
-
-            <h1 className="text-3xl font-bold leading-tight mb-3">
-              Run the shop, not the spreadsheets.
-            </h1>
-            <p className="text-brand-100 text-sm mb-10 leading-relaxed">
-              Invoices, customers, suppliers, and team performance — all in one
-              place built for La Cuevita Furniture.
-            </p>
-
-            <ul className="space-y-4 text-sm">
-              {[
-                "Print invoices with your logo in one click",
-                "Track down payments and remaining balances",
-                "Commissions and performance per sales rep",
-                "Tax rates and credit-card fees configured once",
-              ].map((line) => (
-                <li key={line} className="flex items-start gap-3">
-                  <CheckCircle2 className="w-5 h-5 text-brand-200 flex-shrink-0 mt-0.5" />
-                  <span className="text-brand-50">{line}</span>
-                </li>
-              ))}
-            </ul>
-          </div>
-
-          <p className="text-brand-200 text-xs mt-10">
-            v{process.env.NEXT_PUBLIC_APP_VERSION ?? "1.1.0"} · Need help? Talk
-            to your administrator.
-          </p>
-        </div>
-
-        {/* Right column — sign-in form */}
-        <div className="p-8 lg:p-12 flex flex-col justify-center">
-          {/* Mobile-only brand */}
-          <div className="lg:hidden flex items-center gap-3 mb-8">
-            <div className="w-10 h-10 bg-brand-600 rounded-xl flex items-center justify-center">
-              <BookOpen className="w-5 h-5 text-white" />
+    <div className="min-h-screen bg-gradient-to-br from-brand-50 via-white to-brand-50 flex items-center justify-center p-4 lg:p-8">
+      <div className="w-full max-w-6xl grid grid-cols-1 lg:grid-cols-2 gap-12 lg:gap-16 items-center">
+        {/* Left column — brand & marketing */}
+        <div className="hidden lg:block">
+          <div className="flex items-center gap-3 mb-10">
+            <div className="w-12 h-12 bg-brand-600 rounded-xl flex items-center justify-center flex-shrink-0">
+              <BarChart3 className="w-6 h-6 text-white" />
             </div>
             <div className="leading-tight">
-              <p className="font-bold text-gray-900">La Cuevita</p>
-              <p className="text-gray-500 text-xs uppercase tracking-wider">Furniture</p>
+              <p className="font-extrabold text-xl text-gray-900 tracking-tight">LA CUEVITA</p>
+              <p className="text-gray-500 text-xs font-medium uppercase tracking-wider">
+                Business Management System
+              </p>
             </div>
           </div>
 
-          <div className="mb-6">
-            <h2 className="text-2xl font-bold text-gray-900">Sign in</h2>
-            <p className="text-sm text-gray-500 mt-1">
-              Use the email and password your admin set up for you.
+          <h1 className="text-4xl xl:text-5xl font-extrabold leading-tight text-gray-900 mb-4">
+            Run your business.
+            <br />
+            <span className="text-brand-600">Not the spreadsheets.</span>
+          </h1>
+          <p className="text-gray-500 text-base leading-relaxed max-w-md mb-10">
+            All-in-one management system for all your businesses. Track finances,
+            sales, expenses, inventory, customers and performance in one place.
+          </p>
+
+          <div className="grid grid-cols-3 sm:grid-cols-5 gap-6">
+            {features.map(({ icon: Icon, label }) => (
+              <div key={label} className="flex flex-col items-start gap-2">
+                <Icon className="w-5 h-5 text-brand-500" />
+                <span className="text-xs font-medium text-gray-600 leading-snug">{label}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {/* Right column — sign-in card */}
+        <div className="w-full max-w-md mx-auto lg:mx-0">
+          <div className="bg-white rounded-2xl shadow-xl border border-gray-100 p-8">
+            <div className="flex items-center gap-3 mb-6">
+              <div className="w-11 h-11 bg-brand-600 rounded-xl flex items-center justify-center flex-shrink-0">
+                <BarChart3 className="w-5 h-5 text-white" />
+              </div>
+              <div>
+                <h2 className="text-xl font-bold text-gray-900">Welcome back</h2>
+                <p className="text-sm text-gray-500">Sign in to your account</p>
+              </div>
+            </div>
+
+            <form
+              onSubmit={(e) => {
+                console.log("[login] form submit event fired", {
+                  hasErrors: Object.keys(errors).length,
+                  errors,
+                });
+                return handleSubmit(onSubmit)(e);
+              }}
+              className="space-y-5"
+              noValidate
+            >
+              <div>
+                <label className="label" htmlFor="email">Email</label>
+                <div className="relative">
+                  <Mail className="w-4 h-4 text-gray-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                  <input
+                    id="email"
+                    type="email"
+                    autoComplete="email"
+                    className="input pl-9"
+                    placeholder="you@lacuevitabusiness.com"
+                    {...register("email")}
+                  />
+                </div>
+                {errors.email && (
+                  <p className="text-red-500 text-xs mt-1">{errors.email.message}</p>
+                )}
+              </div>
+
+              <div>
+                <div className="flex items-center justify-between mb-1">
+                  <label className="label mb-0" htmlFor="password">Password</label>
+                  <button
+                    type="button"
+                    onClick={() => setShowPassword((v) => !v)}
+                    className="text-xs font-medium text-brand-600 hover:text-brand-700 flex items-center gap-1"
+                  >
+                    {showPassword ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                    {showPassword ? "Hide" : "Show"}
+                  </button>
+                </div>
+                <div className="relative">
+                  <Lock className="w-4 h-4 text-gray-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                  <input
+                    id="password"
+                    type={showPassword ? "text" : "password"}
+                    autoComplete="current-password"
+                    className="input pl-9"
+                    placeholder="••••••••"
+                    {...register("password")}
+                  />
+                </div>
+                {errors.password && (
+                  <p className="text-red-500 text-xs mt-1">{errors.password.message}</p>
+                )}
+              </div>
+
+              <div className="flex items-center justify-between text-sm">
+                <label className="flex items-center gap-2 text-gray-600">
+                  <input
+                    type="checkbox"
+                    defaultChecked
+                    className="rounded border-gray-300 text-brand-600 focus:ring-brand-500"
+                  />
+                  Remember me
+                </label>
+              </div>
+
+              {error && (
+                <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg text-sm">
+                  {error}
+                </div>
+              )}
+
+              <button
+                type="submit"
+                disabled={isSubmitting}
+                className="btn-primary w-full justify-center py-2.5"
+              >
+                {isSubmitting ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
+                {isSubmitting ? "Signing in…" : "Sign in"}
+              </button>
+            </form>
+
+            <div className="flex items-center gap-3 my-6">
+              <div className="flex-1 h-px bg-gray-100" />
+              <span className="text-xs text-gray-400">Need help?</span>
+              <div className="flex-1 h-px bg-gray-100" />
+            </div>
+
+            <p className="flex items-center justify-center gap-2 text-sm font-medium text-brand-600">
+              <Headset className="w-4 h-4" />
+              Contact your administrator
             </p>
           </div>
 
-          <form
-            onSubmit={(e) => {
-              console.log("[login] form submit event fired", {
-                hasErrors: Object.keys(errors).length,
-                errors,
-              });
-              return handleSubmit(onSubmit)(e);
-            }}
-            className="space-y-4"
-            noValidate
-          >
-            <div>
-              <label className="label" htmlFor="email">Email</label>
-              <input
-                id="email"
-                type="email"
-                autoComplete="email"
-                className="input"
-                placeholder="you@lacuevitafurniture.com"
-                {...register("email")}
-              />
-              {errors.email && (
-                <p className="text-red-500 text-xs mt-1">{errors.email.message}</p>
-              )}
-            </div>
+          <div className="flex items-center justify-center gap-6 mt-6 text-xs text-gray-400">
+            <span className="flex items-center gap-1.5">
+              <ShieldCheck className="w-3.5 h-3.5" />
+              Secure. Reliable. Always protected.
+            </span>
+            <span className="flex items-center gap-1.5">
+              <LockKeyhole className="w-3.5 h-3.5" />
+              Your data is safe with us.
+            </span>
+          </div>
 
-            <div>
-              <div className="flex items-center justify-between">
-                <label className="label" htmlFor="password">Password</label>
-                <button
-                  type="button"
-                  onClick={() => setShowPw((v) => !v)}
-                  className="text-xs text-brand-600 hover:text-brand-700 inline-flex items-center gap-1 mb-1"
-                >
-                  {showPw ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
-                  {showPw ? "Hide" : "Show"}
-                </button>
-              </div>
-              <input
-                id="password"
-                type={showPw ? "text" : "password"}
-                autoComplete="current-password"
-                className="input"
-                placeholder="••••••••"
-                {...register("password")}
-              />
-              {errors.password && (
-                <p className="text-red-500 text-xs mt-1">{errors.password.message}</p>
-              )}
-            </div>
-
-            {error && (
-              <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg text-sm">
-                {error}
-              </div>
-            )}
-
-            <button
-              type="submit"
-              disabled={isSubmitting}
-              className="btn-primary w-full justify-center py-2.5 mt-2"
-            >
-              {isSubmitting && <Loader2 className="w-4 h-4 animate-spin" />}
-              {isSubmitting ? "Signing in…" : "Sign in"}
-            </button>
-          </form>
-
-          <p className="text-xs text-gray-400 mt-8 text-center">
-            Forgot your password? Ask your administrator to reset it from
-            Settings → Users.
+          <p className="text-center text-xs text-gray-400 mt-4">
+            © {new Date().getFullYear()} La Cuevita Business Management System
+            <br />
+            Version {process.env.NEXT_PUBLIC_APP_VERSION ?? "1.5.2"}
           </p>
         </div>
       </div>
