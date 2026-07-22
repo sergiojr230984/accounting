@@ -92,7 +92,6 @@ export default function NewCustomerInvoicePage() {
   const [invoiceNumber, setInvoiceNumber] = useState("");
   const [invoiceDate, setInvoiceDate] = useState(todayISO());
   const [dueDate, setDueDate] = useState(plusDaysISO(30));
-  const [downPayment, setDownPayment] = useState("0");
   const [notes, setNotes] = useState("");
   const [items, setItems] = useState<LineItem[]>([blankItem()]);
   const [taxRates, setTaxRates] = useState<{ id: string; name: string; rate: string; active: boolean }[]>([]);
@@ -229,15 +228,11 @@ export default function NewCustomerInvoicePage() {
     for (const f of feeAgg.values()) feesSum = feesSum.plus(f.amount);
 
     const total = subtotal.plus(taxAmount).plus(feesSum);
-    const down = (() => {
-      try { return new Decimal(downPayment || "0"); } catch { return new Decimal(0); }
-    })();
-    const balance = Decimal.max(total.minus(down), 0);
     const commission = (() => {
       try { return total.times(new Decimal(commissionRate || "0")); } catch { return new Decimal(0); }
     })();
-    return { subtotal, taxAmount, appliedFees, total, downPayment: down, balance, commission };
-  }, [items, downPayment, commissionRate, allFees]);
+    return { subtotal, taxAmount, appliedFees, total, commission };
+  }, [items, commissionRate, allFees]);
 
   function updateItem(idx: number, field: keyof LineItem, value: string) {
     setItems((prev) => {
@@ -347,7 +342,6 @@ export default function NewCustomerInvoicePage() {
       creditCardFee: "0",
       appliedFees: totals.appliedFees.map((f) => ({ label: f.label, amount: f.amount })),
       paidAmount: "0",
-      downPayment: downPayment || "0",
       notes,
       customer: {
         name: customer?.name ?? "",
@@ -421,7 +415,6 @@ export default function NewCustomerInvoicePage() {
           dueDate,
           items: real.map(({ fees: _fees, ...rest }) => rest),
           notes,
-          downPayment,
           employeeId: employeeId || null,
           commissionRate: commissionRate || "0",
           paidAmount: "0",
@@ -887,22 +880,6 @@ export default function NewCustomerInvoicePage() {
                     Set a card processing fee in <a href="/settings" className="text-brand-600 hover:underline">Settings</a> to add it per line.
                   </p>
                 )}
-              </div>
-            </div>
-
-            <div className="card space-y-3">
-              <h3 className="font-semibold text-gray-800 text-sm uppercase tracking-wide">Financing</h3>
-              <div>
-                <label className="label">Down payment ($)</label>
-                <input
-                  type="number" step="0.01" min="0" className="input"
-                  value={downPayment}
-                  onChange={(e) => setDownPayment(e.target.value)}
-                />
-              </div>
-              <div className="flex justify-between text-sm pt-1 border-t">
-                <span className="text-gray-500">Remaining balance</span>
-                <span className="font-bold text-brand-700">{formatCurrency(totals.balance.toFixed(2))}</span>
               </div>
             </div>
 
