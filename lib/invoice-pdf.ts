@@ -1,9 +1,13 @@
 import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
-import { formatDateOnly } from "@/lib/date";
+import Decimal from "decimal.js";
+import { formatDateOnly } from "./date";
 
 /**
- * ASCII-only currency formatter for jsPDF text.
+ * ASCII-only currency formatter for jsPDF text. Intl.NumberFormat can emit
+ * non-breaking spaces or other non-ASCII characters that helvetica's
+ * Win-ANSI encoding doesn't have glyphs for — they render as garbage like
+ * '&&$&5&0&0&.&0&'. Roll our own with $ + comma thousands + period decimal.
  */
 function pdfCurrency(value: string | number): string {
   const n = typeof value === "number" ? value : parseFloat(value);
@@ -28,8 +32,12 @@ export interface InvoicePDFData {
   paidAmount: string | number;
   downPayment?: string | number;
   creditCardFee?: string | number;
+  // Additional fees applied to this invoice (from Settings → Additional fees).
+  // Rendered one line each in the totals block, after Tax / Card fee.
   appliedFees?: { label: string; amount: string | number }[];
   notes: string | null;
+  // For customer invoices this is the customer (Bill To). For supplier
+  // bills / purchase orders this is the supplier (Vendor).
   customer: {
     name: string;
     contactName?: string | null;
@@ -44,11 +52,13 @@ export interface InvoicePDFData {
     description: string;
     itemDescription?: string | null;
     quantity: string | number;
+    // unitPrice for customer invoices, unitCost for supplier bills.
     unitPrice?: string | number;
     unitCost?: string | number;
     taxRate: string | number;
     lineTotal: string | number;
   }[];
+  // Payment history — individual lines rendered inline in the totals block.
   payments?: {
     paymentDate: string | Date;
     amount: string | number;
@@ -62,17 +72,22 @@ export interface InvoicePDFData {
     phone?: string | null;
     creditCardFeeLabel?: string | null;
   } | null;
+  // Sales rep assigned to the invoice.
   employee?: { id: string; name: string } | null;
-  kind?: "customer" | "supplier";
+  // 'customer' (default) prints INVOICE + BILL TO + Unit price.
+  // 'supplier' prints PURCHASE ORDER + VENDOR + Unit cost.
+  // 'estimate' prints ESTIMATE + PREPARED FOR + Unit price, no payment section.
+  kind?: "customer" | "supplier" | "estimate";
 }
 
-const ORANGE: [number, number, number] = [242, 106, 0];
-const BRAND_DARK: [number, number, number] = [124, 45, 18];
-const TEXT_DARK: [number, number, number] = [31, 41, 55];
-const TEXT_MID: [number, number, number] = [75, 85, 99];
-const TEXT_LIGHT: [number, number, number] = [156, 163, 175];
-const BG_GRAY: [number, number, number] = [243, 244, 246];
-const RULE_GRAY: [number, number, number] = [229, 231, 235];
+// Brand colors
+const ORANGE: [number, number, number] = [242, 106, 0]; // #F26A00
+const BRAND_DARK: [number, number, number] = [124, 45, 18]; // brand-900
+const TEXT_DARK: [number, number, number] = [31, 41, 55]; // gray-800
+const TEXT_MID: [number, number, number] = [75, 85, 99]; // gray-600
+const TEXT_LIGHT: [number, number, number] = [156, 163, 175]; // gray-400
+const BG_GRAY: [number, number, number] = [243, 244, 246]; // gray-100
+const RULE_GRAY: [number, number, number] = [229, 231, 235]; // gray-200
 
 export function generateInvoicePDF(invoice: InvoicePDFData): jsPDF {
   const doc = new jsPDF({ unit: "pt", format: "letter" });
@@ -80,7 +95,9 @@ export function generateInvoicePDF(invoice: InvoicePDFData): jsPDF {
   const pageHeight = doc.internal.pageSize.getHeight();
   const margin = 48;
   const isPO = invoice.kind === "supplier";
+  const isEstimate = invoice.kind === "estimate";
 
+  // ─── HEADER ────────────────────────────────────
   doc.setFillColor(...ORANGE);
   doc.rect(0, 0, pageWidth, 8, "F");
 
@@ -122,10 +139,13 @@ export function generateInvoicePDF(invoice: InvoicePDFData): jsPDF {
   }
 
   doc.setFont("helvetica", "bold");
-  doc.setFontSize(isPO ? 28 : 36);
+  doc.setFontSize(isPO ? 28 : isEstimate ? 32 : 36);
   doc.setTextColor(...TEXT_DARK);
-  doc.text(isPO ? "PURCHASE ORDER" : "INVOICE", pageWidth - margin, 64, { align: "right" });
+  doc.text(isPO ? "PURCHASE ORDER" : isEstimate ? "ESTIMATE" : "INVOICE", pageWidth - margin, 64, {
+    align: "right",
+  });
 
+  // ─── TWO-COLUMN META BLOCK ──────────────────────────────
   const metaTop = Math.max(headerBottom + 28, 132);
   const colGap = 24;
   const leftColX = margin;
@@ -133,10 +153,11 @@ export function generateInvoicePDF(invoice: InvoicePDFData): jsPDF {
   const rightColX = margin + leftColW + colGap;
   const rightColW = pageWidth - margin - rightColX;
 
+  // ─── LEFT: BILL TO ─────────────────────────────────────
   doc.setFont("helvetica", "normal");
   doc.setFontSize(8.5);
   doc.setTextColor(...TEXT_LIGHT);
-  doc.text(isPO ? "VENDOR" : "BILL TO", leftColX, metaTop);
+  doc.text(isPO ? "VENDOR" : isEstimate ? "PREPARED FOR" : "BILL TO", leftColX, metaTop);
 
   let billY = metaTop + 16;
   doc.setFont("helvetica", "bold");
@@ -197,19 +218,25 @@ export function generateInvoicePDF(invoice: InvoicePDFData): jsPDF {
 
   const leftColBottom = billY;
 
-  const total = Number(invoice.totalAmount);
-  const paid = Number(invoice.paidAmount);
-  const down = Number(invoice.downPayment);
-  const balance = Math.max(total - paid - down, 0);
+  // ─── RIGHT: INVOICE DETAILS ───────────────────────────────
+  // Decimal, not raw JS float arithmetic -- money values combined here
+  // (total minus paid minus down, and later a sum across every payment)
+  // are exactly the kind of repeated floating-point subtraction/addition
+  // that can drift by a cent, and this "Balance Due" figure is the most
+  // customer-facing number on the document.
+  const total = new Decimal(invoice.totalAmount);
+  const paid = new Decimal(invoice.paidAmount);
+  const down = new Decimal(invoice.downPayment ?? 0);
+  const balance = Decimal.max(total.minus(paid).minus(down), 0);
 
   const rep = invoice.employee?.name?.trim() || "—";
   const rows: { label: string; value: string }[] = [
-    { label: isPO ? "PO Number" : "Invoice Number", value: invoice.invoiceNumber },
-    { label: "Sales Rep", value: rep },
-    { label: "Invoice Date", value: formatDateOnly(invoice.invoiceDate) },
+    { label: isPO ? "PO Number" : isEstimate ? "Estimate Number" : "Invoice Number", value: invoice.invoiceNumber },
+    ...(isEstimate ? [] : [{ label: "Sales Rep", value: rep }]),
+    { label: isEstimate ? "Estimate Date" : "Invoice Date", value: formatDateOnly(invoice.invoiceDate) },
     {
-      label: isPO ? "Expected" : "Payment Due",
-      value: invoice.dueDate ? formatDateOnly(invoice.dueDate) : "On receipt",
+      label: isPO ? "Expected" : isEstimate ? "Valid Until" : "Payment Due",
+      value: invoice.dueDate ? formatDateOnly(invoice.dueDate) : isEstimate ? "—" : "On receipt",
     },
   ];
 
@@ -233,16 +260,20 @@ export function generateInvoicePDF(invoice: InvoicePDFData): jsPDF {
   doc.setFont("helvetica", "normal");
   doc.setFontSize(9);
   doc.setTextColor(...TEXT_MID);
-  doc.text("Amount Due", rightColX + 12, metaY + 19);
+  doc.text(isEstimate ? "Estimated Total" : "Amount Due", rightColX + 12, metaY + 19);
   doc.setFont("helvetica", "bold");
   doc.setFontSize(13);
   doc.setTextColor(...TEXT_DARK);
-  doc.text(pdfCurrency(balance.toFixed(2)), pageWidth - margin - 12, metaY + 20, { align: "right" });
+  doc.text(pdfCurrency(balance.toFixed(2)), pageWidth - margin - 12, metaY + 20, {
+    align: "right",
+  });
   metaY += boxH;
 
+  // ─── ITEMS TABLE ─────────────────────────────────────
   const tableStartY = Math.max(leftColBottom, metaY) + 28;
   const priceHeader = isPO ? "Cost" : "Price";
 
+  // Pre-compute per-item descriptions for use in didDrawCell
   const itemDescs = invoice.items.map((i) => i.itemDescription?.trim() ?? "");
 
   autoTable(doc, {
@@ -277,6 +308,7 @@ export function generateInvoicePDF(invoice: InvoicePDFData): jsPDF {
     },
     alternateRowStyles: { fillColor: [252, 252, 252] },
     didParseCell: (data) => {
+      // Increase minimum cell height for rows that have an item description
       if (data.section === "body" && data.column.index === 0) {
         const desc = itemDescs[data.row.index];
         if (desc) {
@@ -285,6 +317,7 @@ export function generateInvoicePDF(invoice: InvoicePDFData): jsPDF {
       }
     },
     didDrawCell: (data) => {
+      // Draw item description in smaller gray text below the bold item name
       if (data.section !== "body" || data.column.index !== 0) return;
       const desc = itemDescs[data.row.index];
       if (!desc) return;
@@ -299,6 +332,7 @@ export function generateInvoicePDF(invoice: InvoicePDFData): jsPDF {
     },
   });
 
+  // ─── TOTALS (lower-right) ───────────────────────────────
   const afterTableY =
     (doc as unknown as { lastAutoTable: { finalY: number } }).lastAutoTable.finalY + 20;
   const labelX = pageWidth - margin - 220;
@@ -321,14 +355,21 @@ export function generateInvoicePDF(invoice: InvoicePDFData): jsPDF {
   writeRow("Subtotal", pdfCurrency(String(invoice.subtotal)), { muted: true });
   writeRow("Tax", pdfCurrency(String(invoice.taxAmount)), { muted: true });
 
-  const ccFee = Number(invoice.creditCardFee ?? 0);
-  if (ccFee > 0) {
-    writeRow(company?.creditCardFeeLabel ?? "Card processing fee", pdfCurrency(ccFee.toFixed(2)), { muted: true });
+  const ccFee = new Decimal(invoice.creditCardFee ?? 0);
+  if (ccFee.gt(0)) {
+    writeRow(company?.creditCardFeeLabel ?? "Card processing fee", pdfCurrency(ccFee.toFixed(2)), {
+      muted: true,
+    });
   }
 
   for (const fee of invoice.appliedFees ?? []) {
-    const amt = Number(fee.amount);
-    if (!isFinite(amt) || amt <= 0) continue;
+    let amt: Decimal;
+    try {
+      amt = new Decimal(fee.amount);
+    } catch {
+      continue;
+    }
+    if (!amt.isFinite() || amt.lte(0)) continue;
     writeRow(fee.label, pdfCurrency(amt.toFixed(2)), { muted: true });
   }
 
@@ -337,38 +378,43 @@ export function generateInvoicePDF(invoice: InvoicePDFData): jsPDF {
   totalsY += 2;
   writeRow("Total", pdfCurrency(String(invoice.totalAmount)), { bold: true, size: 11 });
 
-  if (down > 0) {
-    writeRow("Down Payment", "-" + pdfCurrency(down.toFixed(2)), { muted: true });
+  if (!isEstimate) {
+    if (down.gt(0)) {
+      writeRow("Down Payment", "-" + pdfCurrency(down.toFixed(2)), { muted: true });
+    }
+
+    const payments = invoice.payments ?? [];
+    const paymentSum = payments.reduce((acc, p) => acc.plus(p.amount), new Decimal(0));
+    if (payments.length > 0) {
+      for (const p of payments) {
+        const dateStr = formatDateOnly(p.paymentDate);
+        const label = p.notes?.trim()
+          ? `Payment on ${dateStr} using ${p.notes.trim()}:`
+          : `Payment on ${dateStr}:`;
+        writeRow(label, "-" + pdfCurrency(String(p.amount)), { muted: true });
+      }
+      const leftover = paid.minus(paymentSum);
+      if (leftover.gt(0.005)) {
+        writeRow("Payment Received", "-" + pdfCurrency(leftover.toFixed(2)), { muted: true });
+      }
+    } else if (paid.gt(0)) {
+      writeRow("Payment Received", "-" + pdfCurrency(paid.toFixed(2)), { muted: true });
+    }
+
+    doc.setDrawColor(...RULE_GRAY);
+    doc.line(labelX, totalsY - 8, valueX, totalsY - 8);
+    totalsY += 4;
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(13);
+    doc.setTextColor(...BRAND_DARK);
+    doc.text("Balance Due", labelX, totalsY);
+    doc.text(pdfCurrency(balance.toFixed(2)), valueX, totalsY, { align: "right" });
+    totalsY += 30;
+  } else {
+    totalsY += 10;
   }
 
-  const payments = invoice.payments ?? [];
-  const paymentSum = payments.reduce((acc, p) => acc + Number(p.amount), 0);
-  if (payments.length > 0) {
-    for (const p of payments) {
-      const dateStr = formatDateOnly(p.paymentDate);
-      const label = p.notes?.trim()
-        ? `Payment on ${dateStr} using ${p.notes.trim()}:`
-        : `Payment on ${dateStr}:`;
-      writeRow(label, "-" + pdfCurrency(String(p.amount)), { muted: true });
-    }
-    const leftover = paid - paymentSum;
-    if (leftover > 0.005) {
-      writeRow("Payment Received", "-" + pdfCurrency(leftover.toFixed(2)), { muted: true });
-    }
-  } else if (paid > 0) {
-    writeRow("Payment Received", "-" + pdfCurrency(paid.toFixed(2)), { muted: true });
-  }
-
-  doc.setDrawColor(...RULE_GRAY);
-  doc.line(labelX, totalsY - 8, valueX, totalsY - 8);
-  totalsY += 4;
-  doc.setFont("helvetica", "bold");
-  doc.setFontSize(13);
-  doc.setTextColor(...BRAND_DARK);
-  doc.text("Balance Due", labelX, totalsY);
-  doc.text(pdfCurrency(balance.toFixed(2)), valueX, totalsY, { align: "right" });
-  totalsY += 30;
-
+  // ─── NOTES / TERMS ────────────────────────────────────
   if (invoice.notes && invoice.notes.trim()) {
     if (totalsY > pageHeight - 200) {
       doc.addPage();
@@ -401,6 +447,7 @@ export function generateInvoicePDF(invoice: InvoicePDFData): jsPDF {
     totalsY += 12;
   }
 
+  // Signature line
   if (!isPO) {
     if (totalsY > pageHeight - 80) {
       doc.addPage();
@@ -417,6 +464,7 @@ export function generateInvoicePDF(invoice: InvoicePDFData): jsPDF {
     doc.text("Customer Signature", margin, totalsY + 12);
   }
 
+  // ─── FOOTER (page numbering, every page) ───────────────────────
   const pageCount = doc.getNumberOfPages();
   for (let i = 1; i <= pageCount; i++) {
     doc.setPage(i);

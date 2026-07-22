@@ -138,7 +138,7 @@ export default function ReportsPage() {
       csv += `\n\nTotal Expenses,${d.total}`;
     } else if (reportType === "profitability") {
       const d = data as ProfitabilityData;
-      csv = ["Invoice Profitability", `Period: ${dateRange}`, "", "Invoice #,Customer,Date,Revenue,Cost,Gross Profit,Margin %,Status"].join("\n");
+      csv = ["Invoice Profitability Report", `Period: ${dateRange}`, "", "Invoice #,Customer,Date,Revenue,Cost,Gross Profit,Margin %,Status"].join("\n");
       csv += "\n" + d.rows.map((r) =>
         `${r.invoiceNumber},${r.customerName},${r.invoiceDate.split("T")[0]},${r.revenue},${r.cost},${r.grossProfit},${r.grossMargin}%,${r.paymentStatus}`
       ).join("\n");
@@ -228,17 +228,18 @@ export default function ReportsPage() {
       const d = data as ProfitabilityData;
       autoTable(doc, {
         startY: 35,
-        head: [["Invoice #", "Customer", "Date", "Revenue", "Cost", "Gross Profit", "Margin %"]],
+        head: [["Invoice #", "Customer", "Date", "Revenue", "Cost", "Gross Profit", "Margin %", "Status"]],
         body: d.rows.map((r) => [
           r.invoiceNumber,
           r.customerName,
           r.invoiceDate.split("T")[0],
           formatCurrency(r.revenue),
-          r.hasCost ? formatCurrency(r.cost) : "-",
+          formatCurrency(r.cost),
           formatCurrency(r.grossProfit),
           `${r.grossMargin}%`,
+          r.paymentStatus,
         ]),
-        foot: [["", "", "TOTALS", formatCurrency(d.totalRevenue), formatCurrency(d.totalCost), formatCurrency(d.totalProfit), `${d.overallMargin}%`]],
+        foot: [["", "", "TOTAL", formatCurrency(d.totalRevenue), formatCurrency(d.totalCost), formatCurrency(d.totalProfit), `${d.overallMargin}%`, ""]],
       });
     } else {
       const d = data as OutstandingData;
@@ -280,6 +281,7 @@ export default function ReportsPage() {
         <p className="text-sm text-gray-500 mt-0.5">Generate and export financial reports</p>
       </div>
 
+      {/* Controls */}
       <div className="card">
         <div className="flex flex-wrap gap-4 items-end">
           <div>
@@ -321,13 +323,14 @@ export default function ReportsPage() {
         </div>
       </div>
 
+      {/* Report output */}
       {data && (
         <div className="card">
           <div className="flex items-center justify-between mb-6">
             <h2 className="font-semibold text-gray-800 text-lg">{getReportLabel(reportType)}</h2>
             {(from || to) && (
               <span className="text-sm text-gray-500">
-                {from ? formatDateOnly(from) : "All time"} —{" "}
+                {from ? formatDateOnly(from) : "All time"} &mdash;{" "}
                 {to ? formatDateOnly(to) : "present"}
               </span>
             )}
@@ -441,27 +444,25 @@ export default function ReportsPage() {
 
           {reportType === "profitability" && (() => {
             const d = data as ProfitabilityData;
+            const margin = parseFloat(d.overallMargin);
             return (
               <div>
-                <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">
+                <div className="mb-6 grid grid-cols-2 md:grid-cols-4 gap-3">
                   <div className="bg-green-50 rounded-lg p-3 border border-green-100">
                     <span className="text-xs font-medium text-green-700 uppercase">Total Revenue</span>
-                    <p className="font-bold text-lg mt-1 text-green-700">{formatCurrency(d.totalRevenue)}</p>
+                    <p className="font-bold mt-1 text-green-700 text-lg">{formatCurrency(d.totalRevenue)}</p>
                   </div>
                   <div className="bg-red-50 rounded-lg p-3 border border-red-100">
                     <span className="text-xs font-medium text-red-700 uppercase">Total Cost</span>
-                    <p className="font-bold text-lg mt-1 text-red-700">{formatCurrency(d.totalCost)}</p>
+                    <p className="font-bold mt-1 text-red-700 text-lg">{formatCurrency(d.totalCost)}</p>
                   </div>
                   <div className={`rounded-lg p-3 border ${parseFloat(d.totalProfit) >= 0 ? "bg-blue-50 border-blue-100" : "bg-red-50 border-red-100"}`}>
                     <span className={`text-xs font-medium uppercase ${parseFloat(d.totalProfit) >= 0 ? "text-blue-700" : "text-red-700"}`}>Gross Profit</span>
-                    <p className={`font-bold text-lg mt-1 ${parseFloat(d.totalProfit) >= 0 ? "text-blue-700" : "text-red-700"}`}>{formatCurrency(d.totalProfit)}</p>
+                    <p className={`font-bold mt-1 text-lg ${parseFloat(d.totalProfit) >= 0 ? "text-blue-700" : "text-red-700"}`}>{formatCurrency(d.totalProfit)}</p>
                   </div>
-                  <div className="bg-gray-50 rounded-lg p-3 border border-gray-200">
-                    <span className="text-xs font-medium text-gray-600 uppercase">Overall Margin</span>
-                    <p className={`font-bold text-lg mt-1 ${
-                      parseFloat(d.overallMargin) >= 20 ? "text-green-700" :
-                      parseFloat(d.overallMargin) >= 0 ? "text-yellow-700" : "text-red-700"
-                    }`}>{d.overallMargin}%</p>
+                  <div className={`rounded-lg p-3 border ${margin >= 20 ? "bg-green-50 border-green-100" : margin >= 0 ? "bg-yellow-50 border-yellow-100" : "bg-red-50 border-red-100"}`}>
+                    <span className={`text-xs font-medium uppercase ${margin >= 20 ? "text-green-700" : margin >= 0 ? "text-yellow-700" : "text-red-700"}`}>Overall Margin</span>
+                    <p className={`font-bold mt-1 text-lg ${margin >= 20 ? "text-green-700" : margin >= 0 ? "text-yellow-700" : "text-red-700"}`}>{d.overallMargin}%</p>
                   </div>
                 </div>
                 <table className="w-full text-sm">
@@ -479,8 +480,8 @@ export default function ReportsPage() {
                   </thead>
                   <tbody className="divide-y divide-gray-50">
                     {d.rows.map((row) => {
-                      const margin = parseFloat(row.grossMargin);
-                      const marginClass = margin >= 20 ? "text-green-600 font-semibold" : margin >= 0 ? "text-yellow-600 font-semibold" : "text-red-600 font-semibold";
+                      const m = parseFloat(row.grossMargin);
+                      const marginColor = m >= 20 ? "text-green-600" : m >= 0 ? "text-yellow-600" : "text-red-600";
                       return (
                         <tr key={row.id}>
                           <td className="py-2 font-medium">{row.invoiceNumber}</td>
@@ -488,15 +489,12 @@ export default function ReportsPage() {
                           <td className="py-2 text-gray-500">{formatDateOnly(row.invoiceDate)}</td>
                           <td className="py-2 text-right">{formatCurrency(row.revenue)}</td>
                           <td className="py-2 text-right">
-                            {row.hasCost
-                              ? <span className="text-red-600">{formatCurrency(row.cost)}</span>
-                              : <span className="text-gray-400 text-xs">No cost linked</span>
-                            }
+                            {row.hasCost ? formatCurrency(row.cost) : <span className="text-gray-400 text-xs">No cost linked</span>}
                           </td>
-                          <td className={`py-2 text-right ${parseFloat(row.grossProfit) >= 0 ? "text-green-700" : "text-red-700"} font-medium`}>
-                            {formatCurrency(row.grossProfit)}
+                          <td className="py-2 text-right font-medium">{formatCurrency(row.grossProfit)}</td>
+                          <td className={`py-2 text-right font-semibold ${marginColor}`}>
+                            {row.hasCost ? `${row.grossMargin}%` : <span className="text-gray-400 text-xs">&mdash;</span>}
                           </td>
-                          <td className={`py-2 text-right ${marginClass}`}>{row.grossMargin}%</td>
                           <td className="py-2 text-center">
                             <PaymentBadge status={row.paymentStatus as "UNPAID" | "PARTIALLY_PAID" | "PAID"} />
                           </td>

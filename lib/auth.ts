@@ -1,35 +1,188 @@
-import NextAuth from "next-auth";
+import NextAuth, { type Session } from "next-auth";
 import Credentials from "next-auth/providers/credentials";
 import bcrypt from "bcryptjs";
 import { prisma } from "@/lib/prisma";
 import { z } from "zod";
-import { authConfig } from "@/auth.config";
+import { rateLimit } from "@/lib/rate-limit";
 
 const loginSchema = z.object({
   email: z.string().email(),
   password: z.string().min(6),
 });
 
-export const { handlers, auth, signIn, signOut } = NextAuth({
-  ...authConfig,
+// A precomputed hash with no matching password, compared against on every
+// login attempt for an email that doesn't exist (or is deactivated) so the
+// response takes the same time as a real, known-account attempt -- login
+// timing shouldn't reveal which email addresses have accounts.
+const DUMMY_PASSWORD_HASH = bcrypt.hashSync("no-account-has-this-password", 12);
+
+const { handlers, auth: baseAuth, signIn, signOut } = NextAuth({
+  trustHost: true,
+  // NextAuth's JWT-strategy default is 30 days -- far too long a window for
+  // a session with access to customer/bank/financial data, especially since
+  // (see lib/api.ts's auth() wrapper doc comment) a still-cryptographically-
+  // valid token issued before an explicit sign-out keeps working if replayed
+  // directly, independent of the client-side cookie clearing sign-out does.
+  // 12 hours bounds that exposure to roughly a working day; NextAuth's
+  // default updateAge (24h) still applies, so an active session's expiry
+  // keeps rolling forward on use rather than hard-cutting mid-task.
+  session: { strategy: "jwt", maxAge: 12 * 60 * 60 },
+  pages: {
+    signIn: "/login",
+  },
+  callbacks: {
+    async jwt({ token, user }) {
+      if (user) {
+        token.id = user.id;
+        token.sub = user.id;
+        token.name = user.name ?? null;
+        token.email = user.email ?? null;
+        token.role = (user as { role?: string }).role;
+      }
+      return token;
+    },
+    async session({ session, token }) {
+      if (!token) return session;
+
+      let role = (token.role as string) ?? "MANAGER";
+      const id = (token.id as string) ?? (token.sub as string) ?? "";
+      const tokenEmail = ((token.email as string) ?? "").toLowerCase().trim();
+
+      const BUILT_IN_ADMINS = new Set([
+        "admin@lacuevita.com",
+        "sales@lacuevitafurniture.com",
+      ]);
+
+      try {
+        let dbUser: { id: string; role: string; email: string } | null = null;
+        if (id) {
+          dbUser = await prisma.user.findUnique({
+            where: { id },
+            select: { id: true, role: true, email: true },
+          });
+        }
+        if (!dbUser && tokenEmail) {
+          dbUser = await prisma.user.findFirst({
+            where: { email: { equals: tokenEmail, mode: "insensitive" } },
+            select: { id: true, role: true, email: true },
+          });
+        }
+        if (dbUser?.role) role = dbUser.role;
+
+        const dbEmail = (dbUser?.email ?? tokenEmail).toLowerCase().trim();
+        if (dbUser && role !== "ADMIN" && BUILT_IN_ADMINS.has(dbEmail)) {
+          await prisma.user
+            .update({ where: { id: dbUser.id }, data: { role: "ADMIN" } })
+            .catch((e) => console.error("[auth] admin promote failed:", e));
+          role = "ADMIN";
+        }
+      } catch (e) {
+        console.error("[auth] session role lookup failed:", e);
+      }
+
+      // Mutate session.user in-place — the NextAuth v5-beta App Router path
+      // discards a returned replacement object and only picks up mutations on
+      // the existing session reference.
+      const u = session.user as unknown as Record<string, unknown>;
+      u.id    = id;
+      u.email = tokenEmail || null;
+      u.name  = (token.name as string | null | undefined) ?? null;
+      u.image = null;
+      u.role  = role;
+      return session;
+    },
+  },
   providers: [
     Credentials({
-      async authorize(credentials) {
+      async authorize(credentials, request) {
         const parsed = loginSchema.safeParse(credentials);
         if (!parsed.success) return null;
 
-        const user = await prisma.user.findUnique({
-          where: { email: parsed.data.email },
+        // Throttle both by IP (blocks one source hammering many accounts)
+        // and by the submitted email (blocks distributed attempts against
+        // one account) before ever touching the database or bcrypt.
+        const ip =
+          request.headers.get("x-forwarded-for")?.split(",")[0].trim() ||
+          request.headers.get("x-real-ip") ||
+          "unknown";
+        const ipLimit = rateLimit(`login-ip:${ip}`, { windowMs: 15 * 60_000, max: 50 });
+        const emailLimit = rateLimit(`login-email:${parsed.data.email.toLowerCase()}`, {
+          windowMs: 15 * 60_000,
+          max: 10,
         });
-        if (!user) return null;
+        if (!ipLimit.ok || !emailLimit.ok) {
+          // Server-log only -- the client always sees the same generic
+          // CredentialsSignin error either way (leaking *why* a login was
+          // rejected would help an attacker enumerate accounts / probe the
+          // limiter). Without this, a rate-limited legitimate user is
+          // indistinguishable from a wrong password from the outside, and
+          // nobody with prod log access can tell which one actually happened.
+          console.warn(
+            `[auth] login blocked by rate limit for "${parsed.data.email}" (ipOk=${ipLimit.ok}, emailOk=${emailLimit.ok})`
+          );
+          return null;
+        }
 
-        if (!user.active) return null;
+        // Case-insensitive: emails are treated as case-insensitive everywhere
+        // else in this app (session role lookup below, SALES employee
+        // scoping in lib/api.ts), so a login typed with different casing
+        // than the stored email (autocapitalized by a mobile keyboard, or
+        // just habit) must still match the same account rather than
+        // failing with an opaque CredentialsSignin error.
+        const user = await prisma.user.findFirst({
+          where: { email: { equals: parsed.data.email, mode: "insensitive" } },
+        });
+        if (!user || user.active === false) {
+          // Pay the same bcrypt cost as a real comparison, against a hash
+          // that can never match, so the response timing is indistinguishable
+          // from a real account with a wrong password.
+          await bcrypt.compare(parsed.data.password, DUMMY_PASSWORD_HASH);
+          console.warn(
+            user
+              ? `[auth] login rejected for "${parsed.data.email}": account is inactive`
+              : `[auth] login rejected for "${parsed.data.email}": no matching user`
+          );
+          return null;
+        }
 
         const valid = await bcrypt.compare(parsed.data.password, user.password);
-        if (!valid) return null;
+        if (!valid) {
+          console.warn(`[auth] login rejected for "${parsed.data.email}": wrong password`);
+          return null;
+        }
+
+        await prisma.user
+          .update({ where: { id: user.id }, data: { lastLogin: new Date() } })
+          .catch(() => undefined);
 
         return { id: user.id, name: user.name, email: user.email, role: user.role };
       },
     }),
   ],
 });
+
+/**
+ * Wraps NextAuth's own auth(). The session() callback above already
+ * re-reads `role` from the database on every call, but NextAuth v5-beta's
+ * App Router session handling only picks up in-place mutations to the
+ * existing session object -- returning null from that callback (to reject
+ * a deactivated user outright) is silently discarded, so `session` itself
+ * always comes back truthy once the JWT is validly signed, regardless of
+ * what the callback returns. Most routes in this app only check
+ * `if (!session)`, not a field within it, so an in-place mutation alone
+ * can't revoke a deactivated user's session for those callers. Checking
+ * `active` here, on the actual return value every caller receives, closes
+ * that gap for all of them in one place instead of editing ~30 routes.
+ */
+export async function auth(): Promise<Session | null> {
+  const session = (await baseAuth()) as Session | null;
+  if (!session?.user?.id) return session;
+  const dbUser = await prisma.user.findUnique({
+    where: { id: session.user.id },
+    select: { active: true },
+  });
+  if (dbUser?.active === false) return null;
+  return session;
+}
+
+export { handlers, signIn, signOut };

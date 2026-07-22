@@ -1,8 +1,4 @@
-import {
-  PrismaClient,
-  PaymentStatus,
-  SupplierCategory,
-} from "@prisma/client";
+import { PrismaClient, PaymentStatus, SupplierCategory } from "@prisma/client";
 import bcrypt from "bcryptjs";
 import { Decimal } from "@prisma/client/runtime/library";
 
@@ -11,12 +7,12 @@ const prisma = new PrismaClient();
 async function main() {
   // Users
   const adminPassword = await bcrypt.hash("admin123", 12);
-  await prisma.user.upsert({
-    where: { email: "admin@lacuevita.com" },
+  const admin = await prisma.user.upsert({
+    where: { email: "admin@bizledger.com" },
     update: {},
     create: {
       name: "Admin User",
-      email: "admin@lacuevita.com",
+      email: "admin@bizledger.com",
       password: adminPassword,
       role: "ADMIN",
     },
@@ -24,11 +20,11 @@ async function main() {
 
   const managerPassword = await bcrypt.hash("manager123", 12);
   await prisma.user.upsert({
-    where: { email: "manager@lacuevita.com" },
+    where: { email: "manager@bizledger.com" },
     update: {},
     create: {
-      name: "Manager",
-      email: "manager@lacuevita.com",
+      name: "Jane Manager",
+      email: "manager@bizledger.com",
       password: managerPassword,
       role: "MANAGER",
     },
@@ -174,6 +170,35 @@ async function main() {
     },
   });
 
+  const ci3 = await prisma.customerInvoice.upsert({
+    where: { id: "ci-003" },
+    update: {},
+    create: {
+      id: "ci-003",
+      invoiceNumber: "INV-2024-003",
+      customerId: initech.id,
+      invoiceDate: new Date("2024-03-10"),
+      dueDate: new Date("2024-04-10"),
+      subtotal: new Decimal("3200.00"),
+      taxAmount: new Decimal("256.00"),
+      totalAmount: new Decimal("3456.00"),
+      paidAmount: new Decimal("0.00"),
+      paymentStatus: PaymentStatus.UNPAID,
+      notes: "March maintenance contract",
+      items: {
+        create: [
+          {
+            description: "System Maintenance",
+            quantity: new Decimal("1"),
+            unitPrice: new Decimal("3200.00"),
+            taxRate: new Decimal("0.08"),
+            lineTotal: new Decimal("3200.00"),
+          },
+        ],
+      },
+    },
+  });
+
   const ci4 = await prisma.customerInvoice.upsert({
     where: { id: "ci-004" },
     update: {},
@@ -202,9 +227,6 @@ async function main() {
       },
     },
   });
-
-  // ci3 referenced but unused — skip in seed
-  void initech;
 
   // Supplier Invoices
   await prisma.supplierInvoice.upsert({
@@ -353,8 +375,8 @@ async function main() {
   });
 
   console.log("✅ Seed complete");
-  console.log("  Admin: admin@lacuevita.com / admin123");
-  console.log("  Manager: manager@lacuevita.com / manager123");
+  console.log("  Admin: admin@bizledger.com / admin123");
+  console.log("  Manager: manager@bizledger.com / manager123");
 }
 
 main()

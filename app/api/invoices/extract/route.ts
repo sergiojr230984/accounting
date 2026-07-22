@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
-import { auth } from "@/lib/auth";
 import Anthropic from "@anthropic-ai/sdk";
+import { requireAuth, checkRateLimit } from "@/lib/api";
 
 // Increase body size limit for PDF uploads and allow longer AI response time
 export const maxDuration = 60;
@@ -63,8 +63,11 @@ Rules:
 - taxRate is a decimal (0.08 means 8%)`;
 
 export async function POST(request: Request) {
-  const session = await auth();
-  if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  const guard = await requireAuth();
+  if (guard instanceof NextResponse) return guard;
+  // AI extraction is expensive — cap to 10 calls per minute per IP.
+  const limited = checkRateLimit(request, "invoice-extract", { windowMs: 60_000, max: 10 });
+  if (limited) return limited;
 
   const apiKey = process.env.ANTHROPIC_API_KEY?.trim();
   if (!apiKey) {

@@ -13,8 +13,8 @@ import FileUpload from "@/components/FileUpload";
 import InvoiceItemsEditor from "@/components/InvoiceItemsEditor";
 import InvoiceDocumentPreview from "@/components/InvoiceDocumentPreview";
 import { formatCurrency } from "@/lib/money";
-import { generateInvoicePDF } from "@/lib/invoice-pdf";
 import { formatDateOnly } from "@/lib/date";
+import { generateInvoicePDF } from "@/lib/invoice-pdf";
 
 const editSchema = z.object({
   invoiceNumber: z.string().min(1),
@@ -28,7 +28,6 @@ const editSchema = z.object({
   items: z.array(
     z.object({
       description: z.string().min(1),
-      itemDescription: z.string().optional(),
       quantity: z.string(),
       unitCost: z.string(),
       taxRate: z.string().default("0"),
@@ -51,7 +50,7 @@ interface InvoiceDetail {
   notes: string | null;
   customerInvoiceRef: string | null;
   supplier: { id: string; name: string; email: string | null; phone: string | null; address: string | null; zelle: string | null };
-  items: { id: string; description: string; itemDescription: string | null; quantity: string; unitCost: string; taxRate: string; lineTotal: string }[];
+  items: { id: string; description: string; quantity: string; unitCost: string; taxRate: string; lineTotal: string }[];
   payments: { id: string; amount: string; paymentDate: string; notes: string | null }[];
   files: { id: string; originalName: string; mimeType: string }[];
 }
@@ -94,7 +93,6 @@ export default function SupplierInvoiceDetailPage() {
       customerInvoiceRef: data.customerInvoiceRef ?? "",
       items: data.items.map((item: InvoiceDetail["items"][0]) => ({
         description: item.description,
-        itemDescription: item.itemDescription ?? "",
         quantity: item.quantity,
         unitCost: item.unitCost,
         taxRate: item.taxRate,
@@ -162,7 +160,6 @@ export default function SupplierInvoiceDetailPage() {
       },
       items: invoice.items.map((i) => ({
         description: i.description,
-        itemDescription: i.itemDescription ?? undefined,
         quantity: i.quantity,
         unitCost: i.unitCost,
         taxRate: i.taxRate,
@@ -312,6 +309,7 @@ export default function SupplierInvoiceDetailPage() {
             partyName={invoice.supplier.name}
             partyEmail={invoice.supplier.email}
             partyPhone={invoice.supplier.phone}
+            partyAddress={invoice.supplier.address}
             priceLabel="Unit Cost"
             items={(watchedItems ?? []).map((item) => ({
               description: item.description,
@@ -383,12 +381,7 @@ export default function SupplierInvoiceDetailPage() {
               <tbody className="divide-y divide-gray-50">
                 {invoice.items.map((item) => (
                   <tr key={item.id}>
-                    <td className="py-2">
-                      <div>{item.description}</div>
-                      {item.itemDescription && (
-                        <div className="text-xs text-gray-400 mt-0.5">{item.itemDescription}</div>
-                      )}
-                    </td>
+                    <td className="py-2">{item.description}</td>
                     <td className="py-2 text-right">{item.quantity}</td>
                     <td className="py-2 text-right">{formatCurrency(item.unitCost)}</td>
                     <td className="py-2 text-right">{(parseFloat(item.taxRate) * 100).toFixed(0)}%</td>

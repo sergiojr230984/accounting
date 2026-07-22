@@ -1,17 +1,26 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { Fragment, useEffect, useState } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import { Plus, Truck, Loader2, Search, Pencil, Trash2, X, Check } from "lucide-react";
 import Link from "next/link";
 
+const CATEGORIES = ["COGS", "SERVICES_EXPENSE", "OPERATING_EXPENSE", "OTHER"] as const;
+
 const schema = z.object({
   name: z.string().min(1, "Name is required"),
   email: z.string().email("Must be a valid email").optional().or(z.literal("")),
   phone: z.string().optional(),
   address: z.string().optional(),
+  paymentTermsDays: z.coerce.number().int().min(0).max(365).default(30),
+  defaultCategory: z.enum(CATEGORIES).optional().or(z.literal("")),
+  bankName: z.string().optional(),
+  bankAccountNumber: z.string().optional(),
+  bankRouting: z.string().optional(),
+  zelle: z.string().optional(),
+  paymentInstructions: z.string().optional(),
 });
 type FormData = z.infer<typeof schema>;
 
@@ -21,6 +30,13 @@ interface Supplier {
   email: string | null;
   phone: string | null;
   address: string | null;
+  paymentTermsDays: number;
+  defaultCategory: string | null;
+  bankName: string | null;
+  bankAccountNumber: string | null;
+  bankRouting: string | null;
+  zelle: string | null;
+  paymentInstructions: string | null;
   _count: { invoices: number };
 }
 
@@ -44,7 +60,7 @@ function SupplierForm({
     formState: { errors },
   } = useForm<FormData>({
     resolver: zodResolver(schema),
-    defaultValues: defaultValues ?? {},
+    defaultValues: { paymentTermsDays: 30, defaultCategory: "", ...(defaultValues ?? {}) } as FormData,
   });
 
   async function onSubmit(data: FormData) {
@@ -79,6 +95,52 @@ function SupplierForm({
         <div>
           <label className="label">Address</label>
           <input className="input" placeholder="123 Main St, City, State" {...register("address")} />
+        </div>
+        <div>
+          <label className="label">Payment terms (days)</label>
+          <input type="number" className="input" placeholder="30" {...register("paymentTermsDays")} />
+          <p className="text-xs text-gray-400 mt-1">e.g. 30 = Net 30. Auto-calculates due date on their invoices.</p>
+        </div>
+        <div>
+          <label className="label">Default expense category</label>
+          <select className="input" {...register("defaultCategory")}>
+            <option value="">— None —</option>
+            <option value="COGS">Cost of Goods Sold</option>
+            <option value="SERVICES_EXPENSE">Services Expense</option>
+            <option value="OPERATING_EXPENSE">Operating Expense</option>
+            <option value="OTHER">Other</option>
+          </select>
+        </div>
+      </div>
+
+      <div className="mt-5 pt-4 border-t">
+        <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3">Payment details</p>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <div>
+            <label className="label">Bank name</label>
+            <input className="input" placeholder="First National Bank" {...register("bankName")} />
+          </div>
+          <div>
+            <label className="label">Account number</label>
+            <input className="input" placeholder="••••1234" {...register("bankAccountNumber")} />
+          </div>
+          <div>
+            <label className="label">Routing / ABA</label>
+            <input className="input" {...register("bankRouting")} />
+          </div>
+          <div className="sm:col-span-2">
+            <label className="label">Zelle</label>
+            <input className="input" placeholder="email or phone" {...register("zelle")} />
+          </div>
+          <div className="sm:col-span-2">
+            <label className="label">Payment instructions</label>
+            <textarea
+              className="input"
+              rows={2}
+              placeholder="Pay via Zelle to ops@acme.com, reference invoice #"
+              {...register("paymentInstructions")}
+            />
+          </div>
         </div>
       </div>
 
@@ -115,7 +177,11 @@ export default function SuppliersPage() {
     setLoading(true);
     try {
       const res = await fetch("/api/suppliers");
-      setSuppliers(await res.json());
+      // A non-ok response (e.g. 403 for a role that can't see supplier bank
+      // details) still has a JSON body, but it's an error object, not an
+      // array -- setting it directly used to crash the whole page the
+      // moment `suppliers.filter(...)` ran below.
+      setSuppliers(res.ok ? await res.json() : []);
     } finally {
       setLoading(false);
     }
@@ -236,6 +302,7 @@ export default function SuppliersPage() {
               <th className="text-left px-5 py-3 text-xs font-semibold text-gray-500 uppercase">Email</th>
               <th className="text-left px-5 py-3 text-xs font-semibold text-gray-500 uppercase">Phone</th>
               <th className="text-left px-5 py-3 text-xs font-semibold text-gray-500 uppercase">Address</th>
+              <th className="text-left px-5 py-3 text-xs font-semibold text-gray-500 uppercase">Zelle</th>
               <th className="text-center px-5 py-3 text-xs font-semibold text-gray-500 uppercase">Invoices</th>
               <th className="px-5 py-3" />
             </tr>
@@ -244,7 +311,7 @@ export default function SuppliersPage() {
             {loading ? (
               Array.from({ length: 4 }).map((_, i) => (
                 <tr key={i}>
-                  {Array.from({ length: 6 }).map((_, j) => (
+                  {Array.from({ length: 7 }).map((_, j) => (
                     <td key={j} className="px-5 py-3">
                       <div className="h-4 bg-gray-100 rounded animate-pulse" />
                     </td>
@@ -253,19 +320,20 @@ export default function SuppliersPage() {
               ))
             ) : filtered.length === 0 ? (
               <tr>
-                <td colSpan={6} className="px-5 py-12 text-center text-gray-400">
+                <td colSpan={7} className="px-5 py-12 text-center text-gray-400">
                   <Truck className="w-8 h-8 mx-auto mb-2 opacity-40" />
                   {search ? "No suppliers match your search" : "No suppliers yet — add your first one above"}
                 </td>
               </tr>
             ) : (
               filtered.map((s) => (
-                <>
-                  <tr key={s.id} className="hover:bg-gray-50 transition-colors">
+                <Fragment key={s.id}>
+                  <tr className="hover:bg-gray-50 transition-colors">
                     <td className="px-5 py-3 font-medium text-gray-900">{s.name}</td>
                     <td className="px-5 py-3 text-gray-500">{s.email ?? "—"}</td>
                     <td className="px-5 py-3 text-gray-500">{s.phone ?? "—"}</td>
                     <td className="px-5 py-3 text-gray-500 max-w-xs truncate">{s.address ?? "—"}</td>
+                    <td className="px-5 py-3 text-gray-500">{s.zelle ?? "—"}</td>
                     <td className="px-5 py-3 text-center">
                       <Link
                         href={`/invoices/supplier?supplierId=${s.id}`}
@@ -300,7 +368,7 @@ export default function SuppliersPage() {
                   {/* Inline edit form */}
                   {editingId === s.id && (
                     <tr key={`edit-${s.id}`}>
-                      <td colSpan={6} className="px-5 py-4 bg-blue-50 border-b border-blue-100">
+                      <td colSpan={7} className="px-5 py-4 bg-blue-50 border-b border-blue-100">
                         <p className="text-xs font-semibold text-brand-700 mb-3 uppercase tracking-wide">
                           Editing: {s.name}
                         </p>
@@ -310,6 +378,13 @@ export default function SuppliersPage() {
                             email: s.email ?? "",
                             phone: s.phone ?? "",
                             address: s.address ?? "",
+                            paymentTermsDays: s.paymentTermsDays ?? 30,
+                            defaultCategory: (s.defaultCategory as FormData["defaultCategory"]) ?? "",
+                            bankName: s.bankName ?? "",
+                            bankAccountNumber: s.bankAccountNumber ?? "",
+                            bankRouting: s.bankRouting ?? "",
+                            zelle: s.zelle ?? "",
+                            paymentInstructions: s.paymentInstructions ?? "",
                           }}
                           submitLabel="Save Changes"
                           onSave={(data) => handleEdit(s.id, data)}
@@ -322,12 +397,12 @@ export default function SuppliersPage() {
                   {/* Delete error */}
                   {deleteError[s.id] && (
                     <tr key={`err-${s.id}`}>
-                      <td colSpan={6} className="px-5 py-2 bg-red-50">
+                      <td colSpan={7} className="px-5 py-2 bg-red-50">
                         <p className="text-red-600 text-xs">{deleteError[s.id]}</p>
                       </td>
                     </tr>
                   )}
-                </>
+                </Fragment>
               ))
             )}
           </tbody>
