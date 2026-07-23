@@ -12,17 +12,7 @@ import {
   ChevronRight,
   Sliders,
 } from "lucide-react";
-import {
-  ResponsiveContainer,
-  AreaChart,
-  Area,
-  XAxis,
-  YAxis,
-  Tooltip,
-  CartesianGrid,
-  Legend,
-} from "recharts";
-import { format } from "date-fns";
+import InteractiveTrendChart, { type MonthlyPoint } from "@/components/InteractiveTrendChart";
 import { formatCurrency } from "@/lib/money";
 
 interface DashboardData {
@@ -38,7 +28,7 @@ interface DashboardData {
   unpaidSupplierCount: number;
   unpaidSupplierTotal: string;
   totalSupplierExpenses: string;
-  monthlyChart: { month: string; income: number; expenses: number; profit: number }[];
+  monthlyChart: MonthlyPoint[];
 }
 
 interface OverdueInvoice {
@@ -170,7 +160,7 @@ export default function DashboardPage() {
           </button>
         </div>
 
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+        <div className="max-w-2xl">
           {/* Overdue invoices */}
           <div className="card p-0 overflow-hidden">
             <div className="px-6 py-5 border-b border-gray-100">
@@ -231,77 +221,14 @@ export default function DashboardPage() {
             )}
           </div>
 
-          {/* Cash flow */}
-          <div className="card p-0 overflow-hidden">
-            <div className="px-6 py-5 border-b border-gray-100 flex items-center justify-between">
-              <div>
-                <h3 className="font-bold text-gray-900">Cash flow</h3>
-                <p className="text-xs text-gray-500 mt-0.5">Always displays cash basis (paid)</p>
-              </div>
-              <span className="text-xs text-gray-500 bg-gray-50 border border-gray-200 px-2 py-1 rounded">Last 12 months</span>
-            </div>
-            <div className="px-2 py-4">
-              {loading ? (
-                <div className="h-64 bg-gray-50 animate-pulse rounded" />
-              ) : data ? (
-                <>
-                  <div className="px-4 flex items-center gap-4 text-xs text-gray-600 mb-2">
-                    <span className="flex items-center gap-1.5">
-                      <span className="w-3 h-3 bg-green-500 rounded-sm" /> Inflow
-                    </span>
-                    <span className="flex items-center gap-1.5">
-                      <span className="w-3 h-3 bg-red-400 rounded-sm" /> Outflow
-                    </span>
-                    <span className="flex items-center gap-1.5">
-                      <span className="w-3 h-3 bg-brand-500 rounded-sm" /> Profit
-                    </span>
-                  </div>
-                  <ResponsiveContainer width="100%" height={240}>
-                    <AreaChart data={data.monthlyChart} margin={{ top: 5, right: 16, left: 8, bottom: 0 }}>
-                      <defs>
-                        <linearGradient id="incomeGrad" x1="0" y1="0" x2="0" y2="1">
-                          <stop offset="5%" stopColor="#22c55e" stopOpacity={0.25} />
-                          <stop offset="95%" stopColor="#22c55e" stopOpacity={0} />
-                        </linearGradient>
-                        <linearGradient id="expenseGrad" x1="0" y1="0" x2="0" y2="1">
-                          <stop offset="5%" stopColor="#ef4444" stopOpacity={0.25} />
-                          <stop offset="95%" stopColor="#ef4444" stopOpacity={0} />
-                        </linearGradient>
-                        <linearGradient id="profitGrad" x1="0" y1="0" x2="0" y2="1">
-                          <stop offset="5%" stopColor="#f97316" stopOpacity={0.25} />
-                          <stop offset="95%" stopColor="#f97316" stopOpacity={0} />
-                        </linearGradient>
-                      </defs>
-                      <CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6" />
-                      <XAxis
-                        dataKey="month"
-                        tick={{ fontSize: 10, fill: "#9ca3af" }}
-                        axisLine={false}
-                        tickLine={false}
-                        interval={0}
-                        tickFormatter={(v: string) => {
-                          // API sends "YYYY-MM" — show short month name, and
-                          // tag January with the year so the reader can see
-                          // year boundaries in the 12-month series.
-                          const [y, m] = v.split("-");
-                          const names = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
-                          const name = names[parseInt(m, 10) - 1] ?? v;
-                          return m === "01" ? `${name} '${y.slice(2)}` : name;
-                        }}
-                      />
-                      <YAxis tick={{ fontSize: 10, fill: "#9ca3af" }} tickFormatter={(v) => `$${(v / 1000).toFixed(0)}k`} axisLine={false} tickLine={false} />
-                      <Tooltip formatter={(v: number) => formatCurrency(v)} />
-                      <Legend wrapperStyle={{ display: "none" }} />
-                      <Area type="monotone" dataKey="income" stroke="#22c55e" fill="url(#incomeGrad)" strokeWidth={2} name="Income" />
-                      <Area type="monotone" dataKey="expenses" stroke="#ef4444" fill="url(#expenseGrad)" strokeWidth={2} name="Expenses" />
-                      <Area type="monotone" dataKey="profit" stroke="#f97316" fill="url(#profitGrad)" strokeWidth={2} name="Profit" />
-                    </AreaChart>
-                  </ResponsiveContainer>
-                </>
-              ) : null}
-            </div>
-          </div>
         </div>
+
+        {/* Cash flow */}
+        {!loading && data && (
+          <div className="mt-5">
+            <InteractiveTrendChart data={data.monthlyChart} />
+          </div>
+        )}
       </div>
 
       {/* P&L summary */}
