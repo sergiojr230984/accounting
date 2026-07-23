@@ -1,6 +1,5 @@
 import { NextResponse } from "next/server";
-import { auth } from "@/lib/auth";
-import { requirePermission } from "@/lib/permissions";
+import { requireRole } from "@/lib/api";
 import { prisma } from "@/lib/prisma";
 import Decimal from "decimal.js";
 
@@ -25,10 +24,8 @@ function monthsInRange(from: string | null, to: string | null): string[] {
 }
 
 export async function GET(request: Request) {
-  const session = await auth();
-  if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  const { allowed } = requirePermission(session, "report_financial", "read");
-  if (!allowed) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  const guard = await requireRole("ADMIN");
+  if (guard instanceof NextResponse) return guard;
 
   const { searchParams } = new URL(request.url);
   const from = searchParams.get("from");

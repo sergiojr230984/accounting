@@ -80,6 +80,14 @@ export async function POST(request: Request) {
   const { supplierId, invoiceNumber, invoiceDate, dueDate, category, items, notes, paymentStatus, paidAmount, customerInvoiceRef } =
     parsed.data;
 
+  // supplierId is a foreign key the DB will reject with a raw constraint-
+  // violation error if it references a row that doesn't exist -- checked
+  // here so that's a clean 404 instead of an unhandled 500.
+  const supplierExists = await prisma.supplier.findUnique({ where: { id: supplierId }, select: { id: true } });
+  if (!supplierExists) {
+    return NextResponse.json({ error: "Selected supplier no longer exists." }, { status: 404 });
+  }
+
   const existing = await prisma.supplierInvoice.findUnique({
     where: { invoiceNumber_supplierId: { invoiceNumber, supplierId } },
   });
@@ -93,13 +101,19 @@ export async function POST(request: Request) {
   let subtotal = new Decimal(0);
   let taxAmount = new Decimal(0);
 
+  // Round each line's total to 2 decimals FIRST, then sum the already-
+  // rounded values into subtotal -- same fix as the customer-invoice
+  // equivalent of this pattern (previously subtotal/taxAmount accumulated
+  // full-precision Decimals while lineTotal was rounded separately for
+  // storage, so the two could legitimately disagree by a cent).
   const computedItems = items.map((item) => {
     const qty = new Decimal(item.quantity);
     const cost = new Decimal(item.unitCost);
     const rate = new Decimal(item.taxRate);
-    const lineTotal = qty.times(cost);
+    const lineTotal = qty.times(cost).toDecimalPlaces(2);
+    const lineTax = lineTotal.times(rate).toDecimalPlaces(2);
     subtotal = subtotal.plus(lineTotal);
-    taxAmount = taxAmount.plus(lineTotal.times(rate));
+    taxAmount = taxAmount.plus(lineTax);
     return { ...item, lineTotal: lineTotal.toFixed(2) };
   });
 

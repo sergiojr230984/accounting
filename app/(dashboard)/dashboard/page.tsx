@@ -1,15 +1,17 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
+import Link from "next/link";
+import { useSession } from "next-auth/react";
 import {
-  TrendingUp,
-  TrendingDown,
-  DollarSign,
+  FileText,
   ShoppingCart,
-  AlertTriangle,
-  BarChart2,
+  Users,
+  Receipt,
+  AlertCircle,
+  ChevronRight,
+  Sliders,
 } from "lucide-react";
-import StatCard from "@/components/StatCard";
 import InteractiveTrendChart, { type MonthlyPoint } from "@/components/InteractiveTrendChart";
 import { formatCurrency } from "@/lib/money";
 
@@ -29,113 +31,222 @@ interface DashboardData {
   monthlyChart: MonthlyPoint[];
 }
 
+interface OverdueInvoice {
+  id: string;
+  invoiceNumber: string;
+  totalAmount: string;
+  paidAmount: string;
+  dueDate: string;
+  customer: { name: string };
+}
+
+const QUICK_ACTIONS = [
+  {
+    href: "/invoices/customer/new",
+    label: "Create invoice",
+    icon: FileText,
+    bg: "bg-brand-50 hover:bg-brand-100",
+    text: "text-brand-700",
+    iconBg: "bg-brand-200",
+  },
+  {
+    href: "/invoices/supplier/new",
+    label: "Add bill",
+    icon: Receipt,
+    bg: "bg-orange-50 hover:bg-orange-100",
+    text: "text-orange-700",
+    iconBg: "bg-orange-200",
+  },
+  {
+    href: "/customers",
+    label: "Add customer",
+    icon: Users,
+    bg: "bg-green-50 hover:bg-green-100",
+    text: "text-green-700",
+    iconBg: "bg-green-200",
+  },
+  {
+    href: "/employees",
+    label: "Add employee",
+    icon: ShoppingCart,
+    bg: "bg-purple-50 hover:bg-purple-100",
+    text: "text-purple-700",
+    iconBg: "bg-purple-200",
+  },
+];
+
+function greeting(): string {
+  const h = new Date().getHours();
+  if (h < 12) return "Good morning";
+  if (h < 18) return "Good afternoon";
+  return "Good evening";
+}
+
 export default function DashboardPage() {
+  const { data: session } = useSession();
   const [data, setData] = useState<DashboardData | null>(null);
+  const [overdue, setOverdue] = useState<OverdueInvoice[]>([]);
   const [loading, setLoading] = useState(true);
-  const [from, setFrom] = useState("");
-  const [to, setTo] = useState("");
 
   async function load() {
     setLoading(true);
     try {
-      const params = new URLSearchParams();
-      if (from) params.set("from", from);
-      if (to) params.set("to", to);
-      const res = await fetch(`/api/dashboard?${params}`);
-      setData(await res.json());
+      const [dashRes, invRes] = await Promise.all([
+        fetch(`/api/dashboard`),
+        fetch(`/api/invoices/customer?status=UNPAID&page=1&limit=20`),
+      ]);
+      // A non-ok response (e.g. 403 for a role that can't see company-wide
+      // P&L) still has a JSON body, but it's an error object, not real
+      // DashboardData -- setting it directly used to crash the whole page
+      // downstream (e.g. formatCurrency(undefined) throwing a DecimalError).
+      const dash = dashRes.ok ? await dashRes.json() : null;
+      const inv = invRes.ok ? await invRes.json() : { invoices: [] };
+      setData(dash);
+      const today = new Date();
+      const od = (inv.invoices ?? []).filter((i: OverdueInvoice) => new Date(i.dueDate) < today);
+      od.sort((a: OverdueInvoice, b: OverdueInvoice) => new Date(a.dueDate).getTime() - new Date(b.dueDate).getTime());
+      setOverdue(od.slice(0, 5));
     } finally {
       setLoading(false);
     }
   }
 
-  useEffect(() => { load(); }, [from, to]);
+  useEffect(() => { load(); }, []);
+
+  const overdueTotal = useMemo(
+    () =>
+      overdue.reduce(
+        (sum, i) => sum + Math.max(parseFloat(i.totalAmount) - parseFloat(i.paidAmount), 0),
+        0
+      ),
+    [overdue]
+  );
 
   const profitPositive = data ? parseFloat(data.netProfit) >= 0 : true;
+  const firstName = (session?.user?.name ?? "").split(" ")[0];
 
   return (
-    <div className="space-y-6">
-      <div className="flex items-center justify-between flex-wrap gap-4">
-        <div>
-          <h1 className="text-2xl font-bold text-gray-900">Dashboard</h1>
-          <p className="text-sm text-gray-500 mt-0.5">Financial overview at a glance</p>
-        </div>
-        <div className="flex items-center gap-2">
-          <input
-            type="date"
-            value={from}
-            onChange={(e) => setFrom(e.target.value)}
-            className="input text-sm w-40"
-          />
-          <span className="text-gray-400">to</span>
-          <input
-            type="date"
-            value={to}
-            onChange={(e) => setTo(e.target.value)}
-            className="input text-sm w-40"
-          />
-          {(from || to) && (
-            <button onClick={() => { setFrom(""); setTo(""); }} className="btn-secondary text-sm py-1.5">
-              Clear
-            </button>
-          )}
-        </div>
+    <div className="space-y-8 max-w-7xl">
+      {/* Greeting */}
+      <div>
+        <h1 className="text-3xl font-bold text-gray-900">
+          {greeting()}{firstName ? `, ${firstName}` : ""}
+        </h1>
       </div>
 
-      {loading ? (
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-          {Array.from({ length: 8 }).map((_, i) => (
-            <div key={i} className="card animate-pulse h-24 bg-gray-100" />
-          ))}
+      {/* Quick action cards */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+        {QUICK_ACTIONS.map(({ href, label, icon: Icon, bg, text, iconBg }) => (
+          <Link
+            key={href}
+            href={href}
+            className={`${bg} ${text} rounded-2xl px-5 py-4 flex items-center gap-3 transition-colors font-medium`}
+          >
+            <div className={`${iconBg} w-9 h-9 rounded-lg flex items-center justify-center flex-shrink-0`}>
+              <Icon className="w-4.5 h-4.5" strokeWidth={2.5} />
+            </div>
+            <span className="text-sm">{label}</span>
+          </Link>
+        ))}
+      </div>
+
+      {/* Insights */}
+      <div>
+        <div className="flex items-center justify-between mb-4">
+          <h2 className="text-2xl font-bold text-gray-900">Insights for you</h2>
+          <button className="btn-secondary text-xs" disabled>
+            <Sliders className="w-3.5 h-3.5" />
+            Customize
+          </button>
         </div>
-      ) : data ? (
-        <>
-          {/* Income & profit cards */}
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-            <StatCard label="Total Income" value={data.totalIncome} icon={DollarSign} color="green" />
-            <StatCard label="Cost of Goods" value={data.totalCOGS} icon={ShoppingCart} color="yellow" />
-            <StatCard label="Gross Profit" value={data.grossProfit} icon={TrendingUp} color={parseFloat(data.grossProfit) >= 0 ? "green" : "red"} />
-            <StatCard
-              label="Net Profit"
-              value={data.netProfit}
-              icon={profitPositive ? TrendingUp : TrendingDown}
-              color={profitPositive ? "green" : "red"}
-            />
+
+        <div className="max-w-2xl">
+          {/* Overdue invoices */}
+          <div className="card p-0 overflow-hidden">
+            <div className="px-6 py-5 border-b border-gray-100">
+              <div className="flex items-center justify-between">
+                <h3 className="font-bold text-gray-900">Overdue invoices and bills</h3>
+                {overdueTotal > 0 && (
+                  <span className="text-sm font-semibold text-red-600">{formatCurrency(overdueTotal.toFixed(2))}</span>
+                )}
+              </div>
+            </div>
+            <div className="divide-y divide-gray-100">
+              {loading ? (
+                Array.from({ length: 3 }).map((_, i) => (
+                  <div key={i} className="px-6 py-4">
+                    <div className="h-4 bg-gray-100 rounded animate-pulse w-3/4 mb-2" />
+                    <div className="h-3 bg-gray-100 rounded animate-pulse w-1/3" />
+                  </div>
+                ))
+              ) : overdue.length === 0 ? (
+                <div className="px-6 py-12 text-center">
+                  <div className="w-12 h-12 bg-green-50 rounded-full flex items-center justify-center mx-auto mb-3">
+                    <AlertCircle className="w-6 h-6 text-green-500" />
+                  </div>
+                  <p className="text-sm text-gray-500">No overdue invoices. Nice work.</p>
+                </div>
+              ) : (
+                overdue.map((inv) => {
+                  const balance = Math.max(parseFloat(inv.totalAmount) - parseFloat(inv.paidAmount), 0);
+                  const days = Math.floor((Date.now() - new Date(inv.dueDate).getTime()) / 86400000);
+                  return (
+                    <Link
+                      key={inv.id}
+                      href={`/invoices/customer/${inv.id}`}
+                      className="px-6 py-4 flex items-center justify-between hover:bg-gray-50 transition-colors"
+                    >
+                      <div>
+                        <p className="font-medium text-gray-900 text-sm">{inv.customer.name}</p>
+                        <p className="text-xs text-red-600 mt-0.5">
+                          Overdue {days} day{days !== 1 ? "s" : ""} · {inv.invoiceNumber}
+                        </p>
+                      </div>
+                      <div className="flex items-center gap-3">
+                        <span className="font-semibold text-gray-900">{formatCurrency(balance.toFixed(2))}</span>
+                        <ChevronRight className="w-4 h-4 text-gray-300" />
+                      </div>
+                    </Link>
+                  );
+                })
+              )}
+            </div>
+            {data && data.unpaidCustomerCount > overdue.length && (
+              <Link
+                href="/invoices/customer?status=UNPAID"
+                className="block px-6 py-3 text-sm text-brand-600 hover:bg-gray-50 border-t border-gray-100 font-medium"
+              >
+                View all {data.unpaidCustomerCount} unpaid invoices →
+              </Link>
+            )}
           </div>
 
-          {/* Expense breakdown */}
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-            <StatCard label="Services Expense" value={data.totalServices} icon={BarChart2} color="blue" />
-            <StatCard label="Operating Expenses" value={data.totalOperating} icon={BarChart2} color="purple" />
-            <StatCard
-              label="Unpaid Customer Invoices"
-              value={data.unpaidCustomerTotal}
-              icon={AlertTriangle}
-              color="yellow"
-              subtitle={`${data.unpaidCustomerCount} invoice${data.unpaidCustomerCount !== 1 ? "s" : ""}`}
-            />
-            <StatCard
-              label="Unpaid Supplier Invoices"
-              value={data.unpaidSupplierTotal}
-              icon={AlertTriangle}
-              color="red"
-              subtitle={`${data.unpaidSupplierCount} invoice${data.unpaidSupplierCount !== 1 ? "s" : ""}`}
-            />
-          </div>
+        </div>
 
-          {/* P&L Summary */}
+        {/* Cash flow */}
+        {!loading && data && (
+          <div className="mt-5">
+            <InteractiveTrendChart data={data.monthlyChart} />
+          </div>
+        )}
+      </div>
+
+      {/* P&L summary */}
+      {data && (
+        <div>
+          <h2 className="text-2xl font-bold text-gray-900 mb-4">Profit & Loss</h2>
           <div className="card">
-            <h2 className="text-sm font-semibold text-gray-700 mb-4">Profit & Loss Summary</h2>
-            <div className="space-y-2">
+            <div className="space-y-2.5">
               <div className="flex justify-between text-sm">
                 <span className="text-gray-600">Total Income</span>
-                <span className="font-medium text-green-700">{formatCurrency(data.totalIncome)}</span>
+                <span className="font-semibold text-green-700">{formatCurrency(data.totalIncome)}</span>
               </div>
               <div className="flex justify-between text-sm pl-4">
                 <span className="text-gray-500">Less: Cost of Goods Sold</span>
                 <span className="font-medium text-red-600">({formatCurrency(data.totalCOGS)})</span>
               </div>
-              <div className="flex justify-between text-sm font-semibold border-t pt-2">
-                <span>= Gross Profit</span>
+              <div className="flex justify-between text-sm font-semibold border-t border-gray-100 pt-2.5">
+                <span className="text-gray-900">= Gross Profit</span>
                 <span className={parseFloat(data.grossProfit) >= 0 ? "text-green-700" : "text-red-700"}>
                   {formatCurrency(data.grossProfit)}
                 </span>
@@ -148,19 +259,16 @@ export default function DashboardPage() {
                 <span className="text-gray-500">Less: Operating Expenses</span>
                 <span className="font-medium text-red-600">({formatCurrency(data.totalOperating)})</span>
               </div>
-              <div className="flex justify-between text-sm font-bold border-t pt-2 text-base">
-                <span>= Net Profit</span>
+              <div className="flex justify-between font-bold border-t border-gray-100 pt-3 text-base">
+                <span className="text-gray-900">= Net Profit</span>
                 <span className={profitPositive ? "text-green-700" : "text-red-700"}>
                   {formatCurrency(data.netProfit)}
                 </span>
               </div>
             </div>
           </div>
-
-          {/* Interactive monthly trend chart */}
-          <InteractiveTrendChart data={data.monthlyChart} />
-        </>
-      ) : null}
+        </div>
+      )}
     </div>
   );
 }

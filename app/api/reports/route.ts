@@ -1,12 +1,7 @@
 import { NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
-import { requirePermission } from "@/lib/permissions";
-import { writeAuditLog, extractMeta, actorFromSession } from "@/lib/audit";
 import Decimal from "decimal.js";
-
-const ADMIN_ONLY_REPORTS = new Set(["profit-loss", "balance-sheet", "cash-flow"]);
-const MANAGER_REPORTS = new Set(["income", "expenses", "customer-outstanding", "supplier-outstanding", "profitability"]);
 
 export async function GET(request: Request) {
   const session = await auth();
@@ -14,21 +9,6 @@ export async function GET(request: Request) {
 
   const { searchParams } = new URL(request.url);
   const type = searchParams.get("type") ?? "profit-loss";
-
-  if (ADMIN_ONLY_REPORTS.has(type)) {
-    const { allowed } = requirePermission(session, "report_financial", "read");
-    if (!allowed) {
-      await writeAuditLog({ ...actorFromSession(session), action: "ACCESS_DENIED", entityType: "report", entityLabel: `Report: ${type}`, ...extractMeta(request) });
-      return NextResponse.json({ error: "Forbidden: financial reports are Admin-only" }, { status: 403 });
-    }
-  } else if (MANAGER_REPORTS.has(type)) {
-    const { allowed } = requirePermission(session, "report_income_expense", "read");
-    if (!allowed) {
-      await writeAuditLog({ ...actorFromSession(session), action: "ACCESS_DENIED", entityType: "report", entityLabel: `Report: ${type}`, ...extractMeta(request) });
-      return NextResponse.json({ error: "Forbidden" }, { status: 403 });
-    }
-  }
-
   const from = searchParams.get("from");
   const to = searchParams.get("to");
 
@@ -170,7 +150,6 @@ export async function GET(request: Request) {
       }),
     ]);
 
-    // Build cost map: customer invoice number (lowercased) -> total supplier cost
     const costMap: Record<string, Decimal> = {};
     for (const sup of supplierInvoices) {
       if (!sup.customerInvoiceRef) continue;
@@ -186,7 +165,9 @@ export async function GET(request: Request) {
       const cost = costMap[key] ?? new Decimal(0);
       const revenue = new Decimal(inv.totalAmount.toString());
       const grossProfit = revenue.minus(cost);
-      const grossMargin = revenue.isZero() ? "0" : grossProfit.dividedBy(revenue).times(100).toFixed(2);
+      const grossMargin = revenue.isZero()
+        ? "0"
+        : grossProfit.dividedBy(revenue).times(100).toFixed(2);
       totalRevenue = totalRevenue.plus(revenue);
       totalCost = totalCost.plus(cost);
       return {
