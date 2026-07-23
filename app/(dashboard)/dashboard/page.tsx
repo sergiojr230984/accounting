@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect } from "react";
 import Link from "next/link";
 import { useSession } from "next-auth/react";
 import {
@@ -8,8 +8,6 @@ import {
   ShoppingCart,
   Users,
   Receipt,
-  AlertCircle,
-  ChevronRight,
   Sliders,
 } from "lucide-react";
 import InteractiveTrendChart, { type MonthlyPoint } from "@/components/InteractiveTrendChart";
@@ -29,15 +27,6 @@ interface DashboardData {
   unpaidSupplierTotal: string;
   totalSupplierExpenses: string;
   monthlyChart: MonthlyPoint[];
-}
-
-interface OverdueInvoice {
-  id: string;
-  invoiceNumber: string;
-  totalAmount: string;
-  paidAmount: string;
-  dueDate: string;
-  customer: { name: string };
 }
 
 const QUICK_ACTIONS = [
@@ -85,42 +74,24 @@ function greeting(): string {
 export default function DashboardPage() {
   const { data: session } = useSession();
   const [data, setData] = useState<DashboardData | null>(null);
-  const [overdue, setOverdue] = useState<OverdueInvoice[]>([]);
   const [loading, setLoading] = useState(true);
 
   async function load() {
     setLoading(true);
     try {
-      const [dashRes, invRes] = await Promise.all([
-        fetch(`/api/dashboard`),
-        fetch(`/api/invoices/customer?status=UNPAID&page=1&limit=20`),
-      ]);
+      const dashRes = await fetch(`/api/dashboard`);
       // A non-ok response (e.g. 403 for a role that can't see company-wide
       // P&L) still has a JSON body, but it's an error object, not real
       // DashboardData -- setting it directly used to crash the whole page
       // downstream (e.g. formatCurrency(undefined) throwing a DecimalError).
       const dash = dashRes.ok ? await dashRes.json() : null;
-      const inv = invRes.ok ? await invRes.json() : { invoices: [] };
       setData(dash);
-      const today = new Date();
-      const od = (inv.invoices ?? []).filter((i: OverdueInvoice) => new Date(i.dueDate) < today);
-      od.sort((a: OverdueInvoice, b: OverdueInvoice) => new Date(a.dueDate).getTime() - new Date(b.dueDate).getTime());
-      setOverdue(od.slice(0, 5));
     } finally {
       setLoading(false);
     }
   }
 
   useEffect(() => { load(); }, []);
-
-  const overdueTotal = useMemo(
-    () =>
-      overdue.reduce(
-        (sum, i) => sum + Math.max(parseFloat(i.totalAmount) - parseFloat(i.paidAmount), 0),
-        0
-      ),
-    [overdue]
-  );
 
   const profitPositive = data ? parseFloat(data.netProfit) >= 0 : true;
   const firstName = (session?.user?.name ?? "").split(" ")[0];
@@ -160,75 +131,8 @@ export default function DashboardPage() {
           </button>
         </div>
 
-        <div className="max-w-2xl">
-          {/* Overdue invoices */}
-          <div className="card p-0 overflow-hidden">
-            <div className="px-6 py-5 border-b border-gray-100">
-              <div className="flex items-center justify-between">
-                <h3 className="font-bold text-gray-900">Overdue invoices and bills</h3>
-                {overdueTotal > 0 && (
-                  <span className="text-sm font-semibold text-red-600">{formatCurrency(overdueTotal.toFixed(2))}</span>
-                )}
-              </div>
-            </div>
-            <div className="divide-y divide-gray-100">
-              {loading ? (
-                Array.from({ length: 3 }).map((_, i) => (
-                  <div key={i} className="px-6 py-4">
-                    <div className="h-4 bg-gray-100 rounded animate-pulse w-3/4 mb-2" />
-                    <div className="h-3 bg-gray-100 rounded animate-pulse w-1/3" />
-                  </div>
-                ))
-              ) : overdue.length === 0 ? (
-                <div className="px-6 py-12 text-center">
-                  <div className="w-12 h-12 bg-green-50 rounded-full flex items-center justify-center mx-auto mb-3">
-                    <AlertCircle className="w-6 h-6 text-green-500" />
-                  </div>
-                  <p className="text-sm text-gray-500">No overdue invoices. Nice work.</p>
-                </div>
-              ) : (
-                overdue.map((inv) => {
-                  const balance = Math.max(parseFloat(inv.totalAmount) - parseFloat(inv.paidAmount), 0);
-                  const days = Math.floor((Date.now() - new Date(inv.dueDate).getTime()) / 86400000);
-                  return (
-                    <Link
-                      key={inv.id}
-                      href={`/invoices/customer/${inv.id}`}
-                      className="px-6 py-4 flex items-center justify-between hover:bg-gray-50 transition-colors"
-                    >
-                      <div>
-                        <p className="font-medium text-gray-900 text-sm">{inv.customer.name}</p>
-                        <p className="text-xs text-red-600 mt-0.5">
-                          Overdue {days} day{days !== 1 ? "s" : ""} · {inv.invoiceNumber}
-                        </p>
-                      </div>
-                      <div className="flex items-center gap-3">
-                        <span className="font-semibold text-gray-900">{formatCurrency(balance.toFixed(2))}</span>
-                        <ChevronRight className="w-4 h-4 text-gray-300" />
-                      </div>
-                    </Link>
-                  );
-                })
-              )}
-            </div>
-            {data && data.unpaidCustomerCount > overdue.length && (
-              <Link
-                href="/invoices/customer?status=UNPAID"
-                className="block px-6 py-3 text-sm text-brand-600 hover:bg-gray-50 border-t border-gray-100 font-medium"
-              >
-                View all {data.unpaidCustomerCount} unpaid invoices →
-              </Link>
-            )}
-          </div>
-
-        </div>
-
         {/* Cash flow */}
-        {!loading && data && (
-          <div className="mt-5">
-            <InteractiveTrendChart data={data.monthlyChart} />
-          </div>
-        )}
+        {!loading && data && <InteractiveTrendChart data={data.monthlyChart} />}
       </div>
 
       {/* P&L summary */}
