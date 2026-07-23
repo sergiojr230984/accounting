@@ -9,17 +9,8 @@ import {
   AlertTriangle,
   BarChart2,
 } from "lucide-react";
-import {
-  ResponsiveContainer,
-  AreaChart,
-  Area,
-  XAxis,
-  YAxis,
-  Tooltip,
-  CartesianGrid,
-  Legend,
-} from "recharts";
 import StatCard from "@/components/StatCard";
+import InteractiveTrendChart, { type MonthlyPoint } from "@/components/InteractiveTrendChart";
 import { formatCurrency } from "@/lib/money";
 
 interface DashboardData {
@@ -35,7 +26,7 @@ interface DashboardData {
   unpaidSupplierCount: number;
   unpaidSupplierTotal: string;
   totalSupplierExpenses: string;
-  monthlyChart: { month: string; income: number; expenses: number; profit: number }[];
+  monthlyChart: MonthlyPoint[];
 }
 
 export default function DashboardPage() {
@@ -166,36 +157,8 @@ export default function DashboardPage() {
             </div>
           </div>
 
-          {/* Monthly chart */}
-          <div className="card">
-            <h2 className="text-sm font-semibold text-gray-700 mb-4">Monthly Trend (Last 12 Months)</h2>
-            <ResponsiveContainer width="100%" height={280}>
-              <AreaChart data={data.monthlyChart} margin={{ top: 5, right: 10, left: 10, bottom: 0 }}>
-                <defs>
-                  <linearGradient id="incomeGrad" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor="#22c55e" stopOpacity={0.2} />
-                    <stop offset="95%" stopColor="#22c55e" stopOpacity={0} />
-                  </linearGradient>
-                  <linearGradient id="expenseGrad" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor="#ef4444" stopOpacity={0.2} />
-                    <stop offset="95%" stopColor="#ef4444" stopOpacity={0} />
-                  </linearGradient>
-                  <linearGradient id="profitGrad" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor="#0ea5e9" stopOpacity={0.2} />
-                    <stop offset="95%" stopColor="#0ea5e9" stopOpacity={0} />
-                  </linearGradient>
-                </defs>
-                <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
-                <XAxis dataKey="month" tick={{ fontSize: 11 }} />
-                <YAxis tick={{ fontSize: 11 }} tickFormatter={(v) => `$${(v / 1000).toFixed(0)}k`} />
-                <Tooltip formatter={(v: number) => formatCurrency(v)} />
-                <Legend />
-                <Area type="monotone" dataKey="income" stroke="#22c55e" fill="url(#incomeGrad)" strokeWidth={2} name="Income" />
-                <Area type="monotone" dataKey="expenses" stroke="#ef4444" fill="url(#expenseGrad)" strokeWidth={2} name="Expenses" />
-                <Area type="monotone" dataKey="profit" stroke="#0ea5e9" fill="url(#profitGrad)" strokeWidth={2} name="Profit" />
-              </AreaChart>
-            </ResponsiveContainer>
-          </div>
+          {/* Interactive monthly trend chart */}
+          <InteractiveTrendChart data={data.monthlyChart} />
         </>
       ) : null}
     </div>

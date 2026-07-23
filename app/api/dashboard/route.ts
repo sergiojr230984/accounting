@@ -81,12 +81,25 @@ export async function GET(request: Request) {
   );
 
   // Monthly chart data (last 12 months)
-  const monthlyMap = new Map<string, { income: Decimal; expenses: Decimal }>();
+  type MonthBucket = {
+    income: Decimal;
+    cogs: Decimal;
+    services: Decimal;
+    operating: Decimal;
+    other: Decimal;
+  };
+  const monthlyMap = new Map<string, MonthBucket>();
   for (let i = 11; i >= 0; i--) {
     const d = new Date();
     d.setMonth(d.getMonth() - i);
     const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
-    monthlyMap.set(key, { income: new Decimal(0), expenses: new Decimal(0) });
+    monthlyMap.set(key, {
+      income: new Decimal(0),
+      cogs: new Decimal(0),
+      services: new Decimal(0),
+      operating: new Decimal(0),
+      other: new Decimal(0),
+    });
   }
 
   customerInvoices.forEach((inv) => {
@@ -99,22 +112,36 @@ export async function GET(request: Request) {
     }
   });
 
+  const categoryField: Record<string, keyof MonthBucket> = {
+    COGS: "cogs",
+    SERVICES_EXPENSE: "services",
+    OPERATING_EXPENSE: "operating",
+    OTHER: "other",
+  };
+
   supplierInvoices.forEach((inv) => {
     const d = new Date(inv.invoiceDate);
     const key = `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}`;
-    if (monthlyMap.has(key)) {
-      monthlyMap.get(key)!.expenses = monthlyMap
-        .get(key)!
-        .expenses.plus(new Decimal(inv.totalAmount.toString()));
+    const bucket = monthlyMap.get(key);
+    const field = categoryField[inv.category];
+    if (bucket && field) {
+      bucket[field] = bucket[field].plus(new Decimal(inv.totalAmount.toString()));
     }
   });
 
-  const monthlyChart = Array.from(monthlyMap.entries()).map(([month, data]) => ({
-    month,
-    income: data.income.toNumber(),
-    expenses: data.expenses.toNumber(),
-    profit: data.income.minus(data.expenses).toNumber(),
-  }));
+  const monthlyChart = Array.from(monthlyMap.entries()).map(([month, data]) => {
+    const expenses = data.cogs.plus(data.services).plus(data.operating).plus(data.other);
+    return {
+      month,
+      income: data.income.toNumber(),
+      expenses: expenses.toNumber(),
+      cogs: data.cogs.toNumber(),
+      services: data.services.toNumber(),
+      operating: data.operating.toNumber(),
+      other: data.other.toNumber(),
+      profit: data.income.minus(expenses).toNumber(),
+    };
+  });
 
   return NextResponse.json({
     totalIncome: totalIncome.toFixed(2),
