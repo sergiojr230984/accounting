@@ -191,6 +191,37 @@ const SCHEMA_STATEMENTS: string[] = [
   `ALTER TABLE "SupplierInvoice" ADD COLUMN IF NOT EXISTS "customerInvoiceRef" TEXT;`,
   `ALTER TABLE "CustomerInvoiceItem" ADD COLUMN IF NOT EXISTS "itemDescription" TEXT;`,
   `ALTER TABLE "SupplierInvoiceItem" ADD COLUMN IF NOT EXISTS "itemDescription" TEXT;`,
+  `CREATE TABLE IF NOT EXISTS "AuditLog" (
+    "id" TEXT NOT NULL PRIMARY KEY,
+    "timestamp" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "actorUserId" TEXT,
+    "actorName" TEXT NOT NULL,
+    "actorRole" TEXT NOT NULL,
+    "action" TEXT NOT NULL,
+    "entityType" TEXT NOT NULL,
+    "entityId" TEXT,
+    "entityLabel" TEXT NOT NULL,
+    "changes" JSONB,
+    "ipAddress" TEXT NOT NULL,
+    "userAgent" TEXT NOT NULL
+  );`,
+  `CREATE INDEX IF NOT EXISTS "AuditLog_timestamp_idx" ON "AuditLog" ("timestamp");`,
+  `CREATE INDEX IF NOT EXISTS "AuditLog_actorUserId_idx" ON "AuditLog" ("actorUserId");`,
+  `CREATE INDEX IF NOT EXISTS "AuditLog_entityType_idx" ON "AuditLog" ("entityType");`,
+  `CREATE INDEX IF NOT EXISTS "AuditLog_action_idx" ON "AuditLog" ("action");`,
+  `CREATE TABLE IF NOT EXISTS "BackupLog" (
+    "id" TEXT NOT NULL PRIMARY KEY,
+    "startedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "finishedAt" TIMESTAMP(3),
+    "status" TEXT NOT NULL,
+    "type" TEXT NOT NULL,
+    "sizeBytes" BIGINT,
+    "location" TEXT,
+    "errorMessage" TEXT,
+    "triggeredById" TEXT
+  );`,
+  `CREATE INDEX IF NOT EXISTS "BackupLog_startedAt_idx" ON "BackupLog" ("startedAt");`,
+  `CREATE INDEX IF NOT EXISTS "BackupLog_status_idx" ON "BackupLog" ("status");`,
 ];
 
 export async function initializeDatabase() {
@@ -231,6 +262,7 @@ export async function initializeDatabase() {
 
   const HARD_CODED_ADMINS = [
     "admin@lacuevita.com",
+    "sales@lacuevitafurniture.com",
   ];
   for (const email of HARD_CODED_ADMINS) {
     try {
@@ -264,6 +296,7 @@ export async function initializeDatabase() {
 
     const builtInAdmins = [
       "admin@lacuevita.com",
+      "sales@lacuevitafurniture.com",
     ];
     const envAdmins = (process.env.ADMIN_EMAILS ?? "")
       .split(",")

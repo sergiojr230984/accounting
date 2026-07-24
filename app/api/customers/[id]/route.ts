@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
+import { writeAuditLog, extractMeta, actorFromSession, diffChanges } from "@/lib/audit";
 import { z } from "zod";
 
 const updateSchema = z.object({
@@ -24,6 +25,16 @@ export async function PATCH(
     return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
   }
 
+  const existing = await prisma.customer.findUnique({ where: { id } });
+  if (!existing) return NextResponse.json({ error: "Not found" }, { status: 404 });
+
+  const beforeSnapshot = {
+    name: existing.name,
+    email: existing.email,
+    phone: existing.phone,
+    address: existing.address,
+  };
+
   const customer = await prisma.customer.update({
     where: { id },
     data: {
@@ -33,11 +44,27 @@ export async function PATCH(
       address: parsed.data.address || null,
     },
   });
+
+  await writeAuditLog({
+    ...actorFromSession(session),
+    action: "UPDATE",
+    entityType: "customer",
+    entityId: id,
+    entityLabel: customer.name,
+    changes: diffChanges(beforeSnapshot, {
+      name: customer.name,
+      email: customer.email,
+      phone: customer.phone,
+      address: customer.address,
+    }),
+    ...extractMeta(request),
+  });
+
   return NextResponse.json(customer);
 }
 
 export async function DELETE(
-  _request: Request,
+  request: Request,
   { params }: { params: Promise<{ id: string }> }
 ) {
   const session = await auth();
@@ -53,6 +80,19 @@ export async function DELETE(
     );
   }
 
+  const existing = await prisma.customer.findUnique({ where: { id } });
+  if (!existing) return NextResponse.json({ error: "Not found" }, { status: 404 });
+
   await prisma.customer.delete({ where: { id } });
+
+  await writeAuditLog({
+    ...actorFromSession(session),
+    action: "DELETE",
+    entityType: "customer",
+    entityId: id,
+    entityLabel: existing.name,
+    ...extractMeta(request),
+  });
+
   return NextResponse.json({ ok: true });
 }

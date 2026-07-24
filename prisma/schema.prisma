@@ -228,3 +228,40 @@ model UploadedFile {
   supplierInvoice   SupplierInvoice? @relation(fields: [supplierInvoiceId], references: [id])
   createdAt         DateTime         @default(now())
 }
+
+// Admin-only ledger of who did what. The app DB user should have INSERT +
+// SELECT only on this table in production (see prisma/migrations/audit_log_append_only.sql).
+model AuditLog {
+  id          String   @id @default(cuid())
+  timestamp   DateTime @default(now())
+  actorUserId String?
+  actorName   String
+  actorRole   String
+  action      String
+  entityType  String
+  entityId    String?
+  entityLabel String
+  changes     Json?
+  ipAddress   String
+  userAgent   String
+
+  @@index([timestamp])
+  @@index([actorUserId])
+  @@index([entityType])
+  @@index([action])
+}
+
+model BackupLog {
+  id            String    @id @default(cuid())
+  startedAt     DateTime  @default(now())
+  finishedAt    DateTime?
+  status        String
+  type          String
+  sizeBytes     BigInt?
+  location      String?
+  errorMessage  String?
+  triggeredById String?
+
+  @@index([startedAt])
+  @@index([status])
+}

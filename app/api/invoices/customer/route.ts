@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
+import { writeAuditLog, extractMeta, actorFromSession } from "@/lib/audit";
 import { z } from "zod";
 import Decimal from "decimal.js";
 
@@ -228,6 +229,15 @@ export async function POST(request: Request) {
     })
     .catch(() => undefined);
 
+  await writeAuditLog({
+    ...actorFromSession(session),
+    action: "CREATE",
+    entityType: "customer_invoice",
+    entityId: invoice.id,
+    entityLabel: `Invoice #${invoice.invoiceNumber}`,
+    ...extractMeta(request),
+  });
+
   try {
     for (const item of items) {
       const name = item.description.trim();
@@ -236,7 +246,7 @@ export async function POST(request: Request) {
         where: { name: { equals: name, mode: "insensitive" } },
       });
       if (!existing) {
-        await prisma.product.create({
+        const product = await prisma.product.create({
           data: {
             name,
             description: item.itemDescription ?? null,
@@ -244,6 +254,14 @@ export async function POST(request: Request) {
             taxRate: item.taxRate,
             active: true,
           },
+        });
+        await writeAuditLog({
+          ...actorFromSession(session),
+          action: "CREATE",
+          entityType: "product",
+          entityId: product.id,
+          entityLabel: product.name,
+          ...extractMeta(request),
         });
       }
     }

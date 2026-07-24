@@ -40,7 +40,7 @@ export async function writeAuditLog(entry: AuditEntry): Promise<void> {
         entityType: entry.entityType,
         entityId: entry.entityId ?? null,
         entityLabel: entry.entityLabel,
-        changes: entry.changes ?? undefined,
+        changes: (entry.changes as object | undefined) ?? undefined,
         ipAddress: entry.ipAddress ?? "unknown",
         userAgent: entry.userAgent ?? "unknown",
       },

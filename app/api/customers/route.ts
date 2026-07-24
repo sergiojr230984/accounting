@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { initializeDatabase } from "@/lib/init-db";
+import { writeAuditLog, extractMeta, actorFromSession } from "@/lib/audit";
 import { z } from "zod";
 
 const schema = z.object({
@@ -56,6 +57,16 @@ export async function POST(request: Request) {
         address: parsed.data.address || null,
       },
     });
+
+    await writeAuditLog({
+      ...actorFromSession(session),
+      action: "CREATE",
+      entityType: "customer",
+      entityId: customer.id,
+      entityLabel: customer.name,
+      ...extractMeta(request),
+    });
+
     return NextResponse.json(customer, { status: 201 });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
