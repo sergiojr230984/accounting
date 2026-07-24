@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { requireRole } from "@/lib/api";
+import { writeAuditLog, extractMeta, actorFromSession, diffChanges } from "@/lib/audit";
 import { z } from "zod";
 
 const updateSchema = z.object({
@@ -27,6 +28,9 @@ export async function PATCH(
     return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
   }
 
+  const existing = await prisma.customer.findUnique({ where: { id } });
+  if (!existing) return NextResponse.json({ error: "Not found" }, { status: 404 });
+
   const customer = await prisma.customer.update({
     where: { id },
     data: {
@@ -38,11 +42,25 @@ export async function PATCH(
       emergencyContactPhone: parsed.data.emergencyContactPhone || null,
     },
   });
+
+  await writeAuditLog({
+    ...actorFromSession(session),
+    action: "UPDATE",
+    entityType: "customer",
+    entityId: id,
+    entityLabel: customer.name,
+    changes: diffChanges(
+      { name: existing.name, email: existing.email, phone: existing.phone, address: existing.address },
+      { name: customer.name, email: customer.email, phone: customer.phone, address: customer.address }
+    ),
+    ...extractMeta(request),
+  });
+
   return NextResponse.json(customer);
 }
 
 export async function DELETE(
-  _request: Request,
+  request: Request,
   { params }: { params: Promise<{ id: string }> }
 ) {
   // Editing a customer's contact info is a routine sales task (PATCH above
@@ -61,6 +79,19 @@ export async function DELETE(
     );
   }
 
+  const existing = await prisma.customer.findUnique({ where: { id } });
+  if (!existing) return NextResponse.json({ error: "Not found" }, { status: 404 });
+
   await prisma.customer.delete({ where: { id } });
+
+  await writeAuditLog({
+    ...actorFromSession(guard),
+    action: "DELETE",
+    entityType: "customer",
+    entityId: id,
+    entityLabel: existing.name,
+    ...extractMeta(request),
+  });
+
   return NextResponse.json({ ok: true });
 }

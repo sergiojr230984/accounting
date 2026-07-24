@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { requireAuth } from "@/lib/api";
+import { writeAuditLog, extractMeta, actorFromSession, diffChanges } from "@/lib/audit";
 import { z } from "zod";
 
 const updateSchema = z.object({
@@ -34,6 +35,9 @@ export async function PATCH(
 
   const d = parsed.data;
   try {
+    const existing = await prisma.product.findUnique({ where: { id } });
+    if (!existing) return NextResponse.json({ error: "Not found" }, { status: 404 });
+
     const product = await prisma.product.update({
       where: { id },
       data: {
@@ -45,6 +49,30 @@ export async function PATCH(
         ...(d.active !== undefined && { active: d.active }),
       },
     });
+
+    await writeAuditLog({
+      ...actorFromSession(guard),
+      action: "UPDATE",
+      entityType: "product",
+      entityId: id,
+      entityLabel: product.name,
+      changes: diffChanges(
+        {
+          name: existing.name,
+          price: existing.price.toString(),
+          taxRate: existing.taxRate.toString(),
+          active: existing.active,
+        },
+        {
+          name: product.name,
+          price: product.price.toString(),
+          taxRate: product.taxRate.toString(),
+          active: product.active,
+        }
+      ),
+      ...extractMeta(request),
+    });
+
     return NextResponse.json(product);
   } catch (err) {
     return NextResponse.json({ error: (err as Error).message }, { status: 500 });
@@ -52,7 +80,7 @@ export async function PATCH(
 }
 
 export async function DELETE(
-  _request: Request,
+  request: Request,
   { params }: { params: Promise<{ id: string }> }
 ) {
   const guard = await requireAuth();
@@ -60,7 +88,20 @@ export async function DELETE(
 
   const { id } = await params;
   try {
+    const existing = await prisma.product.findUnique({ where: { id } });
+    if (!existing) return NextResponse.json({ error: "Not found" }, { status: 404 });
+
     await prisma.product.delete({ where: { id } });
+
+    await writeAuditLog({
+      ...actorFromSession(guard),
+      action: "DELETE",
+      entityType: "product",
+      entityId: id,
+      entityLabel: existing.name,
+      ...extractMeta(request),
+    });
+
     return NextResponse.json({ ok: true });
   } catch (err) {
     return NextResponse.json({ error: (err as Error).message }, { status: 500 });

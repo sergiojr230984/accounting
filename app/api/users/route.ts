@@ -3,6 +3,7 @@ import bcrypt from "bcryptjs";
 import { prisma } from "@/lib/prisma";
 import { initializeDatabase } from "@/lib/init-db";
 import { requireRole } from "@/lib/api";
+import { writeAuditLog, extractMeta, actorFromSession } from "@/lib/audit";
 import { z } from "zod";
 
 const createSchema = z.object({
@@ -59,6 +60,16 @@ export async function POST(request: Request) {
       },
       select: { id: true, name: true, email: true, role: true, active: true, lastLogin: true, createdAt: true },
     });
+
+    await writeAuditLog({
+      ...actorFromSession(guard),
+      action: "CREATE",
+      entityType: "user",
+      entityId: user.id,
+      entityLabel: `${user.name} (${user.email})`,
+      ...extractMeta(request),
+    });
+
     return NextResponse.json(user, { status: 201 });
   } catch (err) {
     const msg = (err as Error).message;

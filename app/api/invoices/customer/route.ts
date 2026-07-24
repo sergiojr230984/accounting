@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { requireAuth, scopeInvoicesToOwnEmployee } from "@/lib/api";
 import { syncProductCatalog } from "@/lib/product-catalog";
+import { writeAuditLog, extractMeta, actorFromSession } from "@/lib/audit";
 import { z } from "zod";
 import Decimal from "decimal.js";
 
@@ -265,9 +266,19 @@ export async function POST(request: Request) {
     })
     .catch(() => undefined);
 
+  const auditActor = { ...actorFromSession(guard), ...extractMeta(request) };
+
+  await writeAuditLog({
+    ...auditActor,
+    action: "CREATE",
+    entityType: "customer_invoice",
+    entityId: invoice.id,
+    entityLabel: `Invoice #${invoice.invoiceNumber}`,
+  });
+
   // Auto-save each line item to the product catalog.
   try {
-    await syncProductCatalog(prisma, items);
+    await syncProductCatalog(prisma, items, auditActor);
   } catch {
     // Product sync failure must never break invoice creation
   }

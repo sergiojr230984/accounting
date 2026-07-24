@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { requireAuth, requireRole } from "@/lib/api";
 import { syncProductCatalog } from "@/lib/product-catalog";
+import { writeAuditLog, extractMeta, actorFromSession, diffChanges } from "@/lib/audit";
 import { z } from "zod";
 import Decimal from "decimal.js";
 
@@ -112,6 +113,14 @@ export async function PATCH(
 
   const existing = await prisma.customerInvoice.findUnique({ where: { id } });
   if (!existing) return NextResponse.json({ error: "Not found" }, { status: 404 });
+
+  const beforeSnapshot = {
+    invoiceNumber: existing.invoiceNumber,
+    paymentStatus: existing.paymentStatus,
+    paidAmount: existing.paidAmount.toString(),
+    totalAmount: existing.totalAmount.toString(),
+    notes: existing.notes,
+  };
 
   // Once any payment has been recorded, the line items (and the totals
   // derived from them) are financial history, not a draft -- rewriting them
@@ -260,7 +269,7 @@ export async function PATCH(
 
     // Auto-save new line items to the product catalog.
     try {
-      await syncProductCatalog(prisma, data.items);
+      await syncProductCatalog(prisma, data.items, { ...actorFromSession(guard), ...extractMeta(request) });
     } catch {
       // Product sync failure must never break invoice update
     }
@@ -310,11 +319,27 @@ export async function PATCH(
     include: { customer: true, items: true },
   });
 
+  await writeAuditLog({
+    ...actorFromSession(guard),
+    action: "UPDATE",
+    entityType: "customer_invoice",
+    entityId: id,
+    entityLabel: `Invoice #${updated.invoiceNumber}`,
+    changes: diffChanges(beforeSnapshot, {
+      invoiceNumber: updated.invoiceNumber,
+      paymentStatus: updated.paymentStatus,
+      paidAmount: updated.paidAmount.toString(),
+      totalAmount: updated.totalAmount.toString(),
+      notes: updated.notes,
+    }),
+    ...extractMeta(request),
+  });
+
   return NextResponse.json(updated);
 }
 
 export async function DELETE(
-  _request: Request,
+  request: Request,
   { params }: { params: Promise<{ id: string }> }
 ) {
   const guard = await requireRole("ADMIN", "MANAGER", "SALES");
@@ -336,5 +361,15 @@ export async function DELETE(
   }
 
   await prisma.customerInvoice.delete({ where: { id } });
+
+  await writeAuditLog({
+    ...actorFromSession(guard),
+    action: "DELETE",
+    entityType: "customer_invoice",
+    entityId: id,
+    entityLabel: `Invoice #${existing.invoiceNumber}`,
+    ...extractMeta(request),
+  });
+
   return NextResponse.json({ ok: true });
 }
