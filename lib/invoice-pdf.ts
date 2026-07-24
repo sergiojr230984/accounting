@@ -308,27 +308,43 @@ export function generateInvoicePDF(invoice: InvoicePDFData): jsPDF {
     },
     alternateRowStyles: { fillColor: [252, 252, 252] },
     didParseCell: (data) => {
-      // Increase minimum cell height for rows that have an item description
       if (data.section === "body" && data.column.index === 0) {
         const desc = itemDescs[data.row.index];
         if (desc) {
+          // Increase minimum cell height to fit the name + description stack,
+          // and blank autoTable's own (vertically-centered) text so it
+          // doesn't get drawn on top of the name we render in didDrawCell.
           data.cell.styles.minCellHeight = 38;
+          data.cell.text = [];
         }
       }
     },
     didDrawCell: (data) => {
-      // Draw item description in smaller gray text below the bold item name
+      // Draw the bold item name above the smaller gray description so they
+      // stack instead of both landing on the same centered line.
       if (data.section !== "body" || data.column.index !== 0) return;
       const desc = itemDescs[data.row.index];
       if (!desc) return;
+      const cellX = (data.cell as unknown as { x: number }).x;
+      const cellY = (data.cell as unknown as { y: number }).y;
+      const cellW = (data.cell as unknown as { width: number }).width;
+      const padX = 9;
+      const maxW = cellW - padX * 2;
+      const name = invoice.items[data.row.index]?.description ?? "";
+
+      doc.setFont("helvetica", "bold");
+      doc.setFontSize(10);
+      doc.setTextColor(...TEXT_DARK);
+      const nameLines = doc.splitTextToSize(name, maxW);
+      const nameTopY = cellY + 16;
+      doc.text(nameLines, cellX + padX, nameTopY);
+
       doc.setFont("helvetica", "normal");
       doc.setFontSize(8);
       doc.setTextColor(...TEXT_MID);
-      const maxW = (data.cell as unknown as { width: number }).width - 18;
-      const lines = doc.splitTextToSize(desc, maxW);
-      const cellX = (data.cell as unknown as { x: number }).x;
-      const cellY = (data.cell as unknown as { y: number }).y;
-      doc.text(lines, cellX + 9, cellY + 22);
+      const descLines = doc.splitTextToSize(desc, maxW);
+      const descTopY = nameTopY + (nameLines.length - 1) * 11 + 14;
+      doc.text(descLines, cellX + padX, descTopY);
     },
   });
 
