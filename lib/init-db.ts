@@ -239,6 +239,28 @@ const SCHEMA_STATEMENTS: string[] = [
     "updatedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT "EstimateItem_estimateId_fkey" FOREIGN KEY ("estimateId") REFERENCES "Estimate"("id") ON DELETE CASCADE ON UPDATE CASCADE
   );`,
+  // Admin-only audit ledger (prisma/schema.prisma, lib/audit.ts,
+  // /api/audit-log) -- same reasoning as Estimate/EstimateItem above: this
+  // file is the only schema-provisioning mechanism, so a fresh production
+  // database needs the table created here or every write to it 500s.
+  `CREATE TABLE IF NOT EXISTS "AuditLog" (
+    "id" TEXT NOT NULL PRIMARY KEY,
+    "timestamp" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "actorUserId" TEXT,
+    "actorName" TEXT NOT NULL,
+    "actorRole" TEXT NOT NULL,
+    "action" TEXT NOT NULL,
+    "entityType" TEXT NOT NULL,
+    "entityId" TEXT,
+    "entityLabel" TEXT NOT NULL,
+    "changes" JSONB,
+    "ipAddress" TEXT NOT NULL,
+    "userAgent" TEXT NOT NULL
+  );`,
+  `CREATE INDEX IF NOT EXISTS "AuditLog_timestamp_idx" ON "AuditLog" ("timestamp");`,
+  `CREATE INDEX IF NOT EXISTS "AuditLog_actorUserId_idx" ON "AuditLog" ("actorUserId");`,
+  `CREATE INDEX IF NOT EXISTS "AuditLog_entityType_idx" ON "AuditLog" ("entityType");`,
+  `CREATE INDEX IF NOT EXISTS "AuditLog_action_idx" ON "AuditLog" ("action");`,
 ];
 
 export function initializeDatabase(): Promise<void> {

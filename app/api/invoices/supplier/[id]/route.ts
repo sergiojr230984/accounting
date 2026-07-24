@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
+import { writeAuditLog, extractMeta, actorFromSession, diffChanges } from "@/lib/audit";
 import { z } from "zod";
 import Decimal from "decimal.js";
 
@@ -66,6 +67,15 @@ export async function PATCH(
 
   const existing = await prisma.supplierInvoice.findUnique({ where: { id } });
   if (!existing) return NextResponse.json({ error: "Not found" }, { status: 404 });
+
+  const beforeSnapshot = {
+    invoiceNumber: existing.invoiceNumber,
+    paymentStatus: existing.paymentStatus,
+    paidAmount: existing.paidAmount.toString(),
+    totalAmount: existing.totalAmount.toString(),
+    category: existing.category,
+    notes: existing.notes,
+  };
 
   // Once any payment has been recorded, line items (and the totals derived
   // from them) are financial history -- same reasoning as the customer-
@@ -181,11 +191,28 @@ export async function PATCH(
     include: { supplier: true, items: true },
   });
 
+  await writeAuditLog({
+    ...actorFromSession(session),
+    action: "UPDATE",
+    entityType: "supplier_invoice",
+    entityId: id,
+    entityLabel: `Bill #${updated.invoiceNumber}`,
+    changes: diffChanges(beforeSnapshot, {
+      invoiceNumber: updated.invoiceNumber,
+      paymentStatus: updated.paymentStatus,
+      paidAmount: updated.paidAmount.toString(),
+      totalAmount: updated.totalAmount.toString(),
+      category: updated.category,
+      notes: updated.notes,
+    }),
+    ...extractMeta(request),
+  });
+
   return NextResponse.json(updated);
 }
 
 export async function DELETE(
-  _request: Request,
+  request: Request,
   { params }: { params: Promise<{ id: string }> }
 ) {
   const session = await auth();
@@ -204,5 +231,15 @@ export async function DELETE(
   }
 
   await prisma.supplierInvoice.delete({ where: { id } });
+
+  await writeAuditLog({
+    ...actorFromSession(session),
+    action: "DELETE",
+    entityType: "supplier_invoice",
+    entityId: id,
+    entityLabel: `Bill #${existing.invoiceNumber}`,
+    ...extractMeta(request),
+  });
+
   return NextResponse.json({ ok: true });
 }

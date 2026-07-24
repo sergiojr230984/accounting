@@ -273,3 +273,26 @@ model UploadedFile {
   supplierInvoice   SupplierInvoice? @relation(fields: [supplierInvoiceId], references: [id])
   createdAt         DateTime         @default(now())
 }
+
+// Admin-only ledger of who did what (invoice/customer/supplier/product/user
+// create-update-delete, access-denied attempts). Written best-effort from
+// API routes via lib/audit.ts — never allowed to fail the request it logs.
+model AuditLog {
+  id          String   @id @default(cuid())
+  timestamp   DateTime @default(now())
+  actorUserId String?
+  actorName   String
+  actorRole   String
+  action      String
+  entityType  String
+  entityId    String?
+  entityLabel String
+  changes     Json?
+  ipAddress   String
+  userAgent   String
+
+  @@index([timestamp])
+  @@index([actorUserId])
+  @@index([entityType])
+  @@index([action])
+}

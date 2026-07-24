@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { requireRole } from "@/lib/api";
+import { writeAuditLog, extractMeta, actorFromSession, diffChanges } from "@/lib/audit";
 import { z } from "zod";
 
 const updateSchema = z.object({
@@ -36,6 +37,9 @@ export async function PATCH(
     return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
   }
 
+  const existing = await prisma.supplier.findUnique({ where: { id } });
+  if (!existing) return NextResponse.json({ error: "Not found" }, { status: 404 });
+
   const data: Record<string, unknown> = {
     name: parsed.data.name,
     email: parsed.data.email || null,
@@ -51,11 +55,25 @@ export async function PATCH(
   if (parsed.data.paymentInstructions !== undefined) data.paymentInstructions = parsed.data.paymentInstructions || null;
 
   const supplier = await prisma.supplier.update({ where: { id }, data });
+
+  await writeAuditLog({
+    ...actorFromSession(guard),
+    action: "UPDATE",
+    entityType: "supplier",
+    entityId: id,
+    entityLabel: supplier.name,
+    changes: diffChanges(
+      { name: existing.name, email: existing.email, phone: existing.phone, address: existing.address },
+      { name: supplier.name, email: supplier.email, phone: supplier.phone, address: supplier.address }
+    ),
+    ...extractMeta(request),
+  });
+
   return NextResponse.json(supplier);
 }
 
 export async function DELETE(
-  _request: Request,
+  request: Request,
   { params }: { params: Promise<{ id: string }> }
 ) {
   const guard = await requireRole("ADMIN", "MANAGER");
@@ -71,6 +89,19 @@ export async function DELETE(
     );
   }
 
+  const existing = await prisma.supplier.findUnique({ where: { id } });
+  if (!existing) return NextResponse.json({ error: "Not found" }, { status: 404 });
+
   await prisma.supplier.delete({ where: { id } });
+
+  await writeAuditLog({
+    ...actorFromSession(guard),
+    action: "DELETE",
+    entityType: "supplier",
+    entityId: id,
+    entityLabel: existing.name,
+    ...extractMeta(request),
+  });
+
   return NextResponse.json({ ok: true });
 }

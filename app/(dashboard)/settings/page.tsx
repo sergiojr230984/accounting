@@ -18,10 +18,14 @@ import {
   KeyRound,
   Power,
   Hash,
+  ScrollText,
+  Download,
+  ChevronDown,
+  ChevronRight,
 } from "lucide-react";
 import { format } from "date-fns";
 
-type Section = "users" | "company" | "taxes" | "fees" | "customFees" | "numbering";
+type Section = "users" | "auditLog" | "company" | "taxes" | "fees" | "customFees" | "numbering";
 
 interface CustomFee {
   id: string;
@@ -73,6 +77,15 @@ export default function SettingsPage() {
               <UserCircle className="w-4 h-4 flex-shrink-0" />
               Users
             </button>
+            <button
+              onClick={() => setSection("auditLog")}
+              className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors text-left ${
+                section === "auditLog" ? "bg-brand-50 text-brand-700" : "text-gray-700 hover:bg-gray-50"
+              }`}
+            >
+              <ScrollText className="w-4 h-4 flex-shrink-0" />
+              Audit log
+            </button>
           </div>
           <div>
           <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide px-3 py-2">Sales & Payments</p>
@@ -100,6 +113,7 @@ export default function SettingsPage() {
         {/* Main content */}
         <div className="col-span-12 md:col-span-9">
           {section === "users" && <UsersSection />}
+          {section === "auditLog" && <AuditLogSection />}
           {section === "company" && <CompanySection />}
           {section === "numbering" && <NumberingSection />}
           {section === "taxes" && <TaxesSection />}
@@ -877,6 +891,220 @@ function UsersSection() {
             </tbody>
           </table>
         </div>
+      </div>
+    </div>
+  );
+}
+
+type AuditLogEntry = {
+  id: string;
+  timestamp: string;
+  actorName: string;
+  actorRole: string;
+  action: string;
+  entityType: string;
+  entityId: string | null;
+  entityLabel: string;
+  changes: Record<string, { old: unknown; new: unknown }> | null;
+  ipAddress: string;
+};
+
+const AUDIT_ACTION_COLORS: Record<string, string> = {
+  CREATE: "bg-green-100 text-green-800",
+  UPDATE: "bg-blue-100 text-blue-800",
+  DELETE: "bg-red-100 text-red-800",
+  ROLE_CHANGE: "bg-yellow-100 text-yellow-900",
+  ACCESS_DENIED: "bg-red-200 text-red-900",
+};
+
+function AuditLogSection() {
+  const [logs, setLogs] = useState<AuditLogEntry[]>([]);
+  const [total, setTotal] = useState(0);
+  const [page, setPage] = useState(1);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+  const [expanded, setExpanded] = useState<string | null>(null);
+  const [filters, setFilters] = useState({ action: "", entityType: "", search: "" });
+  const limit = 50;
+
+  const load = useCallback(() => {
+    setLoading(true);
+    setError("");
+    const params = new URLSearchParams({ page: String(page), limit: String(limit) });
+    if (filters.action) params.set("action", filters.action);
+    if (filters.entityType) params.set("entityType", filters.entityType);
+    if (filters.search) params.set("search", filters.search);
+    fetch(`/api/audit-log?${params}`)
+      .then(async (r) => {
+        if (!r.ok) {
+          const d = await r.json().catch(() => ({}));
+          setError(d.error ?? `Could not load audit log (${r.status})`);
+          return;
+        }
+        const d = await r.json();
+        setLogs(d.logs ?? []);
+        setTotal(d.total ?? 0);
+      })
+      .finally(() => setLoading(false));
+  }, [page, filters]);
+
+  useEffect(() => { load(); }, [load]);
+
+  const exportCsv = () => {
+    const params = new URLSearchParams({ export: "csv" });
+    if (filters.action) params.set("action", filters.action);
+    if (filters.entityType) params.set("entityType", filters.entityType);
+    if (filters.search) params.set("search", filters.search);
+    window.open(`/api/audit-log?${params}`, "_blank");
+  };
+
+  const totalPages = Math.max(1, Math.ceil(total / limit));
+
+  return (
+    <div className="space-y-5">
+      <div className="card space-y-4">
+        <div className="flex items-start justify-between flex-wrap gap-3">
+          <div>
+            <h2 className="text-lg font-bold text-gray-900 flex items-center gap-2">
+              <ScrollText className="w-5 h-5 text-gray-400" />
+              Audit log
+            </h2>
+            <p className="text-sm text-gray-500 mt-1">
+              Who created, edited, or deleted what — invoices, items, customers, suppliers, and user accounts. Admin-only.
+            </p>
+          </div>
+          <button onClick={exportCsv} className="btn-secondary">
+            <Download className="w-4 h-4" />
+            Export CSV
+          </button>
+        </div>
+
+        <div className="flex flex-wrap gap-2">
+          <input
+            placeholder="Search entity..."
+            value={filters.search}
+            onChange={(e) => { setPage(1); setFilters({ ...filters, search: e.target.value }); }}
+            className="input max-w-xs"
+          />
+          <select
+            value={filters.action}
+            onChange={(e) => { setPage(1); setFilters({ ...filters, action: e.target.value }); }}
+            className="input w-auto"
+          >
+            <option value="">All actions</option>
+            <option value="CREATE">Create</option>
+            <option value="UPDATE">Update</option>
+            <option value="DELETE">Delete</option>
+            <option value="ROLE_CHANGE">Role change</option>
+            <option value="ACCESS_DENIED">Access denied</option>
+          </select>
+          <input
+            placeholder="Entity type..."
+            value={filters.entityType}
+            onChange={(e) => { setPage(1); setFilters({ ...filters, entityType: e.target.value }); }}
+            className="input w-auto"
+          />
+        </div>
+
+        {error && (
+          <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg text-sm">{error}</div>
+        )}
+
+        <div className="border border-gray-100 rounded-xl overflow-hidden overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead className="bg-gray-50 border-b border-gray-100">
+              <tr>
+                <th className="text-left px-4 py-2.5 text-xs font-semibold text-gray-600 uppercase">When</th>
+                <th className="text-left px-4 py-2.5 text-xs font-semibold text-gray-600 uppercase">Who</th>
+                <th className="text-left px-4 py-2.5 text-xs font-semibold text-gray-600 uppercase">Action</th>
+                <th className="text-left px-4 py-2.5 text-xs font-semibold text-gray-600 uppercase">Entity</th>
+                <th className="px-4 py-2.5" />
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-gray-50">
+              {loading ? (
+                <tr><td colSpan={5} className="px-4 py-6 text-center text-gray-400"><Loader2 className="w-4 h-4 animate-spin inline" /></td></tr>
+              ) : logs.length === 0 ? (
+                <tr><td colSpan={5} className="px-4 py-8 text-center text-gray-400">No activity recorded yet.</td></tr>
+              ) : (
+                logs.map((log) => {
+                  const isExpanded = expanded === log.id;
+                  const hasChanges = log.changes && Object.keys(log.changes).length > 0;
+                  return (
+                    <>
+                      <tr key={log.id} className="hover:bg-gray-50">
+                        <td className="px-4 py-2 text-xs text-gray-500 whitespace-nowrap">
+                          {format(new Date(log.timestamp), "MMM d, yyyy h:mm a")}
+                        </td>
+                        <td className="px-4 py-2 text-gray-800">
+                          {log.actorName}
+                          <span className="text-xs text-gray-400 ml-1">({log.actorRole})</span>
+                        </td>
+                        <td className="px-4 py-2">
+                          <span className={`px-2 py-0.5 rounded text-xs font-semibold ${AUDIT_ACTION_COLORS[log.action] ?? "bg-gray-100 text-gray-700"}`}>
+                            {log.action}
+                          </span>
+                        </td>
+                        <td className="px-4 py-2 text-gray-700">
+                          <span className="text-xs text-gray-400">{log.entityType}</span>{" "}
+                          {log.entityLabel}
+                        </td>
+                        <td className="px-4 py-2 text-right">
+                          {hasChanges && (
+                            <button
+                              onClick={() => setExpanded(isExpanded ? null : log.id)}
+                              className="text-gray-400 hover:text-brand-600"
+                            >
+                              {isExpanded ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
+                            </button>
+                          )}
+                        </td>
+                      </tr>
+                      {isExpanded && hasChanges && (
+                        <tr key={`${log.id}-detail`}>
+                          <td colSpan={5} className="px-4 py-3 bg-gray-50 text-xs">
+                            <div className="space-y-1">
+                              {Object.entries(log.changes!).map(([field, { old: oldVal, new: newVal }]) => (
+                                <div key={field}>
+                                  <span className="font-semibold">{field}:</span>{" "}
+                                  <span className="text-red-600">{JSON.stringify(oldVal)}</span>
+                                  {" → "}
+                                  <span className="text-green-700">{JSON.stringify(newVal)}</span>
+                                </div>
+                              ))}
+                            </div>
+                          </td>
+                        </tr>
+                      )}
+                    </>
+                  );
+                })
+              )}
+            </tbody>
+          </table>
+        </div>
+
+        {totalPages > 1 && (
+          <div className="flex items-center justify-between text-sm text-gray-500">
+            <span>Page {page} of {totalPages} ({total} entries)</span>
+            <div className="flex gap-2">
+              <button
+                onClick={() => setPage((p) => Math.max(1, p - 1))}
+                disabled={page <= 1}
+                className="btn-secondary disabled:opacity-50"
+              >
+                Previous
+              </button>
+              <button
+                onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+                disabled={page >= totalPages}
+                className="btn-secondary disabled:opacity-50"
+              >
+                Next
+              </button>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );

@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import bcrypt from "bcryptjs";
 import { prisma } from "@/lib/prisma";
 import { requireRole } from "@/lib/api";
+import { writeAuditLog, extractMeta, actorFromSession, diffChanges } from "@/lib/audit";
 import { z } from "zod";
 
 const updateSchema = z.object({
@@ -73,6 +74,20 @@ export async function PATCH(
       data,
       select: { id: true, name: true, email: true, role: true, active: true, lastLogin: true, createdAt: true },
     });
+
+    await writeAuditLog({
+      ...actorFromSession(guard),
+      action: parsed.data.role !== undefined && parsed.data.role !== target.role ? "ROLE_CHANGE" : "UPDATE",
+      entityType: "user",
+      entityId: id,
+      entityLabel: `${user.name} (${user.email})`,
+      changes: diffChanges(
+        { name: target.name, email: target.email, role: target.role, active: target.active },
+        { name: user.name, email: user.email, role: user.role, active: user.active }
+      ),
+      ...extractMeta(request),
+    });
+
     return NextResponse.json(user);
   } catch (err) {
     const msg = (err as Error).message;
@@ -84,7 +99,7 @@ export async function PATCH(
 }
 
 export async function DELETE(
-  _request: Request,
+  request: Request,
   { params }: { params: Promise<{ id: string }> }
 ) {
   const guard = await requireRole("ADMIN");
@@ -105,5 +120,15 @@ export async function DELETE(
 
   // Soft-delete-ish: deactivate instead of hard delete so historical FK refs stay intact.
   await prisma.user.update({ where: { id }, data: { active: false } });
+
+  await writeAuditLog({
+    ...actorFromSession(guard),
+    action: "DELETE",
+    entityType: "user",
+    entityId: id,
+    entityLabel: `${target.name} (${target.email})`,
+    ...extractMeta(request),
+  });
+
   return NextResponse.json({ ok: true, deactivated: true });
 }

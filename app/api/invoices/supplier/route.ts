@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
+import { writeAuditLog, extractMeta, actorFromSession } from "@/lib/audit";
 import { z } from "zod";
 import Decimal from "decimal.js";
 
@@ -153,6 +154,15 @@ export async function POST(request: Request) {
       data: { supplierInvoiceNextSeq: { increment: 1 } },
     })
     .catch(() => undefined);
+
+  await writeAuditLog({
+    ...actorFromSession(session),
+    action: "CREATE",
+    entityType: "supplier_invoice",
+    entityId: invoice.id,
+    entityLabel: `Bill #${invoice.invoiceNumber}`,
+    ...extractMeta(request),
+  });
 
   return NextResponse.json(invoice, { status: 201 });
 }
