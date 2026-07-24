@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
+import { writeAuditLog, extractMeta, actorFromSession } from "@/lib/audit";
 import { z } from "zod";
 import Decimal from "decimal.js";
 
@@ -66,7 +67,7 @@ export async function POST(
       return { error: "overpayment" as const };
     }
 
-    await tx.payment.create({
+    const created = await tx.payment.create({
       data: { amount, paymentDate: parsedDate, notes: notes || null, customerInvoiceId: id },
     });
 
@@ -80,7 +81,7 @@ export async function POST(
       data: { paidAmount: newPaidAmount.toFixed(2), paymentStatus },
     });
 
-    return { error: null };
+    return { error: null, paymentId: created.id };
   });
 
   if (result.error === "not_found") {
@@ -102,6 +103,15 @@ export async function POST(
       files: true,
       employee: { select: { id: true, name: true } },
     },
+  });
+
+  await writeAuditLog({
+    ...actorFromSession(session),
+    action: "CREATE",
+    entityType: "payment",
+    entityId: result.paymentId,
+    entityLabel: `Payment of $${amount} on Invoice #${updated?.invoiceNumber ?? id}`,
+    ...extractMeta(request),
   });
 
   return NextResponse.json(updated, { status: 201 });

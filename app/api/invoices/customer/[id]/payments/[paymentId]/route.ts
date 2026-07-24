@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
+import { writeAuditLog, extractMeta, actorFromSession, diffChanges } from "@/lib/audit";
 import { z } from "zod";
 import Decimal from "decimal.js";
 
@@ -83,11 +84,24 @@ export async function PATCH(
     },
   });
 
+  await writeAuditLog({
+    ...actorFromSession(session),
+    action: "UPDATE",
+    entityType: "payment",
+    entityId: paymentId,
+    entityLabel: `Payment on Invoice #${updated.invoiceNumber}`,
+    changes: diffChanges(
+      { amount: payment.amount.toString(), paymentDate: payment.paymentDate.toISOString(), notes: payment.notes },
+      { amount, paymentDate: parsedDate.toISOString(), notes: notes || null }
+    ),
+    ...extractMeta(request),
+  });
+
   return NextResponse.json(updated);
 }
 
 export async function DELETE(
-  _request: Request,
+  request: Request,
   { params }: { params: Promise<{ id: string; paymentId: string }> }
 ) {
   const session = await auth();
@@ -130,6 +144,15 @@ export async function DELETE(
       files: true,
       employee: { select: { id: true, name: true } },
     },
+  });
+
+  await writeAuditLog({
+    ...actorFromSession(session),
+    action: "DELETE",
+    entityType: "payment",
+    entityId: paymentId,
+    entityLabel: `Payment of $${payment.amount.toString()} on Invoice #${updated.invoiceNumber}`,
+    ...extractMeta(request),
   });
 
   return NextResponse.json(updated);
