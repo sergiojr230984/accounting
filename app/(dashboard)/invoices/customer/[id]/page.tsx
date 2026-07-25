@@ -31,6 +31,7 @@ const editSchema = z.object({
   items: z.array(
     z.object({
       description: z.string().min(1),
+      itemDescription: z.string().optional(),
       quantity: z.string(),
       unitPrice: z.string(),
       taxRate: z.string().default("0"),
@@ -59,7 +60,7 @@ interface InvoiceDetail {
   employee: { id: string; name: string } | null;
   appliedFees: { id?: string; label: string; rate?: number; amount: string }[];
   customer: { id: string; name: string; email: string | null; phone: string | null; address: string | null; emergencyContactName: string | null; emergencyContactPhone: string | null };
-  items: { id: string; description: string; quantity: string; unitPrice: string; taxRate: string; lineTotal: string }[];
+  items: { id: string; description: string; itemDescription: string | null; quantity: string; unitPrice: string; taxRate: string; lineTotal: string }[];
   payments: { id: string; amount: string; paymentDate: string; notes: string | null }[];
   files: { id: string; originalName: string; mimeType: string }[];
 }
@@ -140,6 +141,7 @@ export default function CustomerInvoiceDetailPage() {
       customerAddress: data.customer.address ?? "",
       items: data.items.map((item: InvoiceDetail["items"][0]) => ({
         description: item.description,
+        itemDescription: item.itemDescription ?? "",
         quantity: item.quantity,
         unitPrice: item.unitPrice,
         taxRate: item.taxRate,
@@ -634,7 +636,12 @@ export default function CustomerInvoiceDetailPage() {
                 <tbody className="divide-y divide-gray-50">
                   {invoice.items.map((item) => (
                     <tr key={item.id}>
-                      <td className="py-2">{item.description}</td>
+                      <td className="py-2">
+                        <div>{item.description}</div>
+                        {item.itemDescription && (
+                          <div className="text-xs text-gray-400 mt-0.5">{item.itemDescription}</div>
+                        )}
+                      </td>
                       <td className="py-2 text-right">{item.quantity}</td>
                       <td className="py-2 text-right">{formatCurrency(item.unitPrice)}</td>
                       <td className="py-2 text-right">{(parseFloat(item.taxRate) * 100).toFixed(0)}%</td>

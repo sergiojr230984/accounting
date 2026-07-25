@@ -24,6 +24,7 @@ const schema = z.object({
   items: z.array(
     z.object({
       description: z.string().min(1, "Required"),
+      itemDescription: z.string().optional(),
       quantity: z.string().min(1),
       unitCost: z.string().min(1),
       taxRate: z.string().default("0"),
