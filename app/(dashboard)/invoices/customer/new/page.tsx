@@ -50,6 +50,7 @@ interface Employee {
 
 interface LineItem {
   description: string;
+  itemDescription: string;
   quantity: string;
   unitPrice: string;
   taxRate: string;
@@ -58,6 +59,7 @@ interface LineItem {
 
 const blankItem = (): LineItem => ({
   description: "",
+  itemDescription: "",
   quantity: "1",
   unitPrice: "0",
   taxRate: "0",
@@ -278,6 +280,7 @@ export default function NewCustomerInvoicePage() {
       next[idx] = {
         ...next[idx],
         description: product.name,
+        itemDescription: product.description ?? "",
         unitPrice: product.price,
         taxRate: product.taxRate,
       };
@@ -306,6 +309,7 @@ export default function NewCustomerInvoicePage() {
     if (data.items?.length) {
       const fresh: LineItem[] = data.items.map((i) => ({
         ...i,
+        itemDescription: "",
         taxRate: i.taxRate || "0",
         fees: allFees.length > 0 ? [null] : [],
       }));
@@ -348,6 +352,7 @@ export default function NewCustomerInvoicePage() {
       },
       items: real.map((i) => ({
         description: i.description,
+        itemDescription: i.itemDescription,
         quantity: i.quantity,
         unitPrice: i.unitPrice,
         taxRate: i.taxRate,
@@ -598,6 +603,12 @@ export default function NewCustomerInvoicePage() {
                               </div>
                             );
                           })()}
+                          <input
+                            className="w-full px-2 py-1 border-0 focus:outline-none focus:bg-brand-50 rounded text-xs text-gray-500"
+                            placeholder="Description (optional)"
+                            value={item.itemDescription}
+                            onChange={(e) => updateItem(idx, "itemDescription", e.target.value)}
+                          />
                         </td>
                         <td className="px-2 py-1">
                           <input
