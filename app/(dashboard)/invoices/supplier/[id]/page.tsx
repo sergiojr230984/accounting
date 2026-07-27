@@ -27,6 +27,7 @@ const editSchema = z.object({
   customerInvoiceRef: z.string().optional().nullable(),
   items: z.array(
     z.object({
+      id: z.string().optional(),
       description: z.string().min(1),
       itemDescription: z.string().optional(),
       quantity: z.string(),
@@ -93,6 +94,7 @@ export default function SupplierInvoiceDetailPage() {
       notes: data.notes ?? "",
       customerInvoiceRef: data.customerInvoiceRef ?? "",
       items: data.items.map((item: InvoiceDetail["items"][0]) => ({
+        id: item.id,
         description: item.description,
         itemDescription: item.itemDescription ?? "",
         quantity: item.quantity,
@@ -300,7 +302,12 @@ export default function SupplierInvoiceDetailPage() {
             </div>
           </div>
           <div className="card">
-            <InvoiceItemsEditor control={control} register={register} type="supplier" />
+            <InvoiceItemsEditor
+              control={control}
+              register={register}
+              type="supplier"
+              lockedCount={invoice.paymentStatus !== "UNPAID" ? invoice.items.length : 0}
+            />
           </div>
 
           <InvoiceDocumentPreview

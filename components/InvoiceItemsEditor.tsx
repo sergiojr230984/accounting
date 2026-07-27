@@ -49,6 +49,13 @@ interface InvoiceItemsEditorProps<T extends FieldValues> {
   // fees aren't tracked per-line in the database.
   initialAppliedFeeIds?: string[];
   onFeesChange?: (fees: AppliedFee[]) => void;
+  // Number of leading rows (by original load order) that already existed
+  // when a payment was recorded against this invoice/bill. The server
+  // rejects any change to those rows once money has changed hands, so they
+  // render locked here too rather than letting the user fill out edits
+  // that will bounce back as a 409 on save. Rows beyond this count are new
+  // additions and stay fully editable.
+  lockedCount?: number;
 }
 
 function LinePreview({ quantity, price, taxRate }: { quantity: string; price: string; taxRate: string }) {
@@ -78,6 +85,7 @@ export default function InvoiceItemsEditor<T extends FieldValues = any>({
   feeOptions = [],
   initialAppliedFeeIds = [],
   onFeesChange,
+  lockedCount = 0,
 }: InvoiceItemsEditorProps<T>) {
   const { fields, append, remove } = useFieldArray({ control, name: fieldName as Path<T> as never });
   const items = useWatch({ control, name: fieldName as Path<T> as never }) as unknown as ItemRow[];
@@ -183,7 +191,14 @@ export default function InvoiceItemsEditor<T extends FieldValues = any>({
   return (
     <div>
       <div className="flex items-center justify-between mb-3">
-        <h3 className="text-sm font-semibold text-gray-700">Line Items</h3>
+        <div>
+          <h3 className="text-sm font-semibold text-gray-700">Line Items</h3>
+          {lockedCount > 0 && (
+            <p className="text-xs text-gray-400 mt-0.5">
+              A payment has been recorded — existing items are locked, but you can still add new ones.
+            </p>
+          )}
+        </div>
         <button
           type="button"
           onClick={() => {
@@ -209,15 +224,21 @@ export default function InvoiceItemsEditor<T extends FieldValues = any>({
             ? (itemFeeSlots[index] && itemFeeSlots[index].length > 0 ? itemFeeSlots[index] : [null])
             : [];
           const usedFeeIds = feeSlots.filter((fid): fid is string => fid !== null);
+          const locked = index < lockedCount;
 
           return (
-            <div key={field.id} className="bg-gray-50 rounded-lg p-2 space-y-1">
+            <div key={field.id} className={`rounded-lg p-2 space-y-1 ${locked ? "bg-gray-100" : "bg-gray-50"}`}>
+              {/* Carries the existing row's database id through submission so
+                  the server can tell an unchanged existing line apart from a
+                  newly-added one once a payment has been recorded. */}
+              <input type="hidden" {...register(`${fieldName}.${index}.id` as Path<T>)} />
               <div className="grid grid-cols-12 gap-2 items-start">
                 {/* Item name — col 0-2 */}
                 <div className="col-span-3">
                   <input
                     className="input text-sm"
                     placeholder="Item name"
+                    disabled={locked}
                     {...register(`${fieldName}.${index}.description` as Path<T>)}
                   />
                 </div>
@@ -226,6 +247,7 @@ export default function InvoiceItemsEditor<T extends FieldValues = any>({
                   <input
                     className="input text-sm text-gray-600"
                     placeholder="Description (optional)"
+                    disabled={locked}
                     {...register(`${fieldName}.${index}.itemDescription` as Path<T>)}
                   />
                 </div>
@@ -237,6 +259,7 @@ export default function InvoiceItemsEditor<T extends FieldValues = any>({
                     type="number"
                     step="0.0001"
                     min="0"
+                    disabled={locked}
                     {...register(`${fieldName}.${index}.quantity` as Path<T>)}
                   />
                 </div>
@@ -248,6 +271,7 @@ export default function InvoiceItemsEditor<T extends FieldValues = any>({
                     type="number"
                     step="0.01"
                     min="0"
+                    disabled={locked}
                     {...register(`${fieldName}.${index}.${priceField}` as Path<T>)}
                   />
                 </div>
@@ -256,6 +280,7 @@ export default function InvoiceItemsEditor<T extends FieldValues = any>({
                   {taxRates.length > 0 ? (
                     <select
                       className="input text-sm"
+                      disabled={locked}
                       {...register(`${fieldName}.${index}.taxRate` as Path<T>)}
                     >
                       <option value="0">No tax</option>
@@ -288,6 +313,7 @@ export default function InvoiceItemsEditor<T extends FieldValues = any>({
                       step="0.001"
                       min="0"
                       max="1"
+                      disabled={locked}
                       {...register(`${fieldName}.${index}.taxRate` as Path<T>)}
                     />
                   )}
@@ -302,7 +328,7 @@ export default function InvoiceItemsEditor<T extends FieldValues = any>({
                 </div>
                 {/* Delete */}
                 <div className="col-span-1 flex justify-end pt-1">
-                  {fields.length > 1 && (
+                  {fields.length > 1 && !locked && (
                     <button
                       type="button"
                       onClick={() => {
