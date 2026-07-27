@@ -676,18 +676,24 @@ export default function CustomerInvoiceDetailPage() {
                   <span>Paid</span>
                   <span>{formatCurrency(invoice.paidAmount)}</span>
                 </div>
-                <div className="flex justify-between font-semibold text-red-600">
-                  <span>Balance Due</span>
-                  <span>
-                    {formatCurrency(
-                      (
-                        parseFloat(invoice.totalAmount) -
-                        parseFloat(invoice.paidAmount) -
-                        parseFloat(invoice.downPayment)
-                      ).toFixed(2)
-                    )}
-                  </span>
-                </div>
+                {(() => {
+                  const balance = (
+                    parseFloat(invoice.totalAmount) -
+                    parseFloat(invoice.paidAmount) -
+                    parseFloat(invoice.downPayment)
+                  );
+                  // A customer who rounds up a cash payment (e.g. paying
+                  // $1001 on a $1000.70 invoice) overpays by design -- shown
+                  // as a credit owed back rather than a negative "balance
+                  // due", which would read as a data error.
+                  const overpaid = balance < 0;
+                  return (
+                    <div className={`flex justify-between font-semibold ${overpaid ? "text-green-600" : "text-red-600"}`}>
+                      <span>{overpaid ? "Credit (overpaid)" : "Balance Due"}</span>
+                      <span>{formatCurrency(Math.abs(balance).toFixed(2))}</span>
+                    </div>
+                  );
+                })()}
               </div>
             </div>
 
