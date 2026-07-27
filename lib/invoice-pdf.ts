@@ -404,10 +404,20 @@ export function generateInvoicePDF(invoice: InvoicePDFData): jsPDF {
     if (payments.length > 0) {
       for (const p of payments) {
         const dateStr = formatDateOnly(p.paymentDate);
-        const label = p.notes?.trim()
-          ? `Payment on ${dateStr} using ${p.notes.trim()}:`
-          : `Payment on ${dateStr}:`;
-        writeRow(label, "-" + pdfCurrency(String(p.amount)), { muted: true });
+        writeRow(`Payment on ${dateStr}`, "-" + pdfCurrency(String(p.amount)), { muted: true });
+        const note = p.notes?.trim();
+        if (note) {
+          // Draw on its own line below the amount, matching the item
+          // name/description stacking -- a long note previously ran
+          // rightward on the same baseline as the amount and collided
+          // with it.
+          doc.setFont("helvetica", "normal");
+          doc.setFontSize(8);
+          doc.setTextColor(...TEXT_LIGHT);
+          const noteLines = doc.splitTextToSize(note, valueX - labelX);
+          doc.text(noteLines, labelX, totalsY);
+          totalsY += noteLines.length * 10 + 4;
+        }
       }
       const leftover = paid.minus(paymentSum);
       if (leftover.gt(0.005)) {

@@ -65,7 +65,10 @@ export async function PATCH(
     return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
   }
 
-  const existing = await prisma.supplierInvoice.findUnique({ where: { id } });
+  const existing = await prisma.supplierInvoice.findUnique({
+    where: { id },
+    include: { items: true },
+  });
   if (!existing) return NextResponse.json({ error: "Not found" }, { status: 404 });
 
   const beforeSnapshot = {
@@ -77,14 +80,40 @@ export async function PATCH(
     notes: existing.notes,
   };
 
-  // Once any payment has been recorded, line items (and the totals derived
-  // from them) are financial history -- same reasoning as the customer-
-  // invoice equivalent of this guard.
+  // Once any payment has been recorded, existing line items are financial
+  // history -- same reasoning as the customer-invoice equivalent of this
+  // guard. Appending a genuinely new line (no id) is still allowed; every
+  // incoming item that carries an id must match an existing item
+  // byte-for-byte, and every existing item's id must still be present.
   if (parsed.data.items !== undefined && existing.paymentStatus !== "UNPAID") {
-    return NextResponse.json(
-      { error: "This bill has a recorded payment and its line items can no longer be edited." },
-      { status: 409 }
-    );
+    const existingById = new Map(existing.items.map((it) => [it.id, it]));
+    const seenIds = new Set<string>();
+    for (const item of parsed.data.items) {
+      if (!item.id) continue;
+      const match = existingById.get(item.id);
+      if (!match) continue; // unknown id — treated as a new line below
+      seenIds.add(item.id);
+      const unchanged =
+        match.description === item.description &&
+        (match.itemDescription ?? "") === (item.itemDescription ?? "") &&
+        new Decimal(match.quantity.toString()).equals(new Decimal(item.quantity || "0")) &&
+        new Decimal(match.unitCost.toString()).equals(new Decimal(item.unitCost || "0")) &&
+        new Decimal(match.taxRate.toString()).equals(new Decimal(item.taxRate || "0"));
+      if (!unchanged) {
+        return NextResponse.json(
+          { error: "This bill has a recorded payment -- existing line items can't be changed or removed. You can still add new items." },
+          { status: 409 }
+        );
+      }
+    }
+    for (const existingItem of existing.items) {
+      if (!seenIds.has(existingItem.id)) {
+        return NextResponse.json(
+          { error: "This bill has a recorded payment -- existing line items can't be changed or removed. You can still add new items." },
+          { status: 409 }
+        );
+      }
+    }
   }
 
   const data = parsed.data;
@@ -135,21 +164,49 @@ export async function PATCH(
     updateData.taxAmount = taxAmount.toFixed(2);
     updateData.totalAmount = subtotal.plus(taxAmount).toFixed(2);
 
-    // Nested inside the single supplierInvoice.update() call's relation
-    // write (rather than a separate eager deleteMany() statement before
-    // it) so the delete+create runs as one atomic transaction -- same fix
-    // as the customer-invoice equivalent of this pattern.
-    updateData.items = {
-      deleteMany: {},
-      create: computedItems.map((item) => ({
-        description: item.description,
-        itemDescription: item.itemDescription ?? null,
-        quantity: item.quantity,
-        unitCost: item.unitCost,
-        taxRate: item.taxRate,
-        lineTotal: item.lineTotal,
-      })),
-    };
+    if (existing.paymentStatus === "UNPAID") {
+      // No money has changed hands yet, so the whole line-item set is still
+      // a draft and can be freely rewritten.
+      //
+      // Nested inside the single supplierInvoice.update() call's relation
+      // write (rather than a separate eager deleteMany() statement before
+      // it) so the delete+create runs as one atomic transaction -- same fix
+      // as the customer-invoice equivalent of this pattern.
+      updateData.items = {
+        deleteMany: {},
+        create: computedItems.map((item) => ({
+          description: item.description,
+          itemDescription: item.itemDescription ?? null,
+          quantity: item.quantity,
+          unitCost: item.unitCost,
+          taxRate: item.taxRate,
+          lineTotal: item.lineTotal,
+        })),
+      };
+    } else {
+      // A payment already exists: the guard above already proved every
+      // incoming item either matches an existing row untouched or has no
+      // id at all. Only create rows for the latter -- existing rows are
+      // left completely alone rather than being deleted and recreated.
+      const existingIds = new Set(existing.items.map((it) => it.id));
+      const newItems = data.items
+        .map((item, idx) => ({ id: item.id, computed: computedItems[idx] }))
+        .filter(({ id }) => !id || !existingIds.has(id))
+        .map(({ computed }) => computed);
+
+      if (newItems.length > 0) {
+        updateData.items = {
+          create: newItems.map((item) => ({
+            description: item.description,
+            itemDescription: item.itemDescription ?? null,
+            quantity: item.quantity,
+            unitCost: item.unitCost,
+            taxRate: item.taxRate,
+            lineTotal: item.lineTotal,
+          })),
+        };
+      }
+    }
   }
 
   // Reject an amount that would exceed what's actually owed -- same
@@ -167,10 +224,16 @@ export async function PATCH(
     }
   }
 
-  // Auto-derive paymentStatus when paidAmount changes and the caller didn't
-  // explicitly send a status override.
-  if (data.paidAmount !== undefined && data.paymentStatus === undefined) {
-    const newPaid = new Decimal(data.paidAmount);
+  // Auto-derive paymentStatus when paidAmount or the total (e.g. a newly
+  // added item) changes, and the caller didn't explicitly send a status
+  // override. Without the totalAmount check, appending an item to a
+  // fully-paid bill would leave it displaying "Paid" even though the new
+  // item pushed the balance back above zero.
+  if (
+    (data.paidAmount !== undefined || updateData.totalAmount !== undefined) &&
+    data.paymentStatus === undefined
+  ) {
+    const newPaid = new Decimal(data.paidAmount ?? existing.paidAmount.toString());
     const effectiveTotal = updateData.totalAmount !== undefined
       ? new Decimal(updateData.totalAmount as string)
       : new Decimal(existing.totalAmount.toString());
