@@ -12,7 +12,7 @@ import {
 } from "react-hook-form";
 import { Plus, Trash2 } from "lucide-react";
 import Decimal from "decimal.js";
-import ProductSelect, { type ProductOption } from "./ProductSelect";
+import ProductAutocomplete, { type ProductOption } from "./ProductAutocomplete";
 
 interface ItemRow {
   description: string;
@@ -251,23 +251,25 @@ export default function InvoiceItemsEditor<T extends FieldValues = any>({
                 {/* Item name — col 0-2 */}
                 <div className="col-span-3">
                   {type === "customer" ? (
-                    <ProductSelect
+                    <ProductAutocomplete
                       className="input text-sm"
                       products={products}
                       value={items?.[index]?.description ?? ""}
                       disabled={locked}
-                      onSelect={(name, product) => {
+                      onChange={(v) => {
                         if (!setValue) return;
-                        setValue(`${fieldName}.${index}.description` as Path<T>, name as never, { shouldDirty: true });
-                        if (product) {
-                          setValue(
-                            `${fieldName}.${index}.itemDescription` as Path<T>,
-                            (product.description ?? "") as never,
-                            { shouldDirty: true }
-                          );
-                          setValue(`${fieldName}.${index}.unitPrice` as Path<T>, product.price as never, { shouldDirty: true });
-                          setValue(`${fieldName}.${index}.taxRate` as Path<T>, product.taxRate as never, { shouldDirty: true });
-                        }
+                        setValue(`${fieldName}.${index}.description` as Path<T>, v as never, { shouldDirty: true });
+                      }}
+                      onSelect={(product) => {
+                        if (!setValue) return;
+                        setValue(`${fieldName}.${index}.description` as Path<T>, product.name as never, { shouldDirty: true });
+                        setValue(
+                          `${fieldName}.${index}.itemDescription` as Path<T>,
+                          (product.description ?? "") as never,
+                          { shouldDirty: true }
+                        );
+                        setValue(`${fieldName}.${index}.unitPrice` as Path<T>, product.price as never, { shouldDirty: true });
+                        setValue(`${fieldName}.${index}.taxRate` as Path<T>, product.taxRate as never, { shouldDirty: true });
                       }}
                     />
                   ) : (

@@ -18,7 +18,7 @@ import Decimal from "decimal.js";
 import CustomerCreateModal from "@/components/CustomerCreateModal";
 import InvoiceExtractor from "@/components/InvoiceExtractor";
 import InvoiceDocumentPreview from "@/components/InvoiceDocumentPreview";
-import ProductSelect, { type ProductOption } from "@/components/ProductSelect";
+import ProductAutocomplete, { type ProductOption } from "@/components/ProductAutocomplete";
 import { formatCurrency } from "@/lib/money";
 import { generateInvoicePDF } from "@/lib/invoice-pdf";
 
@@ -556,14 +556,12 @@ export default function NewCustomerInvoicePage() {
                     <Fragment key={`item-${idx}`}>
                       <tr className="border-b last:border-b-0 hover:bg-gray-50/50">
                         <td className="px-2 py-1 relative">
-                          <ProductSelect
-                            className="w-full px-2 py-1.5 border-0 focus:outline-none focus:bg-brand-50 rounded text-sm bg-transparent"
+                          <ProductAutocomplete
+                            className="w-full px-2 py-1.5 border-0 focus:outline-none focus:bg-brand-50 rounded text-sm"
                             products={products}
                             value={item.description}
-                            onSelect={(name, product) => {
-                              if (product) applyProduct(idx, product);
-                              else updateItem(idx, "description", name);
-                            }}
+                            onChange={(v) => updateItem(idx, "description", v)}
+                            onSelect={(product) => applyProduct(idx, product)}
                           />
                           <input
                             className="w-full px-2 py-1 border-0 focus:outline-none focus:bg-brand-50 rounded text-xs text-gray-500"

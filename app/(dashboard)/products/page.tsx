@@ -1,7 +1,7 @@
 "use client";
 
 import { Fragment, useEffect, useState } from "react";
-import { Plus, Package, Loader2, Search, Pencil, Trash2, X, Check } from "lucide-react";
+import { Plus, Package, Loader2, Search, Pencil, X, Check } from "lucide-react";
 import { formatCurrency } from "@/lib/money";
 
 const INCOME_ACCOUNTS = ["Sales", "Services", "Materials", "Other Revenue"];
@@ -182,8 +182,6 @@ export default function ProductsPage() {
   const [search, setSearch] = useState("");
   const [showAddForm, setShowAddForm] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
-  const [deletingId, setDeletingId] = useState<string | null>(null);
-  const [deleteError, setDeleteError] = useState<Record<string, string>>({});
   const [isAdmin, setIsAdmin] = useState(false);
 
   async function load() {
@@ -245,19 +243,6 @@ export default function ProductsPage() {
     return null;
   }
 
-  async function handleDelete(id: string) {
-    setDeletingId(id);
-    setDeleteError({});
-    const res = await fetch(`/api/products/${id}`, { method: "DELETE" });
-    if (!res.ok) {
-      const d = await res.json().catch(() => ({}));
-      setDeleteError((prev) => ({ ...prev, [id]: d.error ?? "Delete failed" }));
-    } else {
-      await load();
-    }
-    setDeletingId(null);
-  }
-
   const filtered = products.filter(
     (p) =>
       p.name.toLowerCase().includes(search.toLowerCase()) ||
@@ -286,12 +271,16 @@ export default function ProductsPage() {
       <div className="bg-blue-50 border border-blue-200 rounded-xl p-4 text-sm text-blue-800">
         {isAdmin ? (
           <p>
-            This is the approved catalog. When staff create invoices, they can only pick items from here —
-            they can&apos;t type a new name. Mark a product <strong>Inactive</strong> to stop it from showing up
-            on new invoices without deleting its history (e.g. keep only the exact delivery variants you want in use).
+            When staff type an item name on an invoice, matching products here are suggested so they reuse the
+            existing one instead of creating a near-duplicate. Typing a genuinely new name still adds it here for
+            everyone to reuse. Mark a product <strong>Inactive</strong> to stop it from being suggested or used on
+            new invoices without losing its history — items can&apos;t be deleted, only locked.
           </p>
         ) : (
-          <p>Only admins can add or change products/services. Ask an admin if something you need is missing.</p>
+          <p>
+            Only admins can edit or lock products/services here. When creating an invoice, matching items will be
+            suggested as you type — please reuse an existing one instead of adding a near-duplicate if one already fits.
+          </p>
         )}
       </div>
 
@@ -377,16 +366,6 @@ export default function ProductsPage() {
                           >
                             <Pencil className="w-4 h-4" />
                           </button>
-                          <button
-                            onClick={() => handleDelete(p.id)}
-                            disabled={deletingId === p.id}
-                            className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors disabled:opacity-40"
-                            title="Delete"
-                          >
-                            {deletingId === p.id
-                              ? <Loader2 className="w-4 h-4 animate-spin" />
-                              : <Trash2 className="w-4 h-4" />}
-                          </button>
                         </div>
                       )}
                     </td>
@@ -412,14 +391,6 @@ export default function ProductsPage() {
                           onSave={(data) => handleEdit(p.id, data)}
                           onCancel={() => setEditingId(null)}
                         />
-                      </td>
-                    </tr>
-                  )}
-
-                  {deleteError[p.id] && (
-                    <tr key={`err-${p.id}`}>
-                      <td colSpan={7} className="px-5 py-2 bg-red-50">
-                        <p className="text-red-600 text-xs">{deleteError[p.id]}</p>
                       </td>
                     </tr>
                   )}
