@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { requireAuth, requireRole } from "@/lib/api";
-import { syncProductCatalog } from "@/lib/product-catalog";
+import { syncProductCatalog, findUncatalogedItem } from "@/lib/product-catalog";
 import { writeAuditLog, extractMeta, actorFromSession, diffChanges } from "@/lib/audit";
 import { z } from "zod";
 import Decimal from "decimal.js";
@@ -234,6 +234,24 @@ export async function PATCH(
   // IMPORTANT: compute and validate items BEFORE any destructive DB operation
   // so that a bad value can never leave the invoice with no items.
   if (data.items && data.items.length > 0) {
+    // Once a payment is recorded, existing rows are locked and submitted
+    // back unchanged (enforced above) -- only genuinely new lines need to
+    // pass the catalog check; re-validating an old, untouched row against a
+    // catalog that may have since dropped or renamed it would block edits
+    // that have nothing to do with that line.
+    const existingIds = new Set(existing.items.map((it) => it.id));
+    const itemsToCatalogCheck =
+      existing.paymentStatus === "UNPAID"
+        ? data.items
+        : data.items.filter((item) => !item.id || !existingIds.has(item.id));
+    const uncataloged = await findUncatalogedItem(prisma, guard.user.role, itemsToCatalogCheck);
+    if (uncataloged) {
+      return NextResponse.json(
+        { error: `"${uncataloged}" is not in the approved product/service catalog. Ask an admin to add it under Products & Services.` },
+        { status: 400 }
+      );
+    }
+
     let subtotal = new Decimal(0);
     let taxAmount = new Decimal(0);
     let computedItems: { description: string; itemDescription?: string; quantity: string; unitPrice: string; taxRate: string; lineTotal: string }[];

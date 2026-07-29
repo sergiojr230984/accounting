@@ -79,3 +79,34 @@ export async function syncProductCatalog(
     }
   }
 }
+
+/**
+ * Non-admins can only invoice line items that already exist as an active
+ * catalog product -- this is what actually stops the catalog from
+ * fragmenting into near-duplicates (the thing syncProductCatalog above
+ * papers over by silently minting a new product for whatever text was
+ * typed). Admin keeps a free-text escape hatch: their typed items still
+ * flow through syncProductCatalog above and land in the catalog for reuse.
+ * Returns the first name that isn't in the active catalog, or null if every
+ * item checks out.
+ */
+export async function findUncatalogedItem(
+  client: Pick<PrismaClient, "product">,
+  role: string | undefined,
+  items: { description: string }[]
+): Promise<string | null> {
+  if (role === "ADMIN") return null;
+
+  const active = await client.product.findMany({
+    where: { active: true },
+    select: { name: true },
+  });
+  const catalog = new Set(active.map((p) => p.name.trim().toLowerCase()));
+
+  for (const item of items) {
+    const name = item.description.trim();
+    if (!name) continue;
+    if (!catalog.has(name.toLowerCase())) return name;
+  }
+  return null;
+}

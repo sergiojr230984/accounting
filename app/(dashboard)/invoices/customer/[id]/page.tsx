@@ -535,6 +535,7 @@ export default function CustomerInvoiceDetailPage() {
                 control={control}
                 register={register}
                 type="customer"
+                setValue={setValue}
                 feeOptions={feeOptions}
                 initialAppliedFeeIds={invoice.appliedFees.map((f) => f.id).filter((fid): fid is string => !!fid)}
                 onFeesChange={setComputedAppliedFees}
