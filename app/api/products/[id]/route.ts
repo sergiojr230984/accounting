@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { requireAuth } from "@/lib/api";
+import { requireRole } from "@/lib/api";
 import { writeAuditLog, extractMeta, actorFromSession, diffChanges } from "@/lib/audit";
 import { z } from "zod";
 
@@ -17,7 +17,7 @@ export async function PATCH(
   request: Request,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  const guard = await requireAuth();
+  const guard = await requireRole("ADMIN");
   if (guard instanceof NextResponse) return guard;
 
   const { id } = await params;
@@ -34,14 +34,27 @@ export async function PATCH(
   }
 
   const d = parsed.data;
+  const newName = d.name?.trim();
   try {
     const existing = await prisma.product.findUnique({ where: { id } });
     if (!existing) return NextResponse.json({ error: "Not found" }, { status: 404 });
 
+    if (newName) {
+      const dup = await prisma.product.findFirst({
+        where: { name: { equals: newName, mode: "insensitive" }, NOT: { id } },
+      });
+      if (dup) {
+        return NextResponse.json(
+          { error: `A product/service named "${dup.name}" already exists.` },
+          { status: 409 }
+        );
+      }
+    }
+
     const product = await prisma.product.update({
       where: { id },
       data: {
-        ...(d.name !== undefined && { name: d.name }),
+        ...(newName !== undefined && { name: newName }),
         ...(d.description !== undefined && { description: d.description || null }),
         ...(d.price !== undefined && { price: d.price }),
         ...(d.taxRate !== undefined && { taxRate: d.taxRate }),
@@ -83,7 +96,7 @@ export async function DELETE(
   request: Request,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  const guard = await requireAuth();
+  const guard = await requireRole("ADMIN");
   if (guard instanceof NextResponse) return guard;
 
   const { id } = await params;

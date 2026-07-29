@@ -184,6 +184,7 @@ export default function ProductsPage() {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [deleteError, setDeleteError] = useState<Record<string, string>>({});
+  const [isAdmin, setIsAdmin] = useState(false);
 
   async function load() {
     setLoading(true);
@@ -199,7 +200,13 @@ export default function ProductsPage() {
     }
   }
 
-  useEffect(() => { load(); }, []);
+  useEffect(() => {
+    load();
+    fetch("/api/me")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d: { viewer?: { isAdmin?: boolean } } | null) => setIsAdmin(!!d?.viewer?.isAdmin))
+      .catch(() => {});
+  }, []);
 
   async function parseErr(res: Response): Promise<string> {
     try {
@@ -265,16 +272,30 @@ export default function ProductsPage() {
           <h1 className="text-2xl font-bold text-gray-900">Products &amp; Services</h1>
           <p className="text-sm text-gray-500">{products.length} item{products.length !== 1 ? "s" : ""}</p>
         </div>
-        <button
-          onClick={() => { setShowAddForm(true); setEditingId(null); }}
-          className="btn-primary"
-        >
-          <Plus className="w-4 h-4" />
-          New product / service
-        </button>
+        {isAdmin && (
+          <button
+            onClick={() => { setShowAddForm(true); setEditingId(null); }}
+            className="btn-primary"
+          >
+            <Plus className="w-4 h-4" />
+            New product / service
+          </button>
+        )}
       </div>
 
-      {showAddForm && (
+      <div className="bg-blue-50 border border-blue-200 rounded-xl p-4 text-sm text-blue-800">
+        {isAdmin ? (
+          <p>
+            This is the approved catalog. When staff create invoices, they can only pick items from here —
+            they can&apos;t type a new name. Mark a product <strong>Inactive</strong> to stop it from showing up
+            on new invoices without deleting its history (e.g. keep only the exact delivery variants you want in use).
+          </p>
+        ) : (
+          <p>Only admins can add or change products/services. Ask an admin if something you need is missing.</p>
+        )}
+      </div>
+
+      {showAddForm && isAdmin && (
         <div className="card border-brand-200 border-2">
           <h2 className="font-semibold text-gray-800 mb-4">New product or service</h2>
           <ProductForm
@@ -347,29 +368,31 @@ export default function ProductsPage() {
                       </span>
                     </td>
                     <td className="px-5 py-3">
-                      <div className="flex items-center justify-end gap-2">
-                        <button
-                          onClick={() => { setEditingId(p.id); setShowAddForm(false); }}
-                          className="p-1.5 text-gray-400 hover:text-brand-600 hover:bg-brand-50 rounded-lg transition-colors"
-                          title="Edit"
-                        >
-                          <Pencil className="w-4 h-4" />
-                        </button>
-                        <button
-                          onClick={() => handleDelete(p.id)}
-                          disabled={deletingId === p.id}
-                          className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors disabled:opacity-40"
-                          title="Delete"
-                        >
-                          {deletingId === p.id
-                            ? <Loader2 className="w-4 h-4 animate-spin" />
-                            : <Trash2 className="w-4 h-4" />}
-                        </button>
-                      </div>
+                      {isAdmin && (
+                        <div className="flex items-center justify-end gap-2">
+                          <button
+                            onClick={() => { setEditingId(p.id); setShowAddForm(false); }}
+                            className="p-1.5 text-gray-400 hover:text-brand-600 hover:bg-brand-50 rounded-lg transition-colors"
+                            title="Edit"
+                          >
+                            <Pencil className="w-4 h-4" />
+                          </button>
+                          <button
+                            onClick={() => handleDelete(p.id)}
+                            disabled={deletingId === p.id}
+                            className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors disabled:opacity-40"
+                            title="Delete"
+                          >
+                            {deletingId === p.id
+                              ? <Loader2 className="w-4 h-4 animate-spin" />
+                              : <Trash2 className="w-4 h-4" />}
+                          </button>
+                        </div>
+                      )}
                     </td>
                   </tr>
 
-                  {editingId === p.id && (
+                  {editingId === p.id && isAdmin && (
                     <tr key={`edit-${p.id}`}>
                       <td colSpan={7} className="px-5 py-4 bg-blue-50 border-b border-blue-100">
                         <p className="text-xs font-semibold text-brand-700 mb-3 uppercase tracking-wide">
