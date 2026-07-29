@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { requireAuth, scopeInvoicesToOwnEmployee } from "@/lib/api";
-import { syncProductCatalog } from "@/lib/product-catalog";
+import { syncProductCatalog, findUncatalogedItem } from "@/lib/product-catalog";
 import { writeAuditLog, extractMeta, actorFromSession } from "@/lib/audit";
 import { z } from "zod";
 import Decimal from "decimal.js";
@@ -114,6 +114,14 @@ export async function POST(request: Request) {
   if (guard.user.role === "SALES") {
     const scope = await scopeInvoicesToOwnEmployee(guard);
     employeeId = scope?.employeeId ?? null;
+  }
+
+  const uncataloged = await findUncatalogedItem(prisma, guard.user.role, items);
+  if (uncataloged) {
+    return NextResponse.json(
+      { error: `"${uncataloged}" is not in the approved product/service catalog. Ask an admin to add it under Products & Services.` },
+      { status: 400 }
+    );
   }
 
   // customerId and employeeId are foreign keys the DB will happily reject

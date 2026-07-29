@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { initializeDatabase } from "@/lib/init-db";
-import { requireAuth } from "@/lib/api";
+import { requireAuth, requireRole } from "@/lib/api";
 import { writeAuditLog, extractMeta, actorFromSession } from "@/lib/audit";
 import { z } from "zod";
 
@@ -30,7 +30,10 @@ export async function GET() {
 }
 
 export async function POST(request: Request) {
-  const guard = await requireAuth();
+  // Only Admin can add to the catalog -- this is what keeps staff from
+  // spawning near-duplicate products/services (e.g. five slightly
+  // different "Delivery" line items) that fragment the frequency report.
+  const guard = await requireRole("ADMIN");
   if (guard instanceof NextResponse) return guard;
 
   let body: unknown;
@@ -47,9 +50,22 @@ export async function POST(request: Request) {
 
   await initializeDatabase();
   try {
+    const name = parsed.data.name.trim();
+    const dup = await prisma.product.findFirst({
+      where: { name: { equals: name, mode: "insensitive" } },
+    });
+    if (dup) {
+      return NextResponse.json(
+        {
+          error: `A product/service named "${dup.name}" already exists${dup.active ? "" : " (currently inactive)"}. Edit or reactivate it instead of creating a duplicate.`,
+        },
+        { status: 409 }
+      );
+    }
+
     const product = await prisma.product.create({
       data: {
-        name: parsed.data.name,
+        name,
         description: parsed.data.description || null,
         price: parsed.data.price,
         taxRate: parsed.data.taxRate,

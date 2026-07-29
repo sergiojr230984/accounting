@@ -6,11 +6,13 @@ import {
   useWatch,
   type Control,
   type UseFormRegister,
+  type UseFormSetValue,
   type FieldValues,
   type Path,
 } from "react-hook-form";
 import { Plus, Trash2 } from "lucide-react";
 import Decimal from "decimal.js";
+import ProductSelect, { type ProductOption } from "./ProductSelect";
 
 interface ItemRow {
   description: string;
@@ -41,6 +43,9 @@ interface InvoiceItemsEditorProps<T extends FieldValues> {
   register: UseFormRegister<T> | any;
   fieldName?: string;
   type: "customer" | "supplier";
+  // Needed to auto-fill price/tax when a catalog product is picked (customer type only)
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  setValue?: UseFormSetValue<T> | any;
   // Optional per-line fees (credit card fee / custom fees from Settings).
   // Only rendered when provided and non-empty.
   feeOptions?: FeeOption[];
@@ -86,12 +91,22 @@ export default function InvoiceItemsEditor<T extends FieldValues = any>({
   initialAppliedFeeIds = [],
   onFeesChange,
   lockedCount = 0,
+  setValue,
 }: InvoiceItemsEditorProps<T>) {
   const { fields, append, remove } = useFieldArray({ control, name: fieldName as Path<T> as never });
   const items = useWatch({ control, name: fieldName as Path<T> as never }) as unknown as ItemRow[];
 
   const priceField = type === "customer" ? "unitPrice" : "unitCost";
   const priceLabel = type === "customer" ? "Unit Price" : "Unit Cost";
+
+  const [products, setProducts] = useState<ProductOption[]>([]);
+  useEffect(() => {
+    if (type !== "customer") return;
+    fetch("/api/products")
+      .then((r) => (r.ok ? r.json() : []))
+      .then(setProducts)
+      .catch(() => {});
+  }, [type]);
 
   const [taxRates, setTaxRates] = useState<{ id: string; name: string; rate: string; active: boolean }[]>([]);
   useEffect(() => {
@@ -235,12 +250,34 @@ export default function InvoiceItemsEditor<T extends FieldValues = any>({
               <div className="grid grid-cols-12 gap-2 items-start">
                 {/* Item name — col 0-2 */}
                 <div className="col-span-3">
-                  <input
-                    className="input text-sm"
-                    placeholder="Item name"
-                    disabled={locked}
-                    {...register(`${fieldName}.${index}.description` as Path<T>)}
-                  />
+                  {type === "customer" ? (
+                    <ProductSelect
+                      className="input text-sm"
+                      products={products}
+                      value={items?.[index]?.description ?? ""}
+                      disabled={locked}
+                      onSelect={(name, product) => {
+                        if (!setValue) return;
+                        setValue(`${fieldName}.${index}.description` as Path<T>, name as never, { shouldDirty: true });
+                        if (product) {
+                          setValue(
+                            `${fieldName}.${index}.itemDescription` as Path<T>,
+                            (product.description ?? "") as never,
+                            { shouldDirty: true }
+                          );
+                          setValue(`${fieldName}.${index}.unitPrice` as Path<T>, product.price as never, { shouldDirty: true });
+                          setValue(`${fieldName}.${index}.taxRate` as Path<T>, product.taxRate as never, { shouldDirty: true });
+                        }
+                      }}
+                    />
+                  ) : (
+                    <input
+                      className="input text-sm"
+                      placeholder="Item name"
+                      disabled={locked}
+                      {...register(`${fieldName}.${index}.description` as Path<T>)}
+                    />
+                  )}
                 </div>
                 {/* Item description — col 3-5 */}
                 <div className="col-span-3">
