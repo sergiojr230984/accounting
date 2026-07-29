@@ -53,11 +53,17 @@ export default function ProductSelect({
       {legacyValue && (
         <option value={legacyValue}>{legacyValue} (not in current catalog)</option>
       )}
-      {active.map((p) => (
-        <option key={p.id} value={p.name}>
-          {p.name} — ${parseFloat(p.price).toFixed(2)}
-        </option>
-      ))}
+      {active.map((p) => {
+        // A catalog price of exactly $0 usually means "varies" (e.g. delivery
+        // priced by area), not that the item is actually free -- showing
+        // "$0.00" there reads as broken. Only show a price when it's set.
+        const price = parseFloat(p.price);
+        return (
+          <option key={p.id} value={p.name}>
+            {p.name}{price > 0 ? ` — $${price.toFixed(2)}` : " — price varies"}
+          </option>
+        );
+      })}
     </select>
   );
 }
