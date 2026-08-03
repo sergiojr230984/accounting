@@ -62,7 +62,13 @@ function validateAppliedFees(
     } catch {
       return NextResponse.json({ error: `Invalid amount for fee "${f.label}".` }, { status: 400 });
     }
-    if (amt.gt(feeBase.times(canonical.rate))) {
+    // Rounded to cents like every client-submitted amount is -- comparing
+    // against the raw, unrounded product would reject the roughly half of
+    // fees whose true value's third decimal digit rounds up (e.g. a true
+    // fee of 7.049931 legitimately displays and submits as 7.05, which is
+    // "over" the unrounded 7.049931 cap despite being the correct amount).
+    const cap = feeBase.times(canonical.rate).toDecimalPlaces(2);
+    if (amt.gt(cap)) {
       return NextResponse.json(
         { error: `Fee "${f.label}" amount exceeds what its configured rate allows.` },
         { status: 400 }
