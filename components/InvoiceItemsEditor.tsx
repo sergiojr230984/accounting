@@ -168,7 +168,14 @@ export default function InvoiceItemsEditor<T extends FieldValues = any>({
   // Aggregate all per-line fee selections into totals and report them up.
   useEffect(() => {
     if (!onFeesChange) return;
-    const feeAgg = new Map<string, AppliedFee>();
+    // Kept as full-precision Decimals while accumulating -- rounding each
+    // line's contribution to cents before adding it to the running total
+    // (as opposed to rounding once at the end) compounds upward across
+    // several lines and can push the reported amount a cent above the
+    // server's cap (feeBase * rate), which is computed from the unrounded
+    // subtotal and rejects the invoice as "exceeds what its configured
+    // rate allows" even though the true fee is within the ceiling.
+    const feeAgg = new Map<string, { id: string; label: string; rate: number; amount: Decimal }>();
     (items ?? []).forEach((item, idx) => {
       let lineTotal = new Decimal(0);
       try {
@@ -193,13 +200,15 @@ export default function InvoiceItemsEditor<T extends FieldValues = any>({
         }
         const cur = feeAgg.get(feeId);
         if (cur) {
-          cur.amount = new Decimal(cur.amount).plus(amt).toFixed(2);
+          cur.amount = cur.amount.plus(amt);
         } else {
-          feeAgg.set(feeId, { id: opt.id, label: opt.label, rate: opt.rate, amount: amt.toFixed(2) });
+          feeAgg.set(feeId, { id: opt.id, label: opt.label, rate: opt.rate, amount: amt });
         }
       }
     });
-    onFeesChange(Array.from(feeAgg.values()));
+    onFeesChange(
+      Array.from(feeAgg.values()).map((f) => ({ ...f, amount: f.amount.toFixed(2) }))
+    );
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [items, itemFeeSlots, feeOptions]);
 
