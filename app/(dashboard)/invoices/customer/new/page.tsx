@@ -147,7 +147,7 @@ export default function NewCustomerInvoicePage() {
       if (nextNum?.nextNumber) {
         setInvoiceNumber(nextNum.nextNumber);
       } else if (settings) {
-        const prefix = settings.customerInvoicePrefix ?? "INV-2026-";
+        const prefix = settings.customerInvoicePrefix || "INV-2026-";
         const seq = settings.customerInvoiceNextSeq ?? 1001;
         setInvoiceNumber(`${prefix}${String(seq).padStart(4, "0")}`);
       }

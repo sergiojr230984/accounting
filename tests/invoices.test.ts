@@ -233,6 +233,51 @@ describe("next invoice number — computed via SQL aggregate, not a full-table J
     const after = await admin.getJson<{ nextSeq: number }>("/api/invoices/customer/next-number");
     expect(after.body.nextSeq).toBeGreaterThanOrEqual(8889);
   });
+
+  it("falls back to the default prefix instead of scanning every invoice number in the table when the configured prefix is blank", async () => {
+    // A Settings field saved as "" (e.g. accidentally cleared and saved,
+    // rather than left unset) must not be treated as "no prefix, match
+    // anything" -- that degrades the underlying LIKE '<prefix>%' scan into
+    // LIKE '%', which picks up the leading digit run of every invoice
+    // number in the table regardless of format, including old/unrelated
+    // ones, instead of just this prefix's own sequence.
+    const before = await admin.getJson<{ prefix: string; nextSeq: number }>(
+      "/api/invoices/customer/next-number"
+    );
+    const originalPrefix = before.body.prefix;
+    // Comfortably above whatever earlier tests in this file already pushed
+    // the "INV-2026-" sequence to, so the floor set below actually wins.
+    const floorSeq = before.body.nextSeq + 500;
+
+    try {
+      // A differently-formatted invoice number with a huge leading digit
+      // run -- if the prefix scope is lost, this pollutes the "next number"
+      // computation for every other prefix too.
+      await admin.postJson("/api/invoices/customer", {
+        customerId,
+        invoiceNumber: "99999999-unrelated-legacy-number",
+        invoiceDate: "2026-01-01",
+        dueDate: "2026-01-31",
+        items: [{ description: "x", quantity: "1", unitPrice: "1" }],
+      });
+
+      const settingsRes = await admin.postJson(
+        "/api/settings",
+        { customerInvoicePrefix: "", customerInvoiceNextSeq: floorSeq },
+        "PATCH"
+      );
+      expect(settingsRes.status).toBe(200);
+
+      const after = await admin.getJson<{ prefix: string; nextNumber: string; nextSeq: number }>(
+        "/api/invoices/customer/next-number"
+      );
+      expect(after.body.prefix).toBe("INV-2026-");
+      expect(after.body.nextSeq).toBe(floorSeq);
+      expect(after.body.nextNumber).toBe(`INV-2026-${floorSeq}`);
+    } finally {
+      await admin.postJson("/api/settings", { customerInvoicePrefix: originalPrefix }, "PATCH");
+    }
+  });
 });
 
 describe("applied fees are re-derived server-side, not trusted from the client", () => {

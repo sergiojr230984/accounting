@@ -31,7 +31,9 @@ export async function POST(
     if (estimate.convertedInvoiceId) return { error: "already_converted" as const };
 
     const profile = await tx.companyProfile.findUnique({ where: { id: "default" } });
-    const prefix = profile?.customerInvoicePrefix ?? "INV-2026-";
+    // `||`, not `??` -- see the matching comment in
+    // app/api/invoices/customer/next-number/route.ts.
+    const prefix = profile?.customerInvoicePrefix || "INV-2026-";
     const settingsSeq = profile?.customerInvoiceNextSeq ?? 1001;
     // Computed via `tx`, not the outer `prisma`, so this aggregate runs
     // inside the same transaction holding the estimate row lock -- see

@@ -8,7 +8,12 @@ export async function GET() {
   if (guard instanceof NextResponse) return guard;
 
   const profile = await prisma.companyProfile.findUnique({ where: { id: "default" } });
-  const prefix = profile?.customerInvoicePrefix ?? "INV-2026-";
+  // `||`, not `??` -- an empty string (a blanked-out Settings field, saved
+  // as "" rather than left unset) must fall back to the default too, or the
+  // scan below degenerates into `LIKE '%'` and picks up the max digit-run
+  // across every invoice number in the table regardless of format, instead
+  // of just this prefix's own sequence.
+  const prefix = profile?.customerInvoicePrefix || "INV-2026-";
   const settingsSeq = profile?.customerInvoiceNextSeq ?? 1001;
 
   const { nextNumber, nextSeq } = await nextSequenceNumber(
