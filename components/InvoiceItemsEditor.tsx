@@ -251,7 +251,15 @@ export default function InvoiceItemsEditor<T extends FieldValues = any>({
           const locked = index < lockedCount;
 
           return (
-            <div key={field.id} className={`rounded-lg p-2 space-y-1 ${locked ? "bg-gray-100" : "bg-gray-50"}`}>
+            // Keyed on position, not `field.id` -- react-hook-form regenerates
+            // a fieldArray row's internal id whenever a field inside it is
+            // written with `setValue` (as the ProductAutocomplete below does)
+            // rather than the fieldArray's own update/replace. Keying on that
+            // id then made React treat the row as a brand-new element on the
+            // very first keystroke, unmounting and remounting it -- which
+            // dropped focus and silently ate every keystroke after the first
+            // in the item-name field.
+            <div key={index} className={`rounded-lg p-2 space-y-1 ${locked ? "bg-gray-100" : "bg-gray-50"}`}>
               {/* Carries the existing row's database id through submission so
                   the server can tell an unchanged existing line apart from a
                   newly-added one once a payment has been recorded. */}
