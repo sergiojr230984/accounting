@@ -359,6 +359,45 @@ describe("applied fees are re-derived server-side, not trusted from the client",
     expect(Number(body.totalAmount)).toBe(92.55); // 89 + 3.55 card fee, no tax
   });
 
+  it("accepts a fee amount that rounds up to the next cent past the unrounded ceiling", async () => {
+    // 176.69 * 3.99% = 7.049931 exactly. A client always submits fee amounts
+    // rounded to cents (7.05, since the third decimal digit is 9), but the
+    // true, unrounded product is 7.049931 -- comparing a rounded amount
+    // against an unrounded ceiling would wrongly reject roughly half of all
+    // legitimate fees, single line item or not.
+    const settingsRes = await admin.postJson(
+      "/api/settings",
+      { creditCardFeeRate: "0.0399" },
+      "PATCH"
+    );
+    expect(settingsRes.status).toBe(200);
+
+    const created = await admin.postJson<{ id: string; totalAmount: string }>(
+      "/api/invoices/customer",
+      {
+        customerId,
+        invoiceNumber: `FEE-ROUND-${Date.now()}`,
+        invoiceDate: "2026-01-01",
+        dueDate: "2026-01-31",
+        items: [{ description: "silla", quantity: "1", unitPrice: "176.69" }],
+        appliedFees: [{ id: "__cc__", label: "CARD FEE", rate: 0.0399, amount: "7.05" }],
+      }
+    );
+    expect(created.status).toBe(201);
+    expect(Number(created.body.totalAmount)).toBe(183.74); // 176.69 + 7.05
+
+    // Same rounding must be tolerated when re-saving via PATCH (the edit page).
+    const patched = await admin.postJson<{ error: string }>(
+      `/api/invoices/customer/${created.body.id}`,
+      {
+        items: [{ description: "silla", quantity: "1", unitPrice: "176.69" }],
+        appliedFees: [{ id: "__cc__", label: "CARD FEE", rate: 0.0399, amount: "7.05" }],
+      },
+      "PATCH"
+    );
+    expect(patched.status).toBe(200);
+  });
+
   it("rejects an inflated fee amount added via PATCH too", async () => {
     const created = await admin.postJson<{ id: string }>("/api/invoices/customer", {
       customerId,
