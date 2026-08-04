@@ -65,10 +65,17 @@ async function readJwtUser(): Promise<JwtFallback> {
         // the account hasn't been deactivated since the token was issued --
         // otherwise a deactivated user's session would keep working through
         // this fallback even after the primary path revokes it.
-        const dbUser = await prisma.user.findUnique({ where: { id }, select: { active: true } });
+        const dbUser = await prisma.user.findUnique({ where: { id }, select: { active: true, role: true } });
         if (dbUser?.active === false) continue;
 
-        const role = ((token.role as string) ?? "MANAGER") as Role;
+        // Read from the DB, not the JWT's own role claim -- same reasoning
+        // as a4ad448 ("always read role from DB using session.user.id,
+        // never from session.user.role"), which this fallback path was
+        // missed by: the token's role claim is fixed at login time, so a
+        // role change would silently keep applying the old, possibly more
+        // privileged role for up to the rest of the session's 12h lifetime
+        // if a request happened to take this fallback path.
+        const role = (dbUser?.role ?? (token.role as string) ?? "MANAGER") as Role;
         return {
           ok: true,
           user: {
