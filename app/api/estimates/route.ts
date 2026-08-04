@@ -24,7 +24,7 @@ const estimateSchema = z.object({
 });
 
 export async function GET(request: Request) {
-  const access = await requireReadAccess(request);
+  const access = await requireReadAccess(request, "estimates");
   if (access instanceof NextResponse) return access;
 
   await initializeDatabase();

@@ -5,7 +5,7 @@ import { decode } from "@auth/core/jwt";
 import { auth } from "./auth";
 import { prisma } from "./prisma";
 import { rateLimit, type RateLimitOptions } from "./rate-limit";
-import { verifyApiKey } from "./api-key";
+import { verifyApiKey, type ApiScope } from "./api-key";
 
 export type Role = "ADMIN" | "MANAGER" | "SALES";
 
@@ -173,42 +173,62 @@ export async function requireRole(
 
 export type ReadAccess =
   | { via: "session"; session: AuthedSession }
-  | { via: "apiKey"; keyId: string; label: string };
+  | { via: "apiKey"; keyId: string; label: string; scopes: ApiScope[] };
 
 /**
  * Authenticates a read-only request via either a normal session OR an API
  * key (Authorization: Bearer <key>, or X-API-Key) -- for endpoints meant to
  * be readable by external dashboards/BI tools, not just logged-in staff.
+ * `scope` is the data category this endpoint exposes (see
+ * lib/api-key.ts's API_KEY_SCOPES); a session always satisfies it (a real
+ * logged-in user's access is governed by their role, not key scopes), but
+ * an API key must have been explicitly granted that scope at creation time
+ * or this rejects with 403 even though the key itself is valid.
+ *
  * API keys are intentionally never accepted anywhere except these
  * explicitly wired-up GET endpoints: no POST/PATCH/DELETE handler in this
  * codebase checks for one, so a leaked or overscoped key can never create,
  * edit, or delete anything, no matter what this function returns.
  */
 export async function requireReadAccess(
-  request: Request
+  request: Request,
+  scope: ApiScope
 ): Promise<ReadAccess | NextResponse> {
   const guard = await requireAuth();
   if (!(guard instanceof NextResponse)) return { via: "session", session: guard };
 
   const key = await verifyApiKey(request);
-  if (key) return { via: "apiKey", keyId: key.id, label: key.label };
+  if (key) {
+    if (!key.scopes.includes(scope)) {
+      return NextResponse.json(
+        {
+          error: `This API key doesn't have the "${scope}" scope.`,
+          code: "forbidden_scope",
+          requiredScope: scope,
+        },
+        { status: 403 }
+      );
+    }
+    return { via: "apiKey", keyId: key.id, label: key.label, scopes: key.scopes };
+  }
 
   return guard;
 }
 
 /**
  * Same as requireReadAccess(), but additionally requires one of `roles` when
- * the caller authenticated via a real session. An API key always satisfies
- * this: keys can only ever be created by an ADMIN (see
- * app/api/settings/api-keys/route.ts), so presenting one is already
- * admin-provisioned read access by construction, not a role that needs
- * separate checking here.
+ * the caller authenticated via a real session. An API key with the right
+ * scope always satisfies this regardless of role: keys can only ever be
+ * created by an ADMIN (see app/api/settings/api-keys/route.ts), so a
+ * correctly-scoped key is already admin-provisioned read access by
+ * construction, not a role that needs separate checking here.
  */
 export async function requireReadAccessRole(
   request: Request,
+  scope: ApiScope,
   ...roles: Role[]
 ): Promise<ReadAccess | NextResponse> {
-  const access = await requireReadAccess(request);
+  const access = await requireReadAccess(request, scope);
   if (access instanceof NextResponse) return access;
   if (access.via === "apiKey") return access;
 

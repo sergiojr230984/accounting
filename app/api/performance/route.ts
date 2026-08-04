@@ -8,7 +8,7 @@ export async function GET(request: Request) {
   // Company-wide commission/sales leaderboard across every salesperson --
   // not something any one salesperson should see about their peers. An API
   // key (always admin-provisioned) also satisfies this.
-  const guard = await requireReadAccessRole(request, "ADMIN", "MANAGER");
+  const guard = await requireReadAccessRole(request, "performance", "ADMIN", "MANAGER");
   if (guard instanceof NextResponse) return guard;
 
   await initializeDatabase();

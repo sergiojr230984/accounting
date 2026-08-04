@@ -1,5 +1,8 @@
 import crypto from "crypto";
 import { prisma } from "./prisma";
+import { isApiScope, type ApiScope } from "./api-scopes";
+
+export { API_KEY_SCOPES, isApiScope, type ApiScope } from "./api-scopes";
 
 // Recognizable prefix (grep-able in logs, matches the convention of
 // Stripe/GitHub-style tokens) -- not a secret itself, just an identifier.
@@ -44,7 +47,7 @@ function extractPresentedKey(request: Request): string | null {
  */
 export async function verifyApiKey(
   request: Request
-): Promise<{ id: string; label: string } | null> {
+): Promise<{ id: string; label: string; scopes: ApiScope[] } | null> {
   const presented = extractPresentedKey(request);
   if (!presented) return null;
 
@@ -58,5 +61,6 @@ export async function verifyApiKey(
     .update({ where: { id: record.id }, data: { lastUsedAt: new Date() } })
     .catch(() => undefined);
 
-  return { id: record.id, label: record.label };
+  const scopes = Array.isArray(record.scopes) ? record.scopes.filter(isApiScope) : [];
+  return { id: record.id, label: record.label, scopes };
 }

@@ -2,12 +2,19 @@ import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { initializeDatabase } from "@/lib/init-db";
 import { requireRole } from "@/lib/api";
-import { generateApiKey } from "@/lib/api-key";
+import { generateApiKey, isApiScope } from "@/lib/api-key";
 import { writeAuditLog, extractMeta, actorFromSession } from "@/lib/audit";
 import { z } from "zod";
 
 const createSchema = z.object({
   label: z.string().min(1, "A label is required, e.g. \"Power BI dashboard\""),
+  // Deny-by-default: a key created with no scopes can authenticate but every
+  // requireReadAccess() call will 403 it, so an admin must explicitly pick
+  // what this key can see rather than it defaulting to "everything".
+  scopes: z.array(z.string()).default([]).refine(
+    (scopes) => scopes.every(isApiScope),
+    { message: "Contains an unknown scope" }
+  ),
 });
 
 export async function GET() {
@@ -20,6 +27,7 @@ export async function GET() {
       id: true,
       label: true,
       keyPrefix: true,
+      scopes: true,
       active: true,
       createdByName: true,
       lastUsedAt: true,
@@ -53,10 +61,11 @@ export async function POST(request: Request) {
       label: parsed.data.label,
       keyHash,
       keyPrefix,
+      scopes: parsed.data.scopes,
       createdById: guard.user.id,
       createdByName: guard.user.name ?? guard.user.email ?? "unknown",
     },
-    select: { id: true, label: true, keyPrefix: true, createdAt: true },
+    select: { id: true, label: true, keyPrefix: true, scopes: true, createdAt: true },
   });
 
   await writeAuditLog({
@@ -64,7 +73,7 @@ export async function POST(request: Request) {
     action: "CREATE",
     entityType: "api_key",
     entityId: created.id,
-    entityLabel: `API key "${created.label}"`,
+    entityLabel: `API key "${created.label}" (scopes: ${parsed.data.scopes.join(", ") || "none"})`,
     ...extractMeta(request),
   });
 

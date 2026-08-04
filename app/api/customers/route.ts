@@ -16,7 +16,7 @@ const schema = z.object({
 });
 
 export async function GET(request: Request) {
-  const access = await requireReadAccess(request);
+  const access = await requireReadAccess(request, "customers");
   if (access instanceof NextResponse) return access;
 
   await initializeDatabase();

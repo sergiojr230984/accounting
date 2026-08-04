@@ -7,7 +7,7 @@ export async function GET(request: Request) {
   // Company-wide P&L, COGS, and unpaid totals -- not something every
   // authenticated role should see, including SALES. An API key (always
   // admin-provisioned) also satisfies this, for external dashboards.
-  const guard = await requireReadAccessRole(request, "ADMIN", "MANAGER");
+  const guard = await requireReadAccessRole(request, "dashboard", "ADMIN", "MANAGER");
   if (guard instanceof NextResponse) return guard;
 
   const { searchParams } = new URL(request.url);

@@ -307,6 +307,11 @@ model ApiKey {
   label         String
   keyHash       String    @unique
   keyPrefix     String
+  // Which categories of read-only data this key can reach -- see
+  // lib/api.ts's ApiScope/API_KEY_SCOPES. A key with no scopes can
+  // authenticate but every requireReadAccess() call will 403 it, so a
+  // freshly-created key is deny-by-default, not open-by-default.
+  scopes        Json      @default("[]")
   active        Boolean   @default(true)
   createdById   String?
   createdByName String

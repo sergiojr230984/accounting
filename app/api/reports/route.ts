@@ -4,7 +4,7 @@ import { prisma } from "@/lib/prisma";
 import Decimal from "decimal.js";
 
 export async function GET(request: Request) {
-  const access = await requireReadAccess(request);
+  const access = await requireReadAccess(request, "reports");
   if (access instanceof NextResponse) return access;
 
   const { searchParams } = new URL(request.url);

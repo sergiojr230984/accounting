@@ -24,7 +24,7 @@ function monthsInRange(from: string | null, to: string | null): string[] {
 }
 
 export async function GET(request: Request) {
-  const guard = await requireReadAccessRole(request, "ADMIN");
+  const guard = await requireReadAccessRole(request, "reports", "ADMIN");
   if (guard instanceof NextResponse) return guard;
 
   const { searchParams } = new URL(request.url);

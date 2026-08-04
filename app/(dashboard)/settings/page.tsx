@@ -24,6 +24,7 @@ import {
   ChevronRight,
 } from "lucide-react";
 import { format } from "date-fns";
+import { API_KEY_SCOPES } from "@/lib/api-scopes";
 
 type Section = "users" | "auditLog" | "apiKeys" | "company" | "taxes" | "fees" | "customFees" | "numbering";
 
@@ -1375,10 +1376,15 @@ interface ApiKeyRow {
   id: string;
   label: string;
   keyPrefix: string;
+  scopes: string[];
   active: boolean;
   createdByName: string;
   lastUsedAt: string | null;
   createdAt: string;
+}
+
+function scopeLabel(key: string): string {
+  return API_KEY_SCOPES.find((s) => s.key === key)?.label ?? key;
 }
 
 function ApiKeysSection() {
@@ -1387,6 +1393,7 @@ function ApiKeysSection() {
   const [error, setError] = useState("");
   const [showCreate, setShowCreate] = useState(false);
   const [newLabel, setNewLabel] = useState("");
+  const [selectedScopes, setSelectedScopes] = useState<string[]>([]);
   const [creating, setCreating] = useState(false);
   const [revealedKey, setRevealedKey] = useState<{ label: string; key: string } | null>(null);
   const [copied, setCopied] = useState(false);
@@ -1406,16 +1413,20 @@ function ApiKeysSection() {
   }, []);
   useEffect(() => { load(); }, [load]);
 
+  function toggleScope(key: string) {
+    setSelectedScopes((prev) => (prev.includes(key) ? prev.filter((s) => s !== key) : [...prev, key]));
+  }
+
   async function createKey(e: React.FormEvent) {
     e.preventDefault();
-    if (!newLabel.trim()) return;
+    if (!newLabel.trim() || selectedScopes.length === 0) return;
     setCreating(true);
     setError("");
     try {
       const res = await fetch("/api/settings/api-keys", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ label: newLabel }),
+        body: JSON.stringify({ label: newLabel, scopes: selectedScopes }),
       });
       const d = await res.json().catch(() => ({}));
       if (!res.ok) {
@@ -1424,6 +1435,7 @@ function ApiKeysSection() {
       }
       setRevealedKey({ label: d.label, key: d.key });
       setNewLabel("");
+      setSelectedScopes([]);
       setShowCreate(false);
       await load();
     } finally {
@@ -1475,8 +1487,8 @@ function ApiKeysSection() {
         </div>
 
         {showCreate && (
-          <form onSubmit={createKey} className="flex items-end gap-3 bg-gray-50 rounded-lg p-4">
-            <div className="flex-1">
+          <form onSubmit={createKey} className="space-y-4 bg-gray-50 rounded-lg p-4">
+            <div>
               <label className="label">Label</label>
               <input
                 className="input"
@@ -1487,13 +1499,45 @@ function ApiKeysSection() {
                 autoFocus
               />
             </div>
-            <button type="submit" disabled={creating || !newLabel.trim()} className="btn-primary">
-              {creating ? <Loader2 className="w-4 h-4 animate-spin" /> : <Check className="w-4 h-4" />}
-              Create
-            </button>
-            <button type="button" onClick={() => { setShowCreate(false); setNewLabel(""); }} className="btn-secondary">
-              <X className="w-4 h-4" />
-            </button>
+            <div>
+              <label className="label">What can this key see?</label>
+              <p className="text-xs text-gray-400 mb-2">
+                Pick only what this app actually needs — you can&apos;t change this after creating the key, but you can revoke it and make a new one anytime.
+              </p>
+              <div className="space-y-2">
+                {API_KEY_SCOPES.map((scope) => (
+                  <label key={scope.key} className="flex items-start gap-2.5 p-2 rounded-lg hover:bg-white cursor-pointer">
+                    <input
+                      type="checkbox"
+                      className="mt-0.5"
+                      checked={selectedScopes.includes(scope.key)}
+                      onChange={() => toggleScope(scope.key)}
+                    />
+                    <span>
+                      <span className="block text-sm font-medium text-gray-800">{scope.label}</span>
+                      <span className="block text-xs text-gray-500">{scope.description}</span>
+                    </span>
+                  </label>
+                ))}
+              </div>
+            </div>
+            <div className="flex items-center gap-3">
+              <button type="submit" disabled={creating || !newLabel.trim() || selectedScopes.length === 0} className="btn-primary">
+                {creating ? <Loader2 className="w-4 h-4 animate-spin" /> : <Check className="w-4 h-4" />}
+                Create
+              </button>
+              <button
+                type="button"
+                onClick={() => { setShowCreate(false); setNewLabel(""); setSelectedScopes([]); }}
+                className="btn-secondary"
+              >
+                <X className="w-4 h-4" />
+                Cancel
+              </button>
+              {selectedScopes.length === 0 && (
+                <span className="text-xs text-gray-400">Pick at least one scope</span>
+              )}
+            </div>
           </form>
         )}
 
@@ -1541,7 +1585,20 @@ function ApiKeysSection() {
               ) : (
                 keys.map((k) => (
                   <tr key={k.id} className={!k.active ? "opacity-50" : ""}>
-                    <td className="px-4 py-2.5 font-medium text-gray-900">{k.label}</td>
+                    <td className="px-4 py-2.5">
+                      <span className="font-medium text-gray-900 block">{k.label}</span>
+                      <span className="flex flex-wrap gap-1 mt-1">
+                        {k.scopes.length === 0 ? (
+                          <span className="text-xs text-gray-400">No scopes — can&apos;t read anything</span>
+                        ) : (
+                          k.scopes.map((s) => (
+                            <span key={s} className="text-[11px] font-medium text-brand-700 bg-brand-50 px-1.5 py-0.5 rounded">
+                              {scopeLabel(s)}
+                            </span>
+                          ))
+                        )}
+                      </span>
+                    </td>
                     <td className="px-4 py-2.5 font-mono text-xs text-gray-500">{k.keyPrefix}…</td>
                     <td className="px-4 py-2.5 text-gray-500">{k.createdByName}</td>
                     <td className="px-4 py-2.5 text-gray-500">

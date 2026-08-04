@@ -266,12 +266,14 @@ const SCHEMA_STATEMENTS: string[] = [
     "label" TEXT NOT NULL,
     "keyHash" TEXT NOT NULL UNIQUE,
     "keyPrefix" TEXT NOT NULL,
+    "scopes" JSONB NOT NULL DEFAULT '[]'::jsonb,
     "active" BOOLEAN NOT NULL DEFAULT true,
     "createdById" TEXT,
     "createdByName" TEXT NOT NULL,
     "lastUsedAt" TIMESTAMP(3),
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP
   );`,
+  `ALTER TABLE "ApiKey" ADD COLUMN IF NOT EXISTS "scopes" JSONB NOT NULL DEFAULT '[]'::jsonb;`,
   `CREATE INDEX IF NOT EXISTS "ApiKey_active_idx" ON "ApiKey" ("active");`,
 ];
 

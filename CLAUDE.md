@@ -67,7 +67,7 @@ vice versa), because nothing forced the second file to be touched.
   `tests/invoices.test.ts`'s "supplier bills still reject an overpayment"
   test for the pattern).
 
-## API keys (`lib/api-key.ts`, `lib/api.ts`'s `requireReadAccess`/`requireReadAccessRole`)
+## API keys (`lib/api-scopes.ts`, `lib/api-key.ts`, `lib/api.ts`'s `requireReadAccess`/`requireReadAccessRole`)
 
 External apps/dashboards authenticate with a bearer key instead of a session
 cookie. This is deliberately **read-only by construction, not by role
@@ -75,10 +75,21 @@ check**: no POST/PATCH/DELETE handler anywhere in this codebase calls
 `requireReadAccess`/`requireReadAccessRole` or otherwise checks for an API
 key — those functions are only ever wired into GET handlers. That's the
 actual security boundary. If you add a new GET endpoint that should be
-reachable by external dashboards, wiring it up is fine and expected; if
-you're ever tempted to accept an API key on a write route "just this once,"
-stop — that breaks the one invariant the whole feature depends on, and
-there is currently no scope/permission system on keys to fall back on.
+reachable by external dashboards, wiring it up is fine and expected (pick
+the closest existing scope from `lib/api-scopes.ts` rather than adding a
+new one unless the data genuinely doesn't fit any of them); if you're ever
+tempted to accept an API key on a write route "just this once," stop —
+that breaks the one invariant the whole feature depends on.
+
+Keys are also **scoped, deny-by-default**: a key only gets `scopes` an
+ADMIN explicitly checked at creation time (`ApiKey.scopes`, validated
+against `lib/api-scopes.ts`'s `API_KEY_SCOPES`), and `requireReadAccess`
+403s a key missing the scope a given endpoint requires — a key created
+with zero scopes can authenticate but read nothing. `lib/api-scopes.ts` is
+intentionally dependency-free (no `crypto`/`prisma`) so the Settings API-key
+UI (a client component) can import the same scope catalog directly instead
+of a second hand-maintained copy — don't reintroduce that duplication by
+inlining scope labels somewhere else.
 
 Also: `middleware.ts` deliberately does NOT redirect unauthenticated
 `/api/*` requests to `/login` (only page routes get that treatment) —
