@@ -34,7 +34,10 @@ export async function GET(request: Request) {
   if (type === "expenses") {
     const invoices = await prisma.supplierInvoice.findMany({
       where: hasDate ? { invoiceDate: dateFilter } : {},
-      include: { supplier: true, items: true },
+      // Reports only ever display supplier.name -- bank account/routing/
+      // Zelle details have no reason to ride along in a response every
+      // authenticated role can request.
+      include: { supplier: { select: { id: true, name: true } }, items: true },
       orderBy: { invoiceDate: "desc" },
     });
     const byCategory: Record<string, Decimal> = {};
@@ -117,7 +120,7 @@ export async function GET(request: Request) {
   if (type === "supplier-outstanding") {
     const invoices = await prisma.supplierInvoice.findMany({
       where: { paymentStatus: { not: "PAID" } },
-      include: { supplier: true },
+      include: { supplier: { select: { id: true, name: true } } },
       orderBy: { dueDate: "asc" },
     });
     const total = invoices.reduce(
