@@ -261,6 +261,18 @@ const SCHEMA_STATEMENTS: string[] = [
   `CREATE INDEX IF NOT EXISTS "AuditLog_actorUserId_idx" ON "AuditLog" ("actorUserId");`,
   `CREATE INDEX IF NOT EXISTS "AuditLog_entityType_idx" ON "AuditLog" ("entityType");`,
   `CREATE INDEX IF NOT EXISTS "AuditLog_action_idx" ON "AuditLog" ("action");`,
+  `CREATE TABLE IF NOT EXISTS "ApiKey" (
+    "id" TEXT NOT NULL PRIMARY KEY,
+    "label" TEXT NOT NULL,
+    "keyHash" TEXT NOT NULL UNIQUE,
+    "keyPrefix" TEXT NOT NULL,
+    "active" BOOLEAN NOT NULL DEFAULT true,
+    "createdById" TEXT,
+    "createdByName" TEXT NOT NULL,
+    "lastUsedAt" TIMESTAMP(3),
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP
+  );`,
+  `CREATE INDEX IF NOT EXISTS "ApiKey_active_idx" ON "ApiKey" ("active");`,
 ];
 
 export function initializeDatabase(): Promise<void> {

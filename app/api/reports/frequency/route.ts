@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { requireRole } from "@/lib/api";
+import { requireReadAccessRole } from "@/lib/api";
 import { prisma } from "@/lib/prisma";
 import Decimal from "decimal.js";
 
@@ -24,7 +24,7 @@ function monthsInRange(from: string | null, to: string | null): string[] {
 }
 
 export async function GET(request: Request) {
-  const guard = await requireRole("ADMIN");
+  const guard = await requireReadAccessRole(request, "ADMIN");
   if (guard instanceof NextResponse) return guard;
 
   const { searchParams } = new URL(request.url);

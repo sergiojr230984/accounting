@@ -25,7 +25,7 @@ import {
 } from "lucide-react";
 import { format } from "date-fns";
 
-type Section = "users" | "auditLog" | "company" | "taxes" | "fees" | "customFees" | "numbering";
+type Section = "users" | "auditLog" | "apiKeys" | "company" | "taxes" | "fees" | "customFees" | "numbering";
 
 interface CustomFee {
   id: string;
@@ -86,6 +86,15 @@ export default function SettingsPage() {
               <ScrollText className="w-4 h-4 flex-shrink-0" />
               Audit log
             </button>
+            <button
+              onClick={() => setSection("apiKeys")}
+              className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors text-left ${
+                section === "apiKeys" ? "bg-brand-50 text-brand-700" : "text-gray-700 hover:bg-gray-50"
+              }`}
+            >
+              <KeyRound className="w-4 h-4 flex-shrink-0" />
+              API keys
+            </button>
           </div>
           <div>
           <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide px-3 py-2">Sales & Payments</p>
@@ -114,6 +123,7 @@ export default function SettingsPage() {
         <div className="col-span-12 md:col-span-9">
           {section === "users" && <UsersSection />}
           {section === "auditLog" && <AuditLogSection />}
+          {section === "apiKeys" && <ApiKeysSection />}
           {section === "company" && <CompanySection />}
           {section === "numbering" && <NumberingSection />}
           {section === "taxes" && <TaxesSection />}
@@ -1358,6 +1368,211 @@ function UserRowDisplay({
         </tr>
       )}
     </>
+  );
+}
+
+interface ApiKeyRow {
+  id: string;
+  label: string;
+  keyPrefix: string;
+  active: boolean;
+  createdByName: string;
+  lastUsedAt: string | null;
+  createdAt: string;
+}
+
+function ApiKeysSection() {
+  const [keys, setKeys] = useState<ApiKeyRow[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [showCreate, setShowCreate] = useState(false);
+  const [newLabel, setNewLabel] = useState("");
+  const [creating, setCreating] = useState(false);
+  const [revealedKey, setRevealedKey] = useState<{ label: string; key: string } | null>(null);
+  const [copied, setCopied] = useState(false);
+  const [busyId, setBusyId] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    setError("");
+    const res = await fetch("/api/settings/api-keys");
+    if (res.ok) {
+      setKeys(await res.json());
+    } else {
+      const d = await res.json().catch(() => ({}));
+      setError(d.error ?? "Could not load API keys");
+    }
+    setLoading(false);
+  }, []);
+  useEffect(() => { load(); }, [load]);
+
+  async function createKey(e: React.FormEvent) {
+    e.preventDefault();
+    if (!newLabel.trim()) return;
+    setCreating(true);
+    setError("");
+    try {
+      const res = await fetch("/api/settings/api-keys", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ label: newLabel }),
+      });
+      const d = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setError(d.error?.formErrors?.[0] ?? d.error ?? "Failed to create key");
+        return;
+      }
+      setRevealedKey({ label: d.label, key: d.key });
+      setNewLabel("");
+      setShowCreate(false);
+      await load();
+    } finally {
+      setCreating(false);
+    }
+  }
+
+  async function revoke(id: string) {
+    if (!confirm("Revoke this API key? Any app using it will lose access immediately.")) return;
+    setBusyId(id);
+    setError("");
+    const res = await fetch(`/api/settings/api-keys/${id}`, { method: "DELETE" });
+    if (!res.ok) {
+      const d = await res.json().catch(() => ({}));
+      setError(d.error ?? "Failed to revoke");
+    } else {
+      await load();
+    }
+    setBusyId(null);
+  }
+
+  function copyKey() {
+    if (!revealedKey) return;
+    navigator.clipboard.writeText(revealedKey.key).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    });
+  }
+
+  return (
+    <div className="space-y-5">
+      <div className="card space-y-4">
+        <div className="flex items-start justify-between flex-wrap gap-3">
+          <div>
+            <h2 className="text-lg font-bold text-gray-900">API keys</h2>
+            <p className="text-sm text-gray-500 mt-1">
+              Read-only access for external apps and dashboards (Power BI, Google
+              Sheets, a custom BI tool, etc). A key can fetch data — invoices,
+              customers, reports, dashboard numbers — but can never create, edit,
+              or delete anything, no matter what.
+            </p>
+          </div>
+          {!showCreate && (
+            <button onClick={() => { setShowCreate(true); setError(""); }} className="btn-primary">
+              <Plus className="w-4 h-4" />
+              New API key
+            </button>
+          )}
+        </div>
+
+        {showCreate && (
+          <form onSubmit={createKey} className="flex items-end gap-3 bg-gray-50 rounded-lg p-4">
+            <div className="flex-1">
+              <label className="label">Label</label>
+              <input
+                className="input"
+                placeholder="e.g. Power BI dashboard"
+                value={newLabel}
+                onChange={(e) => setNewLabel(e.target.value)}
+                required
+                autoFocus
+              />
+            </div>
+            <button type="submit" disabled={creating || !newLabel.trim()} className="btn-primary">
+              {creating ? <Loader2 className="w-4 h-4 animate-spin" /> : <Check className="w-4 h-4" />}
+              Create
+            </button>
+            <button type="button" onClick={() => { setShowCreate(false); setNewLabel(""); }} className="btn-secondary">
+              <X className="w-4 h-4" />
+            </button>
+          </form>
+        )}
+
+        {revealedKey && (
+          <div className="bg-amber-50 border border-amber-200 rounded-lg p-4 space-y-2">
+            <p className="text-sm font-semibold text-amber-900">
+              &quot;{revealedKey.label}&quot; created — copy this key now. For security,
+              it won&apos;t be shown again once you leave this page.
+            </p>
+            <div className="flex items-center gap-2">
+              <code className="flex-1 bg-white border border-amber-200 rounded px-3 py-2 text-xs font-mono break-all">
+                {revealedKey.key}
+              </code>
+              <button onClick={copyKey} className="btn-secondary text-xs py-1.5 flex-shrink-0">
+                {copied ? "Copied!" : "Copy"}
+              </button>
+            </div>
+            <button onClick={() => setRevealedKey(null)} className="text-xs text-amber-700 underline">
+              Done, I&apos;ve saved it
+            </button>
+          </div>
+        )}
+
+        {error && (
+          <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg text-sm">{error}</div>
+        )}
+
+        <div className="border border-gray-100 rounded-xl overflow-hidden">
+          <table className="w-full text-sm">
+            <thead className="bg-gray-50 border-b border-gray-100">
+              <tr>
+                <th className="text-left px-4 py-2.5 text-xs font-semibold text-gray-600 uppercase">Label</th>
+                <th className="text-left px-4 py-2.5 text-xs font-semibold text-gray-600 uppercase">Key</th>
+                <th className="text-left px-4 py-2.5 text-xs font-semibold text-gray-600 uppercase">Created by</th>
+                <th className="text-left px-4 py-2.5 text-xs font-semibold text-gray-600 uppercase">Last used</th>
+                <th className="text-center px-4 py-2.5 text-xs font-semibold text-gray-600 uppercase">Status</th>
+                <th className="px-4 py-2.5" />
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-gray-50">
+              {loading ? (
+                <tr><td colSpan={6} className="px-4 py-6 text-center text-gray-400"><Loader2 className="w-4 h-4 animate-spin inline" /></td></tr>
+              ) : keys.length === 0 ? (
+                <tr><td colSpan={6} className="px-4 py-8 text-center text-gray-400">No API keys yet — create one above to connect an external dashboard.</td></tr>
+              ) : (
+                keys.map((k) => (
+                  <tr key={k.id} className={!k.active ? "opacity-50" : ""}>
+                    <td className="px-4 py-2.5 font-medium text-gray-900">{k.label}</td>
+                    <td className="px-4 py-2.5 font-mono text-xs text-gray-500">{k.keyPrefix}…</td>
+                    <td className="px-4 py-2.5 text-gray-500">{k.createdByName}</td>
+                    <td className="px-4 py-2.5 text-gray-500">
+                      {k.lastUsedAt ? format(new Date(k.lastUsedAt), "MMM d, yyyy h:mm a") : "Never"}
+                    </td>
+                    <td className="px-4 py-2.5 text-center">
+                      {k.active ? (
+                        <span className="text-xs font-medium text-green-700 bg-green-100 px-2 py-0.5 rounded-full">Active</span>
+                      ) : (
+                        <span className="text-xs font-medium text-gray-600 bg-gray-100 px-2 py-0.5 rounded-full">Revoked</span>
+                      )}
+                    </td>
+                    <td className="px-4 py-2.5 text-right">
+                      {k.active && (
+                        <button
+                          onClick={() => revoke(k.id)}
+                          disabled={busyId === k.id}
+                          className="text-red-500 hover:text-red-700 text-xs font-medium"
+                        >
+                          {busyId === k.id ? <Loader2 className="w-3.5 h-3.5 animate-spin inline" /> : "Revoke"}
+                        </button>
+                      )}
+                    </td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
   );
 }
 

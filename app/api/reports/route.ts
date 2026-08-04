@@ -1,11 +1,11 @@
 import { NextResponse } from "next/server";
-import { auth } from "@/lib/auth";
+import { requireReadAccess } from "@/lib/api";
 import { prisma } from "@/lib/prisma";
 import Decimal from "decimal.js";
 
 export async function GET(request: Request) {
-  const session = await auth();
-  if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  const access = await requireReadAccess(request);
+  if (access instanceof NextResponse) return access;
 
   const { searchParams } = new URL(request.url);
   const type = searchParams.get("type") ?? "profit-loss";

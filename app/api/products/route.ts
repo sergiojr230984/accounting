@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { initializeDatabase } from "@/lib/init-db";
-import { requireAuth, requireRole } from "@/lib/api";
+import { requireRole, requireReadAccess } from "@/lib/api";
 import { writeAuditLog, extractMeta, actorFromSession } from "@/lib/audit";
 import { z } from "zod";
 
@@ -14,9 +14,9 @@ const schema = z.object({
   active: z.boolean().default(true),
 });
 
-export async function GET() {
-  const guard = await requireAuth();
-  if (guard instanceof NextResponse) return guard;
+export async function GET(request: Request) {
+  const access = await requireReadAccess(request);
+  if (access instanceof NextResponse) return access;
 
   await initializeDatabase();
   try {

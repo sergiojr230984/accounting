@@ -67,6 +67,26 @@ vice versa), because nothing forced the second file to be touched.
   `tests/invoices.test.ts`'s "supplier bills still reject an overpayment"
   test for the pattern).
 
+## API keys (`lib/api-key.ts`, `lib/api.ts`'s `requireReadAccess`/`requireReadAccessRole`)
+
+External apps/dashboards authenticate with a bearer key instead of a session
+cookie. This is deliberately **read-only by construction, not by role
+check**: no POST/PATCH/DELETE handler anywhere in this codebase calls
+`requireReadAccess`/`requireReadAccessRole` or otherwise checks for an API
+key — those functions are only ever wired into GET handlers. That's the
+actual security boundary. If you add a new GET endpoint that should be
+reachable by external dashboards, wiring it up is fine and expected; if
+you're ever tempted to accept an API key on a write route "just this once,"
+stop — that breaks the one invariant the whole feature depends on, and
+there is currently no scope/permission system on keys to fall back on.
+
+Also: `middleware.ts` deliberately does NOT redirect unauthenticated
+`/api/*` requests to `/login` (only page routes get that treatment) —
+that's what lets a cookie-less API-key caller ever reach a route handler
+at all. If you touch `middleware.ts`, re-run `tests/api-keys.test.ts`
+specifically; a `hasSession` regression there silently breaks every
+external integration with an HTML redirect instead of a JSON 401, and nothing else in the suite would catch it since every other test logs in first.
+
 ## Before removing, weakening, or skipping a test
 
 If a test fails and the fix seems to be "change the test's expectation,"

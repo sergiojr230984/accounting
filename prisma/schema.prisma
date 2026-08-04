@@ -296,3 +296,22 @@ model AuditLog {
   @@index([entityType])
   @@index([action])
 }
+
+// Read-only credentials for external apps/dashboards. Only the SHA-256 hash
+// of the key is ever stored -- the full key is generated once, shown to the
+// caller exactly once, and cannot be retrieved again. keyPrefix is the
+// non-secret leading portion, kept only so the key can be identified in the
+// UI without ever re-displaying the secret.
+model ApiKey {
+  id            String    @id @default(cuid())
+  label         String
+  keyHash       String    @unique
+  keyPrefix     String
+  active        Boolean   @default(true)
+  createdById   String?
+  createdByName String
+  lastUsedAt    DateTime?
+  createdAt     DateTime  @default(now())
+
+  @@index([active])
+}

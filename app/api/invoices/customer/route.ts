@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { requireAuth, scopeInvoicesToOwnEmployee } from "@/lib/api";
+import { requireAuth, requireReadAccess, scopeInvoicesToOwnEmployee } from "@/lib/api";
 import { syncProductCatalog } from "@/lib/product-catalog";
 import { writeAuditLog, extractMeta, actorFromSession } from "@/lib/audit";
 import { computeLineTotals } from "@/lib/money";
@@ -39,8 +39,8 @@ const invoiceSchema = z.object({
 });
 
 export async function GET(request: Request) {
-  const guard = await requireAuth();
-  if (guard instanceof NextResponse) return guard;
+  const access = await requireReadAccess(request);
+  if (access instanceof NextResponse) return access;
 
   const { searchParams } = new URL(request.url);
   const customerId = searchParams.get("customerId");

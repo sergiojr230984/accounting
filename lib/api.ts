@@ -5,6 +5,7 @@ import { decode } from "@auth/core/jwt";
 import { auth } from "./auth";
 import { prisma } from "./prisma";
 import { rateLimit, type RateLimitOptions } from "./rate-limit";
+import { verifyApiKey } from "./api-key";
 
 export type Role = "ADMIN" | "MANAGER" | "SALES";
 
@@ -168,6 +169,62 @@ export async function requireRole(
     );
   }
   return guard;
+}
+
+export type ReadAccess =
+  | { via: "session"; session: AuthedSession }
+  | { via: "apiKey"; keyId: string; label: string };
+
+/**
+ * Authenticates a read-only request via either a normal session OR an API
+ * key (Authorization: Bearer <key>, or X-API-Key) -- for endpoints meant to
+ * be readable by external dashboards/BI tools, not just logged-in staff.
+ * API keys are intentionally never accepted anywhere except these
+ * explicitly wired-up GET endpoints: no POST/PATCH/DELETE handler in this
+ * codebase checks for one, so a leaked or overscoped key can never create,
+ * edit, or delete anything, no matter what this function returns.
+ */
+export async function requireReadAccess(
+  request: Request
+): Promise<ReadAccess | NextResponse> {
+  const guard = await requireAuth();
+  if (!(guard instanceof NextResponse)) return { via: "session", session: guard };
+
+  const key = await verifyApiKey(request);
+  if (key) return { via: "apiKey", keyId: key.id, label: key.label };
+
+  return guard;
+}
+
+/**
+ * Same as requireReadAccess(), but additionally requires one of `roles` when
+ * the caller authenticated via a real session. An API key always satisfies
+ * this: keys can only ever be created by an ADMIN (see
+ * app/api/settings/api-keys/route.ts), so presenting one is already
+ * admin-provisioned read access by construction, not a role that needs
+ * separate checking here.
+ */
+export async function requireReadAccessRole(
+  request: Request,
+  ...roles: Role[]
+): Promise<ReadAccess | NextResponse> {
+  const access = await requireReadAccess(request);
+  if (access instanceof NextResponse) return access;
+  if (access.via === "apiKey") return access;
+
+  const role = access.session.user.role;
+  if (!role || !roles.includes(role)) {
+    return NextResponse.json(
+      {
+        error: `Forbidden — your role "${role}" cannot do this. Required: ${roles.join(" or ")}.`,
+        code: "forbidden",
+        currentRole: role,
+        requiredRoles: roles,
+      },
+      { status: 403 }
+    );
+  }
+  return access;
 }
 
 // Sentinel employeeId used to scope an unlinked SALES account to "nothing"
