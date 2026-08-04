@@ -2,8 +2,8 @@ import { NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { initializeDatabase } from "@/lib/init-db";
+import { computeLineTotals } from "@/lib/money";
 import { z } from "zod";
-import Decimal from "decimal.js";
 
 const itemSchema = z.object({
   description: z.string().min(1),
@@ -87,19 +87,10 @@ export async function POST(request: Request) {
     );
   }
 
-  let subtotal = new Decimal(0);
-  let taxAmount = new Decimal(0);
-
-  const computedItems = items.map((item) => {
-    const qty = new Decimal(item.quantity);
-    const price = new Decimal(item.unitPrice);
-    const rate = new Decimal(item.taxRate);
-    const lineTotal = qty.times(price);
-    const lineTax = lineTotal.times(rate);
-    subtotal = subtotal.plus(lineTotal);
-    taxAmount = taxAmount.plus(lineTax);
-    return { ...item, lineTotal: lineTotal.toFixed(2) };
-  });
+  const { lines: lineTotals, subtotal, taxAmount } = computeLineTotals(
+    items.map((item) => ({ quantity: item.quantity, price: item.unitPrice, taxRate: item.taxRate }))
+  );
+  const computedItems = items.map((item, i) => ({ ...item, lineTotal: lineTotals[i].lineTotal }));
 
   const totalAmount = subtotal.plus(taxAmount);
 

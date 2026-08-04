@@ -3,6 +3,7 @@ import { prisma } from "@/lib/prisma";
 import { requireAuth, scopeInvoicesToOwnEmployee } from "@/lib/api";
 import { syncProductCatalog } from "@/lib/product-catalog";
 import { writeAuditLog, extractMeta, actorFromSession } from "@/lib/audit";
+import { computeLineTotals } from "@/lib/money";
 import { z } from "zod";
 import Decimal from "decimal.js";
 
@@ -146,25 +147,10 @@ export async function POST(request: Request) {
     );
   }
 
-  let subtotal = new Decimal(0);
-  let taxAmount = new Decimal(0);
-
-  // Round each line's total to 2 decimals FIRST, then sum the already-
-  // rounded values into subtotal -- previously subtotal accumulated
-  // full-precision Decimals while lineTotal was rounded separately for
-  // storage, so the two could legitimately disagree by a cent (e.g. three
-  // lines at $3.335 stored as 3.34/3.34/3.34 = $10.02, but a subtotal
-  // rounded once from the unrounded sum came out $10.01).
-  const computedItems = items.map((item) => {
-    const qty = new Decimal(item.quantity);
-    const price = new Decimal(item.unitPrice);
-    const rate = new Decimal(item.taxRate);
-    const lineTotal = qty.times(price).toDecimalPlaces(2);
-    const lineTax = lineTotal.times(rate).toDecimalPlaces(2);
-    subtotal = subtotal.plus(lineTotal);
-    taxAmount = taxAmount.plus(lineTax);
-    return { ...item, lineTotal: lineTotal.toFixed(2) };
-  });
+  const { lines: lineTotals, subtotal, taxAmount } = computeLineTotals(
+    items.map((item) => ({ quantity: item.quantity, price: item.unitPrice, taxRate: item.taxRate }))
+  );
+  const computedItems = items.map((item, i) => ({ ...item, lineTotal: lineTotals[i].lineTotal }));
 
   // Optional credit-card processing fee from company profile
   let creditCardFee = new Decimal(0);

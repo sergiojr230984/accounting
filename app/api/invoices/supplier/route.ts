@@ -2,8 +2,8 @@ import { NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { writeAuditLog, extractMeta, actorFromSession } from "@/lib/audit";
+import { computeLineTotals } from "@/lib/money";
 import { z } from "zod";
-import Decimal from "decimal.js";
 
 const itemSchema = z.object({
   description: z.string().min(1),
@@ -99,24 +99,10 @@ export async function POST(request: Request) {
     );
   }
 
-  let subtotal = new Decimal(0);
-  let taxAmount = new Decimal(0);
-
-  // Round each line's total to 2 decimals FIRST, then sum the already-
-  // rounded values into subtotal -- same fix as the customer-invoice
-  // equivalent of this pattern (previously subtotal/taxAmount accumulated
-  // full-precision Decimals while lineTotal was rounded separately for
-  // storage, so the two could legitimately disagree by a cent).
-  const computedItems = items.map((item) => {
-    const qty = new Decimal(item.quantity);
-    const cost = new Decimal(item.unitCost);
-    const rate = new Decimal(item.taxRate);
-    const lineTotal = qty.times(cost).toDecimalPlaces(2);
-    const lineTax = lineTotal.times(rate).toDecimalPlaces(2);
-    subtotal = subtotal.plus(lineTotal);
-    taxAmount = taxAmount.plus(lineTax);
-    return { ...item, lineTotal: lineTotal.toFixed(2) };
-  });
+  const { lines: lineTotals, subtotal, taxAmount } = computeLineTotals(
+    items.map((item) => ({ quantity: item.quantity, price: item.unitCost, taxRate: item.taxRate }))
+  );
+  const computedItems = items.map((item, i) => ({ ...item, lineTotal: lineTotals[i].lineTotal }));
 
   const totalAmount = subtotal.plus(taxAmount);
 
@@ -145,7 +131,11 @@ export async function POST(request: Request) {
         })),
       },
     },
-    include: { supplier: true, items: true },
+    // Narrowed select -- the create response's supplier field is unused by
+    // the client (it just reads the new bill's id and redirects), so bank
+    // account/routing/Zelle details have no reason to be in this response
+    // at all, let alone unscoped by role.
+    include: { supplier: { select: { id: true, name: true } }, items: true },
   });
 
   await prisma.companyProfile

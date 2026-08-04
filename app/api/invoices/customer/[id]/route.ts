@@ -3,6 +3,7 @@ import { prisma } from "@/lib/prisma";
 import { requireAuth, requireRole } from "@/lib/api";
 import { syncProductCatalog } from "@/lib/product-catalog";
 import { writeAuditLog, extractMeta, actorFromSession, diffChanges } from "@/lib/audit";
+import { computeLineTotals } from "@/lib/money";
 import { z } from "zod";
 import Decimal from "decimal.js";
 
@@ -240,30 +241,24 @@ export async function PATCH(
   // IMPORTANT: compute and validate items BEFORE any destructive DB operation
   // so that a bad value can never leave the invoice with no items.
   if (data.items && data.items.length > 0) {
-    let subtotal = new Decimal(0);
-    let taxAmount = new Decimal(0);
+    let subtotal: Decimal;
+    let taxAmount: Decimal;
     let computedItems: { description: string; itemDescription?: string; quantity: string; unitPrice: string; taxRate: string; lineTotal: string }[];
 
     try {
-      computedItems = data.items.map((item) => {
-        const qty = new Decimal(item.quantity || "0");
-        const price = new Decimal(item.unitPrice || "0");
-        const rate = new Decimal(item.taxRate || "0");
-        // Round to 2 decimals FIRST, then sum the already-rounded values
-        // into subtotal/taxAmount -- same fix as invoice creation.
-        const lineTotal = qty.times(price).toDecimalPlaces(2);
-        const lineTax = lineTotal.times(rate).toDecimalPlaces(2);
-        subtotal = subtotal.plus(lineTotal);
-        taxAmount = taxAmount.plus(lineTax);
-        return {
-          description: item.description,
-          itemDescription: item.itemDescription,
-          quantity: item.quantity,
-          unitPrice: item.unitPrice,
-          taxRate: item.taxRate,
-          lineTotal: lineTotal.toFixed(2),
-        };
-      });
+      const totals = computeLineTotals(
+        data.items.map((item) => ({ quantity: item.quantity, price: item.unitPrice, taxRate: item.taxRate }))
+      );
+      subtotal = totals.subtotal;
+      taxAmount = totals.taxAmount;
+      computedItems = data.items.map((item, i) => ({
+        description: item.description,
+        itemDescription: item.itemDescription,
+        quantity: item.quantity,
+        unitPrice: item.unitPrice,
+        taxRate: item.taxRate,
+        lineTotal: totals.lines[i].lineTotal,
+      }));
     } catch {
       return NextResponse.json(
         { error: "Invalid item values — please check quantities and prices" },
