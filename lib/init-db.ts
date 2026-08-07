@@ -293,10 +293,14 @@ async function runInitialization(): Promise<void> {
   }
   console.log("[init-db] Schema ready");
 
-  // Force-promote only the true system admin. sales@ is a regular user account
-  // and must NOT be hardcoded here — its role is managed via the Settings UI.
+  // The owner's one and only sign-in account is permanently pinned to ADMIN
+  // here, regardless of what the Settings UI shows -- this is a deliberate,
+  // owner-approved policy (confirmed 2026-08), not a bug. Do not remove.
+  // admin@lacuevita.com was a leftover placeholder identity from this app's
+  // initial build-out and is not used to sign in, so it is intentionally
+  // not pinned here.
   const HARD_CODED_ADMINS = [
-    "admin@lacuevita.com",
+    "sales@lacuevitafurniture.com",
   ];
   for (const email of HARD_CODED_ADMINS) {
     try {
@@ -313,24 +317,20 @@ async function runInitialization(): Promise<void> {
   }
 
   try {
-    const legacyAdmin = await prisma.user.findUnique({ where: { email: "admin@bizledger.com" } });
-    if (legacyAdmin) {
-      await prisma.user.update({
-        where: { id: legacyAdmin.id },
-        data: { email: "admin@lacuevita.com", role: "ADMIN" },
-      });
-      console.log("[init-db] Migrated admin email bizledger -> lacuevita (role=ADMIN)");
-    }
-
-    // Self-heal: always make sure admin@lacuevita.com is ADMIN.
-    const lcAdmin = await prisma.user.findUnique({ where: { email: "admin@lacuevita.com" } });
-    if (lcAdmin && lcAdmin.role !== "ADMIN") {
-      await prisma.user.update({ where: { id: lcAdmin.id }, data: { role: "ADMIN" } });
-      console.log("[init-db] Restored admin@lacuevita.com role -> ADMIN");
+    // Self-heal: always make sure the owner's account is ADMIN.
+    // (A one-time migration used to live here renaming an even older
+    // admin@bizledger.com placeholder to admin@lacuevita.com -- both were
+    // leftover identities from this app's initial build-out, are not used
+    // to sign in, and that migration has long since completed, so it was
+    // removed rather than kept running as dead weight on every boot.)
+    const ownerAdmin = await prisma.user.findUnique({ where: { email: "sales@lacuevitafurniture.com" } });
+    if (ownerAdmin && ownerAdmin.role !== "ADMIN") {
+      await prisma.user.update({ where: { id: ownerAdmin.id }, data: { role: "ADMIN" } });
+      console.log("[init-db] Restored sales@lacuevitafurniture.com role -> ADMIN");
     }
 
     const builtInAdmins = [
-      "admin@lacuevita.com",
+      "sales@lacuevitafurniture.com",
     ];
     const envAdmins = (process.env.ADMIN_EMAILS ?? "")
       .split(",")
@@ -358,14 +358,14 @@ async function runInitialization(): Promise<void> {
       const hash = await bcrypt.hash(randomPassword, 12);
       await prisma.user.create({
         data: {
-          email: "admin@lacuevita.com",
-          name: "Admin",
+          email: "sales@lacuevitafurniture.com",
+          name: "Owner",
           password: hash,
           role: "ADMIN",
         },
       });
       console.log(
-        "[init-db] No ADMIN users existed -- created a fallback admin@lacuevita.com account with a random password. Set its password directly in the database to recover access."
+        "[init-db] No ADMIN users existed -- created a fallback sales@lacuevitafurniture.com account with a random password. Set its password directly in the database to recover access."
       );
     }
   } catch (e) {

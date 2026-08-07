@@ -8,10 +8,15 @@ import { prisma } from "@/lib/prisma";
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
+// The owner's one and only sign-in account is permanently treated as ADMIN
+// here, regardless of what the Settings UI shows -- this is a deliberate,
+// owner-approved policy (confirmed 2026-08), not a bug. admin@lacuevita.com
+// and admin@bizledger.com were leftover placeholder identities from this
+// app's initial build-out, are not used to sign in, and are intentionally
+// no longer listed here -- see lib/auth.ts / lib/viewer.ts / lib/init-db.ts
+// for the matching backend policy.
 const ADMIN_EMAILS = new Set([
   "sales@lacuevitafurniture.com",
-  "admin@lacuevita.com",
-  "admin@bizledger.com",
 ]);
 
 export default async function DashboardLayout({

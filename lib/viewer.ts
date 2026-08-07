@@ -1,8 +1,13 @@
 import { headers } from "next/headers";
 import { prisma } from "@/lib/prisma";
 
+// The owner's one and only sign-in account is permanently pinned to ADMIN
+// here, regardless of what the Settings UI shows -- this is a deliberate,
+// owner-approved policy (confirmed 2026-08), not a bug. admin@lacuevita.com
+// was a leftover placeholder identity from this app's initial build-out, is
+// not used to sign in, and is intentionally no longer pinned here -- see
+// lib/init-db.ts for the matching boot-time policy.
 const HARD_CODED_ADMINS = new Set([
-  "admin@lacuevita.com",
   "sales@lacuevitafurniture.com",
 ]);
 

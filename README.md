@@ -146,6 +146,8 @@ The table below reflects what each API route actually enforces today (verified i
 
 **Important nuance verified directly in the code:** several resources — supplier **bills** (as opposed to Suppliers themselves), **Estimates**, and the main **Reports** API — have no role check at all in their route handlers (only `requireAuth()`/session presence). A `SALES` user is not shown these in the sidebar, but a direct API call from that role succeeds. This differs from what `DEPLOYMENT.md` describes ("transactional routes... are gated to ADMIN or MANAGER") — see [Known Limitations](#known-limitations).
 
+**One account is permanently pinned to ADMIN, independent of this table:** `sales@lacuevitafurniture.com` — the business owner's sign-in — is hardcoded as ADMIN in `lib/auth.ts`, `lib/viewer.ts`, and `lib/init-db.ts`. Its role self-heals back to ADMIN on the next login or server boot even if it's ever changed via Settings → Users. This is a deliberate, owner-approved policy (confirmed 2026-08): it's the one and only account used to sign in, and it must never be lockable-out of its own system. It is not reflected in the table above because it overrides the table rather than fitting into it.
+
 `SALES`-role scoping is currently **attribution-only, not visibility-only**: a `SALES` user creating a customer invoice is automatically linked to their own `Employee` record (via matching email) and can't be assigned to someone else's, but the invoice list itself is company-wide for every role — the code's own comment states this is intentional ("Company-wide accounting system — every employee sees every invoice, regardless of who it's attributed to").
 
 ---
