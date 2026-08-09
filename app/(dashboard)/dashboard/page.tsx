@@ -101,9 +101,14 @@ export default function DashboardPage() {
           // same weekday last week) instead of the multi-series trend chart
           // -- /api/dashboard is still called for the P&L summary's
           // all-time totals below, which don't depend on granularity.
+          // The server runs in UTC (Railway etc.), so "today" has to be
+          // computed against the viewer's own local day/hour -- otherwise
+          // afternoon/evening sales that are still "today" locally land on
+          // the server's next UTC calendar day and silently disappear.
+          const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
           const [dashRes, todayRes] = await Promise.all([
             fetch(`/api/dashboard`),
-            fetch(`/api/dashboard/today`),
+            fetch(`/api/dashboard/today?tz=${encodeURIComponent(tz)}`),
           ]);
           const dash = dashRes.ok ? await dashRes.json() : null;
           const today = todayRes.ok ? await todayRes.json() : null;

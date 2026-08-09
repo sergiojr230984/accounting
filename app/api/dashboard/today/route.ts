@@ -3,10 +3,43 @@ import { prisma } from "@/lib/prisma";
 import { requireReadAccessRole } from "@/lib/api";
 import Decimal from "decimal.js";
 
-function startOfDay(d: Date): Date {
-  const s = new Date(d);
-  s.setHours(0, 0, 0, 0);
-  return s;
+const WEEKDAY_NAMES = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+
+// Server processes (Railway, etc.) run in UTC, but "today" and "this hour"
+// need to mean the business's own wall-clock day/hour, not the server's --
+// otherwise afternoon/evening sales (which are still "today" locally) land
+// on the server's next UTC calendar day and silently vanish from the chart.
+// The browser tells us its IANA zone (?tz=), and everything below reads
+// each timestamp's local date/hour via Intl rather than the server's own
+// Date getters.
+function localDateKey(date: Date, timeZone: string): string {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(date);
+  const get = (type: string) => parts.find((p) => p.type === type)!.value;
+  return `${get("year")}-${get("month")}-${get("day")}`;
+}
+
+function localHour(date: Date, timeZone: string): number {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone,
+    hour: "numeric",
+    hour12: false,
+  }).formatToParts(date);
+  // Some locales/engines render midnight as "24" with hour12: false.
+  return Number(parts.find((p) => p.type === "hour")!.value) % 24;
+}
+
+function isValidTimeZone(tz: string): boolean {
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone: tz });
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function pctChange(curr: Decimal, prev: Decimal): number | null {
@@ -23,31 +56,33 @@ export async function GET(request: Request) {
   const guard = await requireReadAccessRole(request, "dashboard", "ADMIN", "MANAGER");
   if (guard instanceof NextResponse) return guard;
 
+  const { searchParams } = new URL(request.url);
+  const tzParam = searchParams.get("tz");
+  const timeZone = tzParam && isValidTimeZone(tzParam) ? tzParam : "UTC";
+
   const now = new Date();
-  const todayStart = startOfDay(now);
-  const todayEnd = new Date(todayStart);
-  todayEnd.setDate(todayEnd.getDate() + 1);
+  const todayKey = localDateKey(now, timeZone);
 
   // Same weekday, one week back -- e.g. viewing on a Saturday compares
   // against last Saturday, so the comparison isn't skewed by weekday
-  // traffic patterns (weekends vs. weekdays).
-  const comparisonStart = new Date(todayStart);
-  comparisonStart.setDate(comparisonStart.getDate() - 7);
-  const comparisonEnd = new Date(comparisonStart);
-  comparisonEnd.setDate(comparisonEnd.getDate() + 1);
+  // traffic patterns (weekends vs. weekdays). Calendar arithmetic on the
+  // Y/M/D key (not a raw 7*24h instant subtraction) so a DST transition
+  // can't nudge the result onto the wrong calendar day.
+  const [ty, tm, td] = todayKey.split("-").map(Number);
+  const comparisonAnchor = new Date(Date.UTC(ty, tm - 1, td - 7));
+  const comparisonKey = `${comparisonAnchor.getUTCFullYear()}-${String(comparisonAnchor.getUTCMonth() + 1).padStart(2, "0")}-${String(comparisonAnchor.getUTCDate()).padStart(2, "0")}`;
+  const comparisonWeekday = WEEKDAY_NAMES[comparisonAnchor.getUTCDay()];
 
-  // Bucketed by `createdAt` (when the invoice was actually entered), not
-  // `invoiceDate` -- the invoice date is a plain date the user picks with no
-  // time-of-day component, so every invoice for a day would collapse onto a
-  // single hour. `createdAt` is the closest signal this system has to "when
-  // did this sale actually happen."
+  // A generously padded fetch window in real (server-clock) time -- the
+  // precise bucketing below is what actually decides "today" vs. "that day
+  // last week" vs. neither, via each timestamp's local date key, so this
+  // just needs to comfortably cover both local days regardless of the
+  // server/business timezone offset.
+  const windowStart = new Date(now);
+  windowStart.setDate(windowStart.getDate() - 9);
+
   const invoices = await prisma.customerInvoice.findMany({
-    where: {
-      OR: [
-        { createdAt: { gte: todayStart, lt: todayEnd } },
-        { createdAt: { gte: comparisonStart, lt: comparisonEnd } },
-      ],
-    },
+    where: { createdAt: { gte: windowStart, lte: now } },
     select: { totalAmount: true, createdAt: true },
   });
 
@@ -57,13 +92,17 @@ export async function GET(request: Request) {
   let comparisonCount = 0;
 
   for (const inv of invoices) {
-    const amount = new Decimal(inv.totalAmount.toString());
     const created = new Date(inv.createdAt);
-    if (created >= todayStart && created < todayEnd) {
-      todayHours[created.getHours()] = todayHours[created.getHours()].plus(amount);
+    const key = localDateKey(created, timeZone);
+    if (key !== todayKey && key !== comparisonKey) continue;
+
+    const amount = new Decimal(inv.totalAmount.toString());
+    const hour = localHour(created, timeZone);
+    if (key === todayKey) {
+      todayHours[hour] = todayHours[hour].plus(amount);
       todayCount++;
     } else {
-      comparisonHours[created.getHours()] = comparisonHours[created.getHours()].plus(amount);
+      comparisonHours[hour] = comparisonHours[hour].plus(amount);
       comparisonCount++;
     }
   }
@@ -82,8 +121,8 @@ export async function GET(request: Request) {
     invoiceCountChangePct: pctChange(new Decimal(todayCount), new Decimal(comparisonCount)),
     avgInvoice: avgInvoice.toFixed(2),
     avgInvoiceChangePct: pctChange(avgInvoice, comparisonAvgInvoice),
-    comparisonLabel: comparisonStart.toLocaleDateString("en-US", { weekday: "long" }),
-    currentHour: now.getHours(),
+    comparisonLabel: comparisonWeekday,
+    currentHour: localHour(now, timeZone),
     hourly: Array.from({ length: 24 }, (_, hour) => ({
       hour,
       today: todayHours[hour].toNumber(),
