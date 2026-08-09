@@ -140,7 +140,7 @@ export default function NewEstimatePage() {
         </div>
 
         <div className="card">
-          <InvoiceItemsEditor control={control} register={register} type="customer" />
+          <InvoiceItemsEditor control={control} register={register} type="customer" setValue={setValue} />
         </div>
 
         <InvoiceDocumentPreview

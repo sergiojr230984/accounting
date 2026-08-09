@@ -112,7 +112,13 @@ describe("paid-invoice protection", () => {
 });
 
 describe("overpayment handling", () => {
-  it("paidAmount cannot exceed totalAmount via PATCH", async () => {
+  // Customer invoices deliberately ALLOW overpayment as of da79d8e (a
+  // customer paying in cash often rounds up, e.g. $1001 against a $1000.70
+  // invoice) -- these two used to assert the opposite (a rejected 400) and
+  // were left failing when that guard was intentionally removed, instead of
+  // being updated to match the new behavior. paymentStatus still correctly
+  // caps at PAID rather than some nonsensical "more than paid" state.
+  it("paidAmount above totalAmount via PATCH is allowed and caps paymentStatus at PAID", async () => {
     const created = await admin.postJson<{ id: string }>("/api/invoices/customer", {
       customerId,
       invoiceNumber: `OVERPAY-TEST-${Date.now()}`,
@@ -120,15 +126,17 @@ describe("overpayment handling", () => {
       dueDate: "2026-01-31",
       items: [{ description: "Service", quantity: "1", unitPrice: "1000" }],
     });
-    const { status } = await admin.postJson(
+    const { status, body } = await admin.postJson<{ paidAmount: string; paymentStatus: string }>(
       `/api/invoices/customer/${created.body.id}`,
-      { paidAmount: "5000" },
+      { paidAmount: "1001" },
       "PATCH"
     );
-    expect(status).toBe(400);
+    expect(status).toBe(200);
+    expect(Number(body.paidAmount)).toBe(1001);
+    expect(body.paymentStatus).toBe("PAID");
   });
 
-  it("a payment that would push paidAmount above totalAmount is rejected", async () => {
+  it("a payment that pushes paidAmount above totalAmount is allowed and caps paymentStatus at PAID", async () => {
     const created = await admin.postJson<{ id: string }>("/api/invoices/customer", {
       customerId,
       invoiceNumber: `OVERPAY-LEDGER-${Date.now()}`,
@@ -142,11 +150,42 @@ describe("overpayment handling", () => {
       paymentDate: "2026-01-05",
     });
     expect(first.status).toBe(201);
-    const second = await admin.postJson(`/api/invoices/customer/${id}/payments`, {
-      amount: "500", // 600 + 500 = 1100 > totalAmount 1000
-      paymentDate: "2026-01-06",
+    const second = await admin.postJson<{ paymentStatus: string }>(
+      `/api/invoices/customer/${id}/payments`,
+      {
+        amount: "500", // 600 + 500 = 1100 > totalAmount 1000, a legitimate 100 overpayment
+        paymentDate: "2026-01-06",
+      }
+    );
+    expect(second.status).toBe(201);
+    expect(second.body.paymentStatus).toBe("PAID");
+
+    const invoice = await admin.getJson<{ paidAmount: string }>(`/api/invoices/customer/${id}`);
+    expect(Number(invoice.body.paidAmount)).toBe(1100);
+  });
+
+  // Supplier bills were NOT part of da79d8e's scope -- the original
+  // overpayment guard (6858f49) is still intentionally in place here, so a
+  // rounded-up vendor payment is still rejected. Documented so a future
+  // change to align the two doesn't look like an accidental regression.
+  it("supplier bills still reject an overpayment (guard not relaxed here, unlike customer invoices)", async () => {
+    const supplierRes = await admin.postJson<{ id: string }>("/api/suppliers", {
+      name: "Overpay Test Supplier",
     });
-    expect(second.status).toBe(400);
+    const created = await admin.postJson<{ id: string }>("/api/invoices/supplier", {
+      supplierId: supplierRes.body.id,
+      invoiceNumber: `SUP-OVERPAY-${Date.now()}`,
+      invoiceDate: "2026-01-01",
+      dueDate: "2026-01-31",
+      category: "OTHER",
+      items: [{ description: "Materials", quantity: "1", unitCost: "1000" }],
+    });
+    const { status } = await admin.postJson(
+      `/api/invoices/supplier/${created.body.id}`,
+      { paidAmount: "1001" },
+      "PATCH"
+    );
+    expect(status).toBe(400);
   });
 });
 
@@ -232,6 +271,51 @@ describe("next invoice number — computed via SQL aggregate, not a full-table J
 
     const after = await admin.getJson<{ nextSeq: number }>("/api/invoices/customer/next-number");
     expect(after.body.nextSeq).toBeGreaterThanOrEqual(8889);
+  });
+
+  it("falls back to the default prefix instead of scanning every invoice number in the table when the configured prefix is blank", async () => {
+    // A Settings field saved as "" (e.g. accidentally cleared and saved,
+    // rather than left unset) must not be treated as "no prefix, match
+    // anything" -- that degrades the underlying LIKE '<prefix>%' scan into
+    // LIKE '%', which picks up the leading digit run of every invoice
+    // number in the table regardless of format, including old/unrelated
+    // ones, instead of just this prefix's own sequence.
+    const before = await admin.getJson<{ prefix: string; nextSeq: number }>(
+      "/api/invoices/customer/next-number"
+    );
+    const originalPrefix = before.body.prefix;
+    // Comfortably above whatever earlier tests in this file already pushed
+    // the "INV-2026-" sequence to, so the floor set below actually wins.
+    const floorSeq = before.body.nextSeq + 500;
+
+    try {
+      // A differently-formatted invoice number with a huge leading digit
+      // run -- if the prefix scope is lost, this pollutes the "next number"
+      // computation for every other prefix too.
+      await admin.postJson("/api/invoices/customer", {
+        customerId,
+        invoiceNumber: "99999999-unrelated-legacy-number",
+        invoiceDate: "2026-01-01",
+        dueDate: "2026-01-31",
+        items: [{ description: "x", quantity: "1", unitPrice: "1" }],
+      });
+
+      const settingsRes = await admin.postJson(
+        "/api/settings",
+        { customerInvoicePrefix: "", customerInvoiceNextSeq: floorSeq },
+        "PATCH"
+      );
+      expect(settingsRes.status).toBe(200);
+
+      const after = await admin.getJson<{ prefix: string; nextNumber: string; nextSeq: number }>(
+        "/api/invoices/customer/next-number"
+      );
+      expect(after.body.prefix).toBe("INV-2026-");
+      expect(after.body.nextSeq).toBe(floorSeq);
+      expect(after.body.nextNumber).toBe(`INV-2026-${floorSeq}`);
+    } finally {
+      await admin.postJson("/api/settings", { customerInvoicePrefix: originalPrefix }, "PATCH");
+    }
   });
 });
 
@@ -357,6 +441,45 @@ describe("applied fees are re-derived server-side, not trusted from the client",
     expect(status).toBe(201);
     expect(Number(body.subtotal)).toBe(89);
     expect(Number(body.totalAmount)).toBe(92.55); // 89 + 3.55 card fee, no tax
+  });
+
+  it("accepts a fee amount that rounds up to the next cent past the unrounded ceiling", async () => {
+    // 176.69 * 3.99% = 7.049931 exactly. A client always submits fee amounts
+    // rounded to cents (7.05, since the third decimal digit is 9), but the
+    // true, unrounded product is 7.049931 -- comparing a rounded amount
+    // against an unrounded ceiling would wrongly reject roughly half of all
+    // legitimate fees, single line item or not.
+    const settingsRes = await admin.postJson(
+      "/api/settings",
+      { creditCardFeeRate: "0.0399" },
+      "PATCH"
+    );
+    expect(settingsRes.status).toBe(200);
+
+    const created = await admin.postJson<{ id: string; totalAmount: string }>(
+      "/api/invoices/customer",
+      {
+        customerId,
+        invoiceNumber: `FEE-ROUND-${Date.now()}`,
+        invoiceDate: "2026-01-01",
+        dueDate: "2026-01-31",
+        items: [{ description: "silla", quantity: "1", unitPrice: "176.69" }],
+        appliedFees: [{ id: "__cc__", label: "CARD FEE", rate: 0.0399, amount: "7.05" }],
+      }
+    );
+    expect(created.status).toBe(201);
+    expect(Number(created.body.totalAmount)).toBe(183.74); // 176.69 + 7.05
+
+    // Same rounding must be tolerated when re-saving via PATCH (the edit page).
+    const patched = await admin.postJson<{ error: string }>(
+      `/api/invoices/customer/${created.body.id}`,
+      {
+        items: [{ description: "silla", quantity: "1", unitPrice: "176.69" }],
+        appliedFees: [{ id: "__cc__", label: "CARD FEE", rate: 0.0399, amount: "7.05" }],
+      },
+      "PATCH"
+    );
+    expect(patched.status).toBe(200);
   });
 
   it("rejects an inflated fee amount added via PATCH too", async () => {

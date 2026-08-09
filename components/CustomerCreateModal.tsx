@@ -4,14 +4,29 @@ import { useState, useEffect } from "react";
 import { X, Loader2 } from "lucide-react";
 import AddressAutocomplete from "@/components/AddressAutocomplete";
 
+export interface SavedCustomer {
+  id: string;
+  name: string;
+  email: string | null;
+  phone?: string | null;
+  address?: string | null;
+  emergencyContactName?: string | null;
+  emergencyContactPhone?: string | null;
+}
+
 interface Props {
   open: boolean;
   initialName?: string;
+  // When set, the modal edits this existing customer (PATCH) instead of
+  // creating a new one (POST) -- same form, same modal, just a different
+  // save target and pre-filled fields.
+  customer?: SavedCustomer | null;
   onClose: () => void;
-  onCreated: (customer: { id: string; name: string; email: string | null }) => void;
+  onSaved: (customer: SavedCustomer) => void;
 }
 
-export default function CustomerCreateModal({ open, initialName = "", onClose, onCreated }: Props) {
+export default function CustomerCreateModal({ open, initialName = "", customer, onClose, onSaved }: Props) {
+  const editing = !!customer;
   const [name, setName] = useState(initialName);
   const [email, setEmail] = useState("");
   const [phone, setPhone] = useState("");
@@ -23,15 +38,15 @@ export default function CustomerCreateModal({ open, initialName = "", onClose, o
 
   useEffect(() => {
     if (open) {
-      setName(initialName);
-      setEmail("");
-      setPhone("");
-      setAddress("");
-      setEmergencyContactName("");
-      setEmergencyContactPhone("");
+      setName(customer?.name ?? initialName);
+      setEmail(customer?.email ?? "");
+      setPhone(customer?.phone ?? "");
+      setAddress(customer?.address ?? "");
+      setEmergencyContactName(customer?.emergencyContactName ?? "");
+      setEmergencyContactPhone(customer?.emergencyContactPhone ?? "");
       setError("");
     }
-  }, [open, initialName]);
+  }, [open, initialName, customer]);
 
   if (!open) return null;
 
@@ -43,8 +58,8 @@ export default function CustomerCreateModal({ open, initialName = "", onClose, o
     }
     setSaving(true);
     try {
-      const res = await fetch("/api/customers", {
-        method: "POST",
+      const res = await fetch(editing ? `/api/customers/${customer!.id}` : "/api/customers", {
+        method: editing ? "PATCH" : "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           name,
@@ -57,11 +72,11 @@ export default function CustomerCreateModal({ open, initialName = "", onClose, o
       });
       if (!res.ok) {
         const d = await res.json().catch(() => ({}));
-        setError(d.error?.formErrors?.[0] ?? d.error ?? "Failed to create");
+        setError(d.error?.formErrors?.[0] ?? d.error ?? `Failed to ${editing ? "save" : "create"}`);
         return;
       }
       const c = await res.json();
-      onCreated(c);
+      onSaved(c);
       onClose();
     } catch (e) {
       setError((e as Error).message);
@@ -74,7 +89,7 @@ export default function CustomerCreateModal({ open, initialName = "", onClose, o
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
       <div className="bg-white rounded-2xl shadow-xl w-full max-w-md">
         <div className="flex items-center justify-between p-5 border-b">
-          <h2 className="font-semibold text-gray-800">New Customer</h2>
+          <h2 className="font-semibold text-gray-800">{editing ? "Edit Customer" : "New Customer"}</h2>
           <button onClick={onClose} className="text-gray-400 hover:text-gray-600"><X className="w-5 h-5" /></button>
         </div>
         <div className="p-5 space-y-4">
@@ -110,7 +125,7 @@ export default function CustomerCreateModal({ open, initialName = "", onClose, o
           <button onClick={onClose} className="btn-secondary">Cancel</button>
           <button onClick={save} disabled={saving} className="btn-primary">
             {saving && <Loader2 className="w-4 h-4 animate-spin" />}
-            Create
+            {editing ? "Save Changes" : "Create"}
           </button>
         </div>
       </div>

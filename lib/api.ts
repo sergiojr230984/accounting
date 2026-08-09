@@ -5,6 +5,7 @@ import { decode } from "@auth/core/jwt";
 import { auth } from "./auth";
 import { prisma } from "./prisma";
 import { rateLimit, type RateLimitOptions } from "./rate-limit";
+import { verifyApiKey, type ApiScope } from "./api-key";
 
 export type Role = "ADMIN" | "MANAGER" | "SALES";
 
@@ -65,10 +66,17 @@ async function readJwtUser(): Promise<JwtFallback> {
         // the account hasn't been deactivated since the token was issued --
         // otherwise a deactivated user's session would keep working through
         // this fallback even after the primary path revokes it.
-        const dbUser = await prisma.user.findUnique({ where: { id }, select: { active: true } });
+        const dbUser = await prisma.user.findUnique({ where: { id }, select: { active: true, role: true } });
         if (dbUser?.active === false) continue;
 
-        const role = ((token.role as string) ?? "MANAGER") as Role;
+        // Read from the DB, not the JWT's own role claim -- same reasoning
+        // as a4ad448 ("always read role from DB using session.user.id,
+        // never from session.user.role"), which this fallback path was
+        // missed by: the token's role claim is fixed at login time, so a
+        // role change would silently keep applying the old, possibly more
+        // privileged role for up to the rest of the session's 12h lifetime
+        // if a request happened to take this fallback path.
+        const role = (dbUser?.role ?? (token.role as string) ?? "MANAGER") as Role;
         return {
           ok: true,
           user: {
@@ -161,6 +169,82 @@ export async function requireRole(
     );
   }
   return guard;
+}
+
+export type ReadAccess =
+  | { via: "session"; session: AuthedSession }
+  | { via: "apiKey"; keyId: string; label: string; scopes: ApiScope[] };
+
+/**
+ * Authenticates a read-only request via either a normal session OR an API
+ * key (Authorization: Bearer <key>, or X-API-Key) -- for endpoints meant to
+ * be readable by external dashboards/BI tools, not just logged-in staff.
+ * `scope` is the data category this endpoint exposes (see
+ * lib/api-key.ts's API_KEY_SCOPES); a session always satisfies it (a real
+ * logged-in user's access is governed by their role, not key scopes), but
+ * an API key must have been explicitly granted that scope at creation time
+ * or this rejects with 403 even though the key itself is valid.
+ *
+ * API keys are intentionally never accepted anywhere except these
+ * explicitly wired-up GET endpoints: no POST/PATCH/DELETE handler in this
+ * codebase checks for one, so a leaked or overscoped key can never create,
+ * edit, or delete anything, no matter what this function returns.
+ */
+export async function requireReadAccess(
+  request: Request,
+  scope: ApiScope
+): Promise<ReadAccess | NextResponse> {
+  const guard = await requireAuth();
+  if (!(guard instanceof NextResponse)) return { via: "session", session: guard };
+
+  const key = await verifyApiKey(request);
+  if (key) {
+    if (!key.scopes.includes(scope)) {
+      return NextResponse.json(
+        {
+          error: `This API key doesn't have the "${scope}" scope.`,
+          code: "forbidden_scope",
+          requiredScope: scope,
+        },
+        { status: 403 }
+      );
+    }
+    return { via: "apiKey", keyId: key.id, label: key.label, scopes: key.scopes };
+  }
+
+  return guard;
+}
+
+/**
+ * Same as requireReadAccess(), but additionally requires one of `roles` when
+ * the caller authenticated via a real session. An API key with the right
+ * scope always satisfies this regardless of role: keys can only ever be
+ * created by an ADMIN (see app/api/settings/api-keys/route.ts), so a
+ * correctly-scoped key is already admin-provisioned read access by
+ * construction, not a role that needs separate checking here.
+ */
+export async function requireReadAccessRole(
+  request: Request,
+  scope: ApiScope,
+  ...roles: Role[]
+): Promise<ReadAccess | NextResponse> {
+  const access = await requireReadAccess(request, scope);
+  if (access instanceof NextResponse) return access;
+  if (access.via === "apiKey") return access;
+
+  const role = access.session.user.role;
+  if (!role || !roles.includes(role)) {
+    return NextResponse.json(
+      {
+        error: `Forbidden — your role "${role}" cannot do this. Required: ${roles.join(" or ")}.`,
+        code: "forbidden",
+        currentRole: role,
+        requiredRoles: roles,
+      },
+      { status: 403 }
+    );
+  }
+  return access;
 }
 
 // Sentinel employeeId used to scope an unlinked SALES account to "nothing"

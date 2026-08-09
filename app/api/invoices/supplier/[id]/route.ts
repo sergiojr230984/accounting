@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { writeAuditLog, extractMeta, actorFromSession, diffChanges } from "@/lib/audit";
+import { computeLineTotals } from "@/lib/money";
 import { z } from "zod";
 import Decimal from "decimal.js";
 
@@ -40,7 +41,12 @@ export async function GET(
   const invoice = await prisma.supplierInvoice.findUnique({
     where: { id },
     include: {
-      supplier: true,
+      // Scoped to what the bill view actually needs (contact info + Zelle
+      // for "how to pay") -- bankName/bankAccountNumber/bankRouting/
+      // paymentInstructions are compensation-adjacent secrets that don't
+      // belong in a response every authenticated role can request, same
+      // reasoning as the scrub already applied to GET /api/suppliers.
+      supplier: { select: { id: true, name: true, email: true, phone: true, address: true, zelle: true } },
       items: true,
       payments: { orderBy: { paymentDate: "desc" } },
       files: true,
@@ -129,30 +135,24 @@ export async function PATCH(
   if (data.customerInvoiceRef !== undefined) updateData.customerInvoiceRef = data.customerInvoiceRef || null;
 
   if (data.items && data.items.length > 0) {
-    let subtotal = new Decimal(0);
-    let taxAmount = new Decimal(0);
+    let subtotal: Decimal;
+    let taxAmount: Decimal;
     let computedItems: { description: string; itemDescription?: string; quantity: string; unitCost: string; taxRate: string; lineTotal: string }[];
 
     try {
-      computedItems = data.items.map((item) => {
-        const qty = new Decimal(item.quantity || "0");
-        const cost = new Decimal(item.unitCost || "0");
-        const rate = new Decimal(item.taxRate || "0");
-        // Round to 2 decimals FIRST, then sum the already-rounded values
-        // into subtotal/taxAmount -- same fix as invoice creation.
-        const lineTotal = qty.times(cost).toDecimalPlaces(2);
-        const lineTax = lineTotal.times(rate).toDecimalPlaces(2);
-        subtotal = subtotal.plus(lineTotal);
-        taxAmount = taxAmount.plus(lineTax);
-        return {
-          description: item.description,
-          itemDescription: item.itemDescription,
-          quantity: item.quantity,
-          unitCost: item.unitCost,
-          taxRate: item.taxRate,
-          lineTotal: lineTotal.toFixed(2),
-        };
-      });
+      const totals = computeLineTotals(
+        data.items.map((item) => ({ quantity: item.quantity, price: item.unitCost, taxRate: item.taxRate }))
+      );
+      subtotal = totals.subtotal;
+      taxAmount = totals.taxAmount;
+      computedItems = data.items.map((item, i) => ({
+        description: item.description,
+        itemDescription: item.itemDescription,
+        quantity: item.quantity,
+        unitCost: item.unitCost,
+        taxRate: item.taxRate,
+        lineTotal: totals.lines[i].lineTotal,
+      }));
     } catch {
       return NextResponse.json(
         { error: "Invalid item values — please check quantities and prices" },
@@ -251,7 +251,11 @@ export async function PATCH(
   const updated = await prisma.supplierInvoice.update({
     where: { id },
     data: updateData,
-    include: { supplier: true, items: true },
+    // See the matching comment on the GET handler above.
+    include: {
+      supplier: { select: { id: true, name: true, email: true, phone: true, address: true, zelle: true } },
+      items: true,
+    },
   });
 
   await writeAuditLog({

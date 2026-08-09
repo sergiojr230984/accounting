@@ -26,6 +26,32 @@ describe("estimate creation", () => {
     expect(Number(body.totalAmount)).toBe(300);
   });
 
+  // Estimates duplicated the same subtotal-rounding logic as customer/
+  // supplier invoices (df34770 fixed it there on 2026-07-12) but never got
+  // the fix applied here -- summing full-precision line totals and rounding
+  // once at the end can legitimately disagree with the sum of the
+  // already-rounded, individually-stored line totals by a cent. Both create
+  // and edit now go through the shared lib/money.ts computeLineTotals()
+  // helper so this can't be missed again.
+  it("estimate subtotal should equal the sum of its own stored line totals", async () => {
+    const { body } = await admin.postJson<{ subtotal: string; items: { lineTotal: string }[] }>(
+      "/api/estimates",
+      {
+        customerId,
+        estimateNumber: `EST-ROUNDING-${Date.now()}`,
+        estimateDate: "2026-01-01",
+        items: [
+          { description: "a", quantity: "1", unitPrice: "3.335" },
+          { description: "b", quantity: "1", unitPrice: "3.335" },
+          { description: "c", quantity: "1", unitPrice: "3.335" },
+        ],
+      }
+    );
+    const sumOfLines = body.items.reduce((s, i) => s + Number(i.lineTotal), 0);
+    expect(Number(body.subtotal)).toBeCloseTo(sumOfLines, 2);
+    expect(Number(body.subtotal)).toBe(10.02);
+  });
+
   it("an estimate does not count as revenue until converted", async () => {
     const before = await admin.getJson<{ total: string }>("/api/reports?type=income");
     await admin.postJson("/api/estimates", {

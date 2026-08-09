@@ -2,8 +2,9 @@ import { NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { initializeDatabase } from "@/lib/init-db";
+import { computeLineTotals } from "@/lib/money";
 import { z } from "zod";
-import Decimal from "decimal.js";
+import type Decimal from "decimal.js";
 
 const updateSchema = z.object({
   estimateNumber: z.string().min(1).optional(),
@@ -72,27 +73,24 @@ export async function PATCH(
   if (data.notes !== undefined) updateData.notes = data.notes;
 
   if (data.items && data.items.length > 0) {
-    let subtotal = new Decimal(0);
-    let taxAmount = new Decimal(0);
+    let subtotal: Decimal;
+    let taxAmount: Decimal;
     let computedItems: { description: string; itemDescription?: string; quantity: string; unitPrice: string; taxRate: string; lineTotal: string }[];
 
     try {
-      computedItems = data.items.map((item) => {
-        const qty = new Decimal(item.quantity || "0");
-        const price = new Decimal(item.unitPrice || "0");
-        const rate = new Decimal(item.taxRate || "0");
-        const lineTotal = qty.times(price);
-        subtotal = subtotal.plus(lineTotal);
-        taxAmount = taxAmount.plus(lineTotal.times(rate));
-        return {
-          description: item.description,
-          itemDescription: item.itemDescription,
-          quantity: item.quantity,
-          unitPrice: item.unitPrice,
-          taxRate: item.taxRate,
-          lineTotal: lineTotal.toFixed(2),
-        };
-      });
+      const totals = computeLineTotals(
+        data.items.map((item) => ({ quantity: item.quantity, price: item.unitPrice, taxRate: item.taxRate }))
+      );
+      subtotal = totals.subtotal;
+      taxAmount = totals.taxAmount;
+      computedItems = data.items.map((item, i) => ({
+        description: item.description,
+        itemDescription: item.itemDescription,
+        quantity: item.quantity,
+        unitPrice: item.unitPrice,
+        taxRate: item.taxRate,
+        lineTotal: totals.lines[i].lineTotal,
+      }));
     } catch {
       return NextResponse.json(
         { error: "Invalid item values — please check quantities and prices" },

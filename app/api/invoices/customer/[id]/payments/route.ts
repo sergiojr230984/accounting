@@ -63,10 +63,12 @@ export async function POST(
     const total = new Decimal(invoice.totalAmount);
     const down = new Decimal(invoice.downPayment);
 
-    if (newPaidAmount.plus(down).gt(total)) {
-      return { error: "overpayment" as const };
-    }
-
+    // Overpayments are allowed -- a customer paying in cash often rounds up
+    // (e.g. a $1000.70 invoice paid with $1001), and there's no clean way to
+    // split a payment into "the part that counts" and "the part that
+    // doesn't" at the point of collection. paymentStatus below still caps
+    // at PAID; the excess just shows up as a negative balance (credit) on
+    // the invoice rather than being silently rejected.
     const created = await tx.payment.create({
       data: { amount, paymentDate: parsedDate, notes: notes || null, customerInvoiceId: id },
     });
@@ -86,12 +88,6 @@ export async function POST(
 
   if (result.error === "not_found") {
     return NextResponse.json({ error: "Not found" }, { status: 404 });
-  }
-  if (result.error === "overpayment") {
-    return NextResponse.json(
-      { error: "This payment would push paidAmount above the invoice total." },
-      { status: 400 }
-    );
   }
 
   const updated = await prisma.customerInvoice.findUnique({

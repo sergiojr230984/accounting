@@ -1,8 +1,9 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { requireAuth, scopeInvoicesToOwnEmployee } from "@/lib/api";
-import { syncProductCatalog, findUncatalogedItem } from "@/lib/product-catalog";
+import { requireAuth, requireReadAccess, scopeInvoicesToOwnEmployee } from "@/lib/api";
+import { syncProductCatalog } from "@/lib/product-catalog";
 import { writeAuditLog, extractMeta, actorFromSession } from "@/lib/audit";
+import { computeLineTotals } from "@/lib/money";
 import { z } from "zod";
 import Decimal from "decimal.js";
 
@@ -38,8 +39,8 @@ const invoiceSchema = z.object({
 });
 
 export async function GET(request: Request) {
-  const guard = await requireAuth();
-  if (guard instanceof NextResponse) return guard;
+  const access = await requireReadAccess(request, "invoices:customer");
+  if (access instanceof NextResponse) return access;
 
   const { searchParams } = new URL(request.url);
   const customerId = searchParams.get("customerId");
@@ -116,14 +117,6 @@ export async function POST(request: Request) {
     employeeId = scope?.employeeId ?? null;
   }
 
-  const uncataloged = await findUncatalogedItem(prisma, guard.user.role, items);
-  if (uncataloged) {
-    return NextResponse.json(
-      { error: `"${uncataloged}" is not in the approved product/service catalog. Ask an admin to add it under Products & Services.` },
-      { status: 400 }
-    );
-  }
-
   // customerId and employeeId are foreign keys the DB will happily reject
   // with a raw constraint-violation error if either references a row that
   // doesn't exist (deleted between page load and submit, a stale cached
@@ -154,25 +147,10 @@ export async function POST(request: Request) {
     );
   }
 
-  let subtotal = new Decimal(0);
-  let taxAmount = new Decimal(0);
-
-  // Round each line's total to 2 decimals FIRST, then sum the already-
-  // rounded values into subtotal -- previously subtotal accumulated
-  // full-precision Decimals while lineTotal was rounded separately for
-  // storage, so the two could legitimately disagree by a cent (e.g. three
-  // lines at $3.335 stored as 3.34/3.34/3.34 = $10.02, but a subtotal
-  // rounded once from the unrounded sum came out $10.01).
-  const computedItems = items.map((item) => {
-    const qty = new Decimal(item.quantity);
-    const price = new Decimal(item.unitPrice);
-    const rate = new Decimal(item.taxRate);
-    const lineTotal = qty.times(price).toDecimalPlaces(2);
-    const lineTax = lineTotal.times(rate).toDecimalPlaces(2);
-    subtotal = subtotal.plus(lineTotal);
-    taxAmount = taxAmount.plus(lineTax);
-    return { ...item, lineTotal: lineTotal.toFixed(2) };
-  });
+  const { lines: lineTotals, subtotal, taxAmount } = computeLineTotals(
+    items.map((item) => ({ quantity: item.quantity, price: item.unitPrice, taxRate: item.taxRate }))
+  );
+  const computedItems = items.map((item, i) => ({ ...item, lineTotal: lineTotals[i].lineTotal }));
 
   // Optional credit-card processing fee from company profile
   let creditCardFee = new Decimal(0);
@@ -223,7 +201,12 @@ export async function POST(request: Request) {
       } catch {
         return NextResponse.json({ error: `Invalid amount for fee "${f.label}".` }, { status: 400 });
       }
-      const cap = feeBaseCap.times(canonical.rate);
+      // Rounded to cents like every client-submitted amount is -- comparing
+      // against the raw, unrounded product would reject the roughly half of
+      // fees whose true value's third decimal digit rounds up (e.g. a true
+      // fee of 7.049931 legitimately displays and submits as 7.05, which is
+      // "over" the unrounded 7.049931 cap despite being the correct amount).
+      const cap = feeBaseCap.times(canonical.rate).toDecimalPlaces(2);
       if (amt.gt(cap)) {
         return NextResponse.json(
           { error: `Fee "${f.label}" amount exceeds what its configured rate allows.` },

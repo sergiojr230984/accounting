@@ -1,17 +1,21 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { requireRole } from "@/lib/api";
+import { requireReadAccessRole } from "@/lib/api";
 import Decimal from "decimal.js";
 
 export async function GET(request: Request) {
   // Company-wide P&L, COGS, and unpaid totals -- not something every
-  // authenticated role should see, including SALES.
-  const guard = await requireRole("ADMIN", "MANAGER");
+  // authenticated role should see, including SALES. An API key (always
+  // admin-provisioned) also satisfies this, for external dashboards.
+  const guard = await requireReadAccessRole(request, "dashboard", "ADMIN", "MANAGER");
   if (guard instanceof NextResponse) return guard;
 
   const { searchParams } = new URL(request.url);
   const from = searchParams.get("from");
   const to = searchParams.get("to");
+  const granularityParam = searchParams.get("granularity");
+  const granularity: "daily" | "weekly" | "monthly" =
+    granularityParam === "daily" || granularityParam === "weekly" ? granularityParam : "monthly";
 
   const dateFilter = {
     ...(from ? { gte: new Date(from) } : {}),
@@ -82,20 +86,58 @@ export async function GET(request: Request) {
     zero
   );
 
-  // Monthly chart data (last 12 months)
-  type MonthBucket = {
+  // Chart data, bucketed at the requested granularity: daily (last 30 days),
+  // weekly (last 12 weeks, bucketed to each week's Monday), or monthly
+  // (last 12 months -- the original/default behavior).
+  type Bucket = {
     income: Decimal;
     cogs: Decimal;
     services: Decimal;
     operating: Decimal;
     other: Decimal;
   };
-  const monthlyMap = new Map<string, MonthBucket>();
-  for (let i = 11; i >= 0; i--) {
-    const d = new Date();
-    d.setMonth(d.getMonth() - i);
-    const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
-    monthlyMap.set(key, {
+
+  const dateKey = (d: Date) =>
+    `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  const monthKey = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+  const weekStart = (d: Date) => {
+    const monday = new Date(d);
+    const day = monday.getDay(); // 0 (Sun) - 6 (Sat)
+    monday.setDate(monday.getDate() + (day === 0 ? -6 : 1 - day));
+    monday.setHours(0, 0, 0, 0);
+    return monday;
+  };
+
+  const periods: string[] = [];
+  let bucketKeyFor: (d: Date) => string;
+
+  if (granularity === "daily") {
+    for (let i = 29; i >= 0; i--) {
+      const d = new Date();
+      d.setDate(d.getDate() - i);
+      periods.push(dateKey(d));
+    }
+    bucketKeyFor = dateKey;
+  } else if (granularity === "weekly") {
+    const thisWeekStart = weekStart(new Date());
+    for (let i = 11; i >= 0; i--) {
+      const d = new Date(thisWeekStart);
+      d.setDate(d.getDate() - i * 7);
+      periods.push(dateKey(d));
+    }
+    bucketKeyFor = (d) => dateKey(weekStart(d));
+  } else {
+    for (let i = 11; i >= 0; i--) {
+      const d = new Date();
+      d.setMonth(d.getMonth() - i);
+      periods.push(monthKey(d));
+    }
+    bucketKeyFor = monthKey;
+  }
+
+  const bucketMap = new Map<string, Bucket>();
+  for (const p of periods) {
+    bucketMap.set(p, {
       income: new Decimal(0),
       cogs: new Decimal(0),
       services: new Decimal(0),
@@ -105,16 +147,13 @@ export async function GET(request: Request) {
   }
 
   customerInvoices.forEach((inv) => {
-    const d = new Date(inv.invoiceDate);
-    const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
-    if (monthlyMap.has(key)) {
-      monthlyMap.get(key)!.income = monthlyMap
-        .get(key)!
-        .income.plus(new Decimal(inv.totalAmount.toString()));
+    const bucket = bucketMap.get(bucketKeyFor(new Date(inv.invoiceDate)));
+    if (bucket) {
+      bucket.income = bucket.income.plus(new Decimal(inv.totalAmount.toString()));
     }
   });
 
-  const categoryField: Record<string, keyof MonthBucket> = {
+  const categoryField: Record<string, keyof Bucket> = {
     COGS: "cogs",
     SERVICES_EXPENSE: "services",
     OPERATING_EXPENSE: "operating",
@@ -122,19 +161,18 @@ export async function GET(request: Request) {
   };
 
   supplierInvoices.forEach((inv) => {
-    const d = new Date(inv.invoiceDate);
-    const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
-    const bucket = monthlyMap.get(key);
+    const bucket = bucketMap.get(bucketKeyFor(new Date(inv.invoiceDate)));
     const field = categoryField[inv.category];
     if (bucket && field) {
       bucket[field] = bucket[field].plus(new Decimal(inv.totalAmount.toString()));
     }
   });
 
-  const monthlyChart = Array.from(monthlyMap.entries()).map(([month, data]) => {
+  const chart = periods.map((period) => {
+    const data = bucketMap.get(period)!;
     const expenses = data.cogs.plus(data.services).plus(data.operating).plus(data.other);
     return {
-      month,
+      period,
       income: data.income.toNumber(),
       expenses: expenses.toNumber(),
       cogs: data.cogs.toNumber(),
@@ -158,6 +196,7 @@ export async function GET(request: Request) {
     unpaidSupplierCount: unpaidSupplier.length,
     unpaidSupplierTotal: unpaidSupplierTotal.toFixed(2),
     totalSupplierExpenses: totalCOGS.plus(totalServices).plus(totalOperating).plus(totalOther).toFixed(2),
-    monthlyChart,
+    chart,
+    granularity,
   });
 }

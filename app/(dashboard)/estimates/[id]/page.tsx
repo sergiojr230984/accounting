@@ -78,7 +78,7 @@ export default function EstimateDetailPage() {
   const [linkCopied, setLinkCopied] = useState(false);
   const [converting, setConverting] = useState(false);
 
-  const { register, handleSubmit, control, reset, watch, formState: { errors } } = useForm<EditForm>({
+  const { register, handleSubmit, control, reset, watch, setValue, formState: { errors } } = useForm<EditForm>({
     resolver: zodResolver(editSchema),
   });
 
@@ -363,7 +363,7 @@ export default function EstimateDetailPage() {
           </div>
 
           <div className="card">
-            <InvoiceItemsEditor control={control} register={register} type="customer" />
+            <InvoiceItemsEditor control={control} register={register} type="customer" setValue={setValue} />
           </div>
 
           <InvoiceDocumentPreview

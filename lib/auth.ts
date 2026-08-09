@@ -48,8 +48,14 @@ const { handlers, auth: baseAuth, signIn, signOut } = NextAuth({
       const id = (token.id as string) ?? (token.sub as string) ?? "";
       const tokenEmail = ((token.email as string) ?? "").toLowerCase().trim();
 
+      // The owner's one and only sign-in account is permanently pinned to
+      // ADMIN here, regardless of what the Settings UI shows -- this is a
+      // deliberate, owner-approved policy (confirmed 2026-08), not a bug.
+      // admin@lacuevita.com was a leftover placeholder identity from this
+      // app's initial build-out, is not used to sign in, and is
+      // intentionally no longer pinned here -- see lib/init-db.ts for the
+      // matching boot-time policy and the emergency-recovery fallback.
       const BUILT_IN_ADMINS = new Set([
-        "admin@lacuevita.com",
         "sales@lacuevitafurniture.com",
       ]);
 

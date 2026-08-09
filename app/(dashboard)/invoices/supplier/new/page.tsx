@@ -84,7 +84,7 @@ export default function NewSupplierInvoicePage() {
           } | null
         ) => {
           if (!p) return;
-          const prefix = p.supplierInvoicePrefix ?? "PO-2026-";
+          const prefix = p.supplierInvoicePrefix || "PO-2026-";
           const seq = p.supplierInvoiceNextSeq ?? 1001;
           setValue("invoiceNumber", `${prefix}${String(seq).padStart(4, "0")}`);
         }

@@ -1,8 +1,9 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { requireAuth, requireRole } from "@/lib/api";
-import { syncProductCatalog, findUncatalogedItem } from "@/lib/product-catalog";
+import { syncProductCatalog } from "@/lib/product-catalog";
 import { writeAuditLog, extractMeta, actorFromSession, diffChanges } from "@/lib/audit";
+import { computeLineTotals } from "@/lib/money";
 import { z } from "zod";
 import Decimal from "decimal.js";
 
@@ -62,7 +63,13 @@ function validateAppliedFees(
     } catch {
       return NextResponse.json({ error: `Invalid amount for fee "${f.label}".` }, { status: 400 });
     }
-    if (amt.gt(feeBase.times(canonical.rate))) {
+    // Rounded to cents like every client-submitted amount is -- comparing
+    // against the raw, unrounded product would reject the roughly half of
+    // fees whose true value's third decimal digit rounds up (e.g. a true
+    // fee of 7.049931 legitimately displays and submits as 7.05, which is
+    // "over" the unrounded 7.049931 cap despite being the correct amount).
+    const cap = feeBase.times(canonical.rate).toDecimalPlaces(2);
+    if (amt.gt(cap)) {
       return NextResponse.json(
         { error: `Fee "${f.label}" amount exceeds what its configured rate allows.` },
         { status: 400 }
@@ -234,48 +241,24 @@ export async function PATCH(
   // IMPORTANT: compute and validate items BEFORE any destructive DB operation
   // so that a bad value can never leave the invoice with no items.
   if (data.items && data.items.length > 0) {
-    // Once a payment is recorded, existing rows are locked and submitted
-    // back unchanged (enforced above) -- only genuinely new lines need to
-    // pass the catalog check; re-validating an old, untouched row against a
-    // catalog that may have since dropped or renamed it would block edits
-    // that have nothing to do with that line.
-    const existingIds = new Set(existing.items.map((it) => it.id));
-    const itemsToCatalogCheck =
-      existing.paymentStatus === "UNPAID"
-        ? data.items
-        : data.items.filter((item) => !item.id || !existingIds.has(item.id));
-    const uncataloged = await findUncatalogedItem(prisma, guard.user.role, itemsToCatalogCheck);
-    if (uncataloged) {
-      return NextResponse.json(
-        { error: `"${uncataloged}" is not in the approved product/service catalog. Ask an admin to add it under Products & Services.` },
-        { status: 400 }
-      );
-    }
-
-    let subtotal = new Decimal(0);
-    let taxAmount = new Decimal(0);
+    let subtotal: Decimal;
+    let taxAmount: Decimal;
     let computedItems: { description: string; itemDescription?: string; quantity: string; unitPrice: string; taxRate: string; lineTotal: string }[];
 
     try {
-      computedItems = data.items.map((item) => {
-        const qty = new Decimal(item.quantity || "0");
-        const price = new Decimal(item.unitPrice || "0");
-        const rate = new Decimal(item.taxRate || "0");
-        // Round to 2 decimals FIRST, then sum the already-rounded values
-        // into subtotal/taxAmount -- same fix as invoice creation.
-        const lineTotal = qty.times(price).toDecimalPlaces(2);
-        const lineTax = lineTotal.times(rate).toDecimalPlaces(2);
-        subtotal = subtotal.plus(lineTotal);
-        taxAmount = taxAmount.plus(lineTax);
-        return {
-          description: item.description,
-          itemDescription: item.itemDescription,
-          quantity: item.quantity,
-          unitPrice: item.unitPrice,
-          taxRate: item.taxRate,
-          lineTotal: lineTotal.toFixed(2),
-        };
-      });
+      const totals = computeLineTotals(
+        data.items.map((item) => ({ quantity: item.quantity, price: item.unitPrice, taxRate: item.taxRate }))
+      );
+      subtotal = totals.subtotal;
+      taxAmount = totals.taxAmount;
+      computedItems = data.items.map((item, i) => ({
+        description: item.description,
+        itemDescription: item.itemDescription,
+        quantity: item.quantity,
+        unitPrice: item.unitPrice,
+        taxRate: item.taxRate,
+        lineTotal: totals.lines[i].lineTotal,
+      }));
     } catch {
       return NextResponse.json(
         { error: "Invalid item values — please check quantities and prices" },
@@ -352,24 +335,11 @@ export async function PATCH(
     }
   }
 
-  // Reject an amount that would exceed what's actually owed, rather than
-  // silently absorbing the difference -- there's no credit-balance concept
-  // in this codebase to represent "the customer overpaid by $X", so an
-  // over-cap value has nowhere correct to go and previously just vanished
-  // from the system's perspective.
-  if (data.paidAmount !== undefined || data.downPayment !== undefined) {
-    const newPaid = new Decimal(data.paidAmount ?? existing.paidAmount.toString());
-    const newDown = new Decimal(data.downPayment ?? existing.downPayment.toString());
-    const effectiveTotal = updateData.totalAmount !== undefined
-      ? new Decimal(updateData.totalAmount as string)
-      : new Decimal(existing.totalAmount.toString());
-    if (newPaid.plus(newDown).gt(effectiveTotal)) {
-      return NextResponse.json(
-        { error: "paidAmount plus downPayment cannot exceed the invoice total." },
-        { status: 400 }
-      );
-    }
-  }
+  // Overpayments (paidAmount + downPayment exceeding the total) are allowed
+  // -- a customer paying in cash often rounds up (e.g. a $1000.70 invoice
+  // paid with $1001), and rejecting that just stops the payment from being
+  // recorded at all. paymentStatus below still caps at PAID; the excess
+  // shows up as a negative balance (credit) on the invoice.
 
   // Auto-derive paymentStatus when paidAmount, downPayment, or the total
   // (e.g. a newly added item) changes, and the caller didn't explicitly

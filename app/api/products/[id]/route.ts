@@ -92,31 +92,8 @@ export async function PATCH(
   }
 }
 
-export async function DELETE(
-  request: Request,
-  { params }: { params: Promise<{ id: string }> }
-) {
-  const guard = await requireRole("ADMIN");
-  if (guard instanceof NextResponse) return guard;
-
-  const { id } = await params;
-  try {
-    const existing = await prisma.product.findUnique({ where: { id } });
-    if (!existing) return NextResponse.json({ error: "Not found" }, { status: 404 });
-
-    await prisma.product.delete({ where: { id } });
-
-    await writeAuditLog({
-      ...actorFromSession(guard),
-      action: "DELETE",
-      entityType: "product",
-      entityId: id,
-      entityLabel: existing.name,
-      ...extractMeta(request),
-    });
-
-    return NextResponse.json({ ok: true });
-  } catch (err) {
-    return NextResponse.json({ error: (err as Error).message }, { status: 500 });
-  }
-}
+// Deliberately no DELETE handler -- a catalog item can be created or locked
+// (active: false) via PATCH above, but never permanently removed. Products
+// are referenced by name from historical invoices (there's no foreign key),
+// so deleting one would silently orphan the frequency report's grouping for
+// every past invoice that used it.

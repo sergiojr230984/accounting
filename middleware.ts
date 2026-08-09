@@ -63,8 +63,18 @@ export default function middleware(req: NextRequest) {
   const publicPaths = ["/login", "/api/auth", "/api/sign-out", "/api/health", "/pay", "/estimate"];
   const isPublic = publicPaths.some((p) => pathname.startsWith(p));
 
-  // Block anything that isn't public when there's no session.
-  if (!hasSession(req) && !isPublic) {
+  // API routes handle their own 401/403 JSON response when unauthenticated
+  // (requireAuth(), requireReadAccess(), etc. all already do this) --
+  // redirecting them to the HTML /login page here instead breaks any caller
+  // that isn't a browser tab following redirects, which is exactly what an
+  // external app/dashboard authenticating with only an API key (no session
+  // cookie at all) is. Only browser PAGE navigations get the
+  // redirect-to-login treatment; /api/* always falls through to its own
+  // handler, cookie or not.
+  const isApiRoute = pathname.startsWith("/api/");
+
+  // Block anything that isn't public or an API route when there's no session.
+  if (!hasSession(req) && !isPublic && !isApiRoute) {
     return NextResponse.redirect(new URL("/login", req.url));
   }
 
