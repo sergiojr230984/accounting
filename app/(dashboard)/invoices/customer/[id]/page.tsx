@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useCallback } from "react";
 import { useParams, useRouter } from "next/navigation";
-import { useForm } from "react-hook-form";
+import { useForm, Controller } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import Link from "next/link";
@@ -14,6 +14,7 @@ import FileUpload from "@/components/FileUpload";
 import InvoiceItemsEditor from "@/components/InvoiceItemsEditor";
 import InvoiceDocumentPreview from "@/components/InvoiceDocumentPreview";
 import CustomerCreateModal from "@/components/CustomerCreateModal";
+import AddressAutocomplete from "@/components/AddressAutocomplete";
 import { formatCurrency } from "@/lib/money";
 import { formatDateOnly } from "@/lib/date";
 import Decimal from "decimal.js";
@@ -528,7 +529,17 @@ export default function CustomerInvoiceDetailPage() {
               </div>
               <div>
                 <label className="label">Customer Address</label>
-                <input className="input" placeholder="Street, City, State ZIP" {...register("customerAddress")} />
+                <Controller
+                  control={control}
+                  name="customerAddress"
+                  render={({ field }) => (
+                    <AddressAutocomplete
+                      value={field.value ?? ""}
+                      onChange={field.onChange}
+                      placeholder="Street, City, State ZIP"
+                    />
+                  )}
+                />
                 <p className="text-xs text-gray-400 mt-1">Updates the customer record</p>
               </div>
             </div>
