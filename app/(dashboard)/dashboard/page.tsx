@@ -11,6 +11,7 @@ import {
   Sliders,
 } from "lucide-react";
 import InteractiveTrendChart, { type ChartPoint, type Granularity } from "@/components/InteractiveTrendChart";
+import DailySalesCard, { type TodaySales } from "@/components/DailySalesCard";
 import { formatCurrency } from "@/lib/money";
 
 interface DashboardData {
@@ -80,10 +81,12 @@ function greeting(): string {
 export default function DashboardPage() {
   const { data: session } = useSession();
   const [data, setData] = useState<DashboardData | null>(null);
-  // The granularity `data.chart` was actually fetched with -- kept separate
-  // from `granularity` (the button state) so the chart never renders one
-  // granularity's periods with another granularity's label format while a
-  // new request is still in flight.
+  const [todayData, setTodayData] = useState<TodaySales | null>(null);
+  // The granularity the currently-displayed chart data was actually fetched
+  // with -- kept separate from `granularity` (the button state) so the
+  // chart never renders one granularity's data with another granularity's
+  // label format (or the wrong chart component entirely) while a new
+  // request is still in flight.
   const [chartGranularity, setChartGranularity] = useState<Granularity>("monthly");
   const [loading, setLoading] = useState(true);
   const [granularity, setGranularity] = useState<Granularity>("monthly");
@@ -93,15 +96,35 @@ export default function DashboardPage() {
     async function load() {
       setLoading(true);
       try {
-        const dashRes = await fetch(`/api/dashboard?granularity=${granularity}`);
-        // A non-ok response (e.g. 403 for a role that can't see company-wide
-        // P&L) still has a JSON body, but it's an error object, not real
-        // DashboardData -- setting it directly used to crash the whole page
-        // downstream (e.g. formatCurrency(undefined) throwing a DecimalError).
-        const dash = dashRes.ok ? await dashRes.json() : null;
-        if (!cancelled) {
-          setData(dash);
-          setChartGranularity(granularity);
+        if (granularity === "daily") {
+          // Daily gets its own hour-by-hour "Net sales" view (today vs. the
+          // same weekday last week) instead of the multi-series trend chart
+          // -- /api/dashboard is still called for the P&L summary's
+          // all-time totals below, which don't depend on granularity.
+          const [dashRes, todayRes] = await Promise.all([
+            fetch(`/api/dashboard`),
+            fetch(`/api/dashboard/today`),
+          ]);
+          const dash = dashRes.ok ? await dashRes.json() : null;
+          const today = todayRes.ok ? await todayRes.json() : null;
+          if (!cancelled) {
+            setData(dash);
+            setTodayData(today);
+            setChartGranularity("daily");
+          }
+        } else {
+          const dashRes = await fetch(`/api/dashboard?granularity=${granularity}`);
+          // A non-ok response (e.g. 403 for a role that can't see
+          // company-wide P&L) still has a JSON body, but it's an error
+          // object, not real DashboardData -- setting it directly used to
+          // crash the whole page downstream (e.g. formatCurrency(undefined)
+          // throwing a DecimalError).
+          const dash = dashRes.ok ? await dashRes.json() : null;
+          if (!cancelled) {
+            setData(dash);
+            setTodayData(null);
+            setChartGranularity(granularity);
+          }
         }
       } finally {
         if (!cancelled) setLoading(false);
@@ -161,11 +184,17 @@ export default function DashboardPage() {
 
         {/* Cash flow -- keeps showing the previous granularity's data,
             dimmed, while a new one loads instead of flashing empty. */}
-        {data && (
-          <div className={loading ? "opacity-50 transition-opacity" : "transition-opacity"}>
-            <InteractiveTrendChart data={data.chart} granularity={chartGranularity} />
-          </div>
-        )}
+        {chartGranularity === "daily"
+          ? todayData && (
+              <div className={loading ? "opacity-50 transition-opacity" : "transition-opacity"}>
+                <DailySalesCard data={todayData} />
+              </div>
+            )
+          : data && (
+              <div className={loading ? "opacity-50 transition-opacity" : "transition-opacity"}>
+                <InteractiveTrendChart data={data.chart} granularity={chartGranularity} />
+              </div>
+            )}
       </div>
 
       {/* P&L summary */}
