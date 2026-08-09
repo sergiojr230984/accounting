@@ -861,7 +861,7 @@ export default function NewCustomerInvoicePage() {
           open={modalOpen}
           initialName={modalSeedName}
           onClose={() => setModalOpen(false)}
-          onCreated={(c) => {
+          onSaved={(c) => {
             setCustomers((prev) => [...prev, c as Customer]);
             setCustomerId(c.id);
             setCustomerQuery("");

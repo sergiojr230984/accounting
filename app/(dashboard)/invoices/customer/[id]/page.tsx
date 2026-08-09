@@ -6,13 +6,14 @@ import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import Link from "next/link";
-import { ArrowLeft, Edit2, Save, X, Trash2, Loader2, Send, Copy, Check, Printer, Plus } from "lucide-react";
+import { ArrowLeft, Edit2, Save, X, Trash2, Loader2, Send, Copy, Check, Printer, Plus, Pencil } from "lucide-react";
 import { generateInvoicePDF } from "@/lib/invoice-pdf";
 import { format } from "date-fns";
 import PaymentBadge from "@/components/PaymentBadge";
 import FileUpload from "@/components/FileUpload";
 import InvoiceItemsEditor from "@/components/InvoiceItemsEditor";
 import InvoiceDocumentPreview from "@/components/InvoiceDocumentPreview";
+import CustomerCreateModal from "@/components/CustomerCreateModal";
 import { formatCurrency } from "@/lib/money";
 import { formatDateOnly } from "@/lib/date";
 import Decimal from "decimal.js";
@@ -82,6 +83,7 @@ export default function CustomerInvoiceDetailPage() {
   const [sendMessage, setSendMessage] = useState<{ kind: "success" | "error"; text: string } | null>(null);
   const [linkCopied, setLinkCopied] = useState(false);
   const [employees, setEmployees] = useState<EmployeeOpt[]>([]);
+  const [customerModalOpen, setCustomerModalOpen] = useState(false);
 
   // Record new payment
   const [showPaymentForm, setShowPaymentForm] = useState(false);
@@ -606,11 +608,21 @@ export default function CustomerInvoiceDetailPage() {
                 </div>
               </div>
               <div className="card space-y-3">
-                <h2 className="font-semibold text-gray-800">Customer</h2>
+                <div className="flex items-center justify-between">
+                  <h2 className="font-semibold text-gray-800">Customer</h2>
+                  <button
+                    onClick={() => setCustomerModalOpen(true)}
+                    className="p-1.5 text-gray-400 hover:text-brand-600 hover:bg-brand-50 rounded-lg transition-colors"
+                    title="Edit customer"
+                  >
+                    <Pencil className="w-3.5 h-3.5" />
+                  </button>
+                </div>
                 <div className="space-y-2 text-sm">
                   <p className="font-medium">{invoice.customer.name}</p>
                   {invoice.customer.email && <p className="text-gray-500">{invoice.customer.email}</p>}
                   {invoice.customer.phone && <p className="text-gray-500">{invoice.customer.phone}</p>}
+                  {invoice.customer.address && <p className="text-gray-500">{invoice.customer.address}</p>}
                   {(invoice.customer.emergencyContactName || invoice.customer.emergencyContactPhone) && (
                     <div className="pt-2 border-t border-gray-100">
                       <p className="text-[10px] font-semibold uppercase text-gray-400 tracking-wide">Emergency contact</p>
@@ -859,6 +871,19 @@ export default function CustomerInvoiceDetailPage() {
           </>
         )}
       </div>
+
+      <CustomerCreateModal
+        open={customerModalOpen}
+        customer={invoice.customer}
+        onClose={() => setCustomerModalOpen(false)}
+        onSaved={(c) => {
+          setInvoice((prev) => (prev ? { ...prev, customer: { ...prev.customer, ...c } } : prev));
+          // Keep the in-progress "Edit Invoice" form's address field (if
+          // open) in sync too, so it doesn't silently overwrite this change
+          // with a stale value on save.
+          if (editing) setValue("customerAddress", c.address ?? "");
+        }}
+      />
     </>
   );
 }
