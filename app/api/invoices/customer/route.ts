@@ -4,6 +4,7 @@ import { requireAuth, requireReadAccess, scopeInvoicesToOwnEmployee } from "@/li
 import { syncProductCatalog } from "@/lib/product-catalog";
 import { writeAuditLog, extractMeta, actorFromSession } from "@/lib/audit";
 import { computeLineTotals } from "@/lib/money";
+import { claimSequenceNumber } from "@/lib/next-number";
 import { z } from "zod";
 import Decimal from "decimal.js";
 
@@ -219,43 +220,48 @@ export async function POST(request: Request) {
 
   const totalAmount = subtotal.plus(taxAmount).plus(creditCardFee).plus(customFeesSum);
 
-  const invoice = await prisma.customerInvoice.create({
-    data: {
-      customerId,
-      invoiceNumber,
-      invoiceDate: new Date(invoiceDate),
-      dueDate: new Date(dueDate),
-      subtotal: subtotal.toFixed(2),
-      taxAmount: taxAmount.toFixed(2),
-      totalAmount: totalAmount.toFixed(2),
-      creditCardFee: creditCardFee.toFixed(2),
-      appliedFees: appliedFees as unknown as object,
-      paidAmount: paidAmount ?? "0",
-      paymentStatus: paymentStatus ?? "UNPAID",
-      downPayment: downPayment ?? "0",
-      employeeId: employeeId ?? null,
-      commissionRate: commissionRate ?? "0",
-      notes,
-      items: {
-        create: computedItems.map((item) => ({
-          description: item.description,
-          itemDescription: item.itemDescription ?? null,
-          quantity: item.quantity,
-          unitPrice: item.unitPrice,
-          taxRate: item.taxRate,
-          lineTotal: item.lineTotal,
-        })),
-      },
-    },
-    include: { customer: true, items: true },
-  });
+  const invoicePrefix =
+    (await prisma.companyProfile.findUnique({ where: { id: "default" }, select: { customerInvoicePrefix: true } }))
+      ?.customerInvoicePrefix || "INV-2026-";
 
-  await prisma.companyProfile
-    .update({
-      where: { id: "default" },
-      data: { customerInvoiceNextSeq: { increment: 1 } },
-    })
-    .catch(() => undefined);
+  // Creating the invoice and claiming its number's sequence value happen in
+  // one transaction -- see lib/next-number.ts's claimSequenceNumber doc
+  // comment for why this (not a fire-and-forget increment) is what actually
+  // guarantees a deleted invoice's number is never reused.
+  const invoice = await prisma.$transaction(async (tx) => {
+    const created = await tx.customerInvoice.create({
+      data: {
+        customerId,
+        invoiceNumber,
+        invoiceDate: new Date(invoiceDate),
+        dueDate: new Date(dueDate),
+        subtotal: subtotal.toFixed(2),
+        taxAmount: taxAmount.toFixed(2),
+        totalAmount: totalAmount.toFixed(2),
+        creditCardFee: creditCardFee.toFixed(2),
+        appliedFees: appliedFees as unknown as object,
+        paidAmount: paidAmount ?? "0",
+        paymentStatus: paymentStatus ?? "UNPAID",
+        downPayment: downPayment ?? "0",
+        employeeId: employeeId ?? null,
+        commissionRate: commissionRate ?? "0",
+        notes,
+        items: {
+          create: computedItems.map((item) => ({
+            description: item.description,
+            itemDescription: item.itemDescription ?? null,
+            quantity: item.quantity,
+            unitPrice: item.unitPrice,
+            taxRate: item.taxRate,
+            lineTotal: item.lineTotal,
+          })),
+        },
+      },
+      include: { customer: true, items: true },
+    });
+    await claimSequenceNumber(tx, "customerInvoiceNextSeq", invoiceNumber, invoicePrefix);
+    return created;
+  });
 
   const auditActor = { ...actorFromSession(guard), ...extractMeta(request) };
 

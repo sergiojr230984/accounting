@@ -223,6 +223,7 @@ model CompanyProfile {
   customerInvoiceNextSeq  Int     @default(1001)
   supplierInvoicePrefix   String  @default("PO-2026-")
   supplierInvoiceNextSeq  Int     @default(1001)
+  estimateNextSeq         Int     @default(1001)
   createdAt          DateTime @default(now())
   updatedAt          DateTime @updatedAt
 }

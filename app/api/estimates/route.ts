@@ -4,7 +4,10 @@ import { requireReadAccess } from "@/lib/api";
 import { prisma } from "@/lib/prisma";
 import { initializeDatabase } from "@/lib/init-db";
 import { computeLineTotals } from "@/lib/money";
+import { claimSequenceNumber } from "@/lib/next-number";
 import { z } from "zod";
+
+const ESTIMATE_PREFIX = `EST-${new Date().getFullYear()}-`;
 
 const itemSchema = z.object({
   description: z.string().min(1),
@@ -95,28 +98,36 @@ export async function POST(request: Request) {
 
   const totalAmount = subtotal.plus(taxAmount);
 
-  const estimate = await prisma.estimate.create({
-    data: {
-      customerId,
-      estimateNumber,
-      estimateDate: new Date(estimateDate),
-      expiryDate: expiryDate ? new Date(expiryDate) : null,
-      subtotal: subtotal.toFixed(2),
-      taxAmount: taxAmount.toFixed(2),
-      totalAmount: totalAmount.toFixed(2),
-      notes,
-      items: {
-        create: computedItems.map((item) => ({
-          description: item.description,
-          itemDescription: item.itemDescription ?? null,
-          quantity: item.quantity,
-          unitPrice: item.unitPrice,
-          taxRate: item.taxRate,
-          lineTotal: item.lineTotal,
-        })),
+  // Creating the estimate and claiming its number's sequence value happen
+  // in one transaction -- see lib/next-number.ts's claimSequenceNumber doc
+  // comment for why this is what actually guarantees a deleted estimate's
+  // number is never reused.
+  const estimate = await prisma.$transaction(async (tx) => {
+    const created = await tx.estimate.create({
+      data: {
+        customerId,
+        estimateNumber,
+        estimateDate: new Date(estimateDate),
+        expiryDate: expiryDate ? new Date(expiryDate) : null,
+        subtotal: subtotal.toFixed(2),
+        taxAmount: taxAmount.toFixed(2),
+        totalAmount: totalAmount.toFixed(2),
+        notes,
+        items: {
+          create: computedItems.map((item) => ({
+            description: item.description,
+            itemDescription: item.itemDescription ?? null,
+            quantity: item.quantity,
+            unitPrice: item.unitPrice,
+            taxRate: item.taxRate,
+            lineTotal: item.lineTotal,
+          })),
+        },
       },
-    },
-    include: { customer: true, items: true },
+      include: { customer: true, items: true },
+    });
+    await claimSequenceNumber(tx, "estimateNextSeq", estimateNumber, ESTIMATE_PREFIX);
+    return created;
   });
 
   return NextResponse.json(estimate, { status: 201 });

@@ -1,6 +1,8 @@
 import bcrypt from "bcryptjs";
 import { randomBytes } from "crypto";
+import { Prisma } from "@prisma/client";
 import { prisma } from "./prisma";
+import type { SequenceField } from "./next-number";
 
 // Caches the in-flight promise, not just a boolean -- a boolean flag set
 // synchronously before the async work below completes would let a second
@@ -152,6 +154,7 @@ const SCHEMA_STATEMENTS: string[] = [
   `ALTER TABLE "CompanyProfile" ADD COLUMN IF NOT EXISTS "customerInvoiceNextSeq" INTEGER NOT NULL DEFAULT 1001;`,
   `ALTER TABLE "CompanyProfile" ADD COLUMN IF NOT EXISTS "supplierInvoicePrefix" TEXT NOT NULL DEFAULT 'PO-2026-';`,
   `ALTER TABLE "CompanyProfile" ADD COLUMN IF NOT EXISTS "supplierInvoiceNextSeq" INTEGER NOT NULL DEFAULT 1001;`,
+  `ALTER TABLE "CompanyProfile" ADD COLUMN IF NOT EXISTS "estimateNextSeq" INTEGER NOT NULL DEFAULT 1001;`,
   `ALTER TABLE "CompanyProfile" ADD COLUMN IF NOT EXISTS "customFees" JSONB NOT NULL DEFAULT '[]'::jsonb;`,
   `ALTER TABLE "CustomerInvoice" ADD COLUMN IF NOT EXISTS "appliedFees" JSONB NOT NULL DEFAULT '[]'::jsonb;`,
   `CREATE TABLE IF NOT EXISTS "TaxRate" (
@@ -293,6 +296,31 @@ async function runInitialization(): Promise<void> {
   }
   console.log("[init-db] Schema ready");
 
+  // Self-heal the document-numbering counters (see lib/next-number.ts) up
+  // to at least "one past whatever's actually in the table" -- runs on
+  // every boot, always via GREATEST so it only ever moves a counter
+  // forward, never back. This exists for two reasons, not just belt-and-
+  // suspenders:
+  //   1. estimateNextSeq is a brand-new column; on an existing production
+  //      database it starts at the schema default (1001) regardless of how
+  //      many real estimates already exist, which would immediately cause
+  //      collisions/reuse without this backfill.
+  //   2. customerInvoiceNextSeq/supplierInvoiceNextSeq were previously
+  //      advanced by a fire-and-forget update with a silently-swallowed
+  //      error -- any historical failure there left the counter drifted
+  //      below the true max, which this corrects.
+  try {
+    const numberingProfile = await prisma.companyProfile.findUnique({ where: { id: "default" } });
+    const customerPrefix = numberingProfile?.customerInvoicePrefix || "INV-2026-";
+    const supplierPrefix = numberingProfile?.supplierInvoicePrefix || "PO-2026-";
+    const estimatePrefix = `EST-${new Date().getFullYear()}-`;
+    await backfillSequenceCounter("CustomerInvoice", "invoiceNumber", customerPrefix, "customerInvoiceNextSeq");
+    await backfillSequenceCounter("SupplierInvoice", "invoiceNumber", supplierPrefix, "supplierInvoiceNextSeq");
+    await backfillSequenceCounter("Estimate", "estimateNumber", estimatePrefix, "estimateNextSeq");
+  } catch (e) {
+    console.error("[init-db] sequence counter backfill failed:", e);
+  }
+
   // The owner's one and only sign-in account is permanently pinned to ADMIN
   // here, regardless of what the Settings UI shows -- this is a deliberate,
   // owner-approved policy (confirmed 2026-08), not a bug. Do not remove.
@@ -371,4 +399,36 @@ async function runInitialization(): Promise<void> {
   } catch (e) {
     console.error("[init-db] admin seed failed:", e);
   }
+}
+
+/**
+ * Bumps `CompanyProfile[seqField]` up to at least "one past the highest
+ * number this prefix's own series has ever used" in `table`, if it isn't
+ * already there. Scoped to `prefix` (WHERE column LIKE prefix || '%', same
+ * as the pre-counter MAX-scan this whole file replaced) -- an unscoped scan
+ * would let an unrelated legacy/manually-typed number that merely happens
+ * to contain a huge digit run (e.g. an old id like "99999999-legacy")
+ * permanently inflate this prefix's counter to match it, on every single
+ * boot. GREATEST means this only ever moves the counter forward, so it's
+ * safe to run unconditionally every time.
+ */
+async function backfillSequenceCounter(
+  table: string,
+  column: string,
+  prefix: string,
+  seqField: SequenceField
+): Promise<void> {
+  const tableIdent = Prisma.raw(`"${table}"`);
+  const columnIdent = Prisma.raw(`"${column}"`);
+  const rows = await prisma.$queryRaw<{ maxSeq: number | null }[]>(Prisma.sql`
+    SELECT MAX(CAST(substring(substring(${columnIdent} from length(${prefix}) + 1) from '^[0-9]+') AS INTEGER)) AS "maxSeq"
+    FROM ${tableIdent}
+    WHERE ${columnIdent} LIKE ${prefix + "%"}
+  `);
+  const maxSeq = rows[0]?.maxSeq ?? null;
+  if (maxSeq === null) return;
+  const seqColumnIdent = Prisma.raw(`"${seqField}"`);
+  await prisma.$executeRaw`
+    UPDATE "CompanyProfile" SET ${seqColumnIdent} = GREATEST(${seqColumnIdent}, ${maxSeq + 1}) WHERE "id" = 'default'
+  `;
 }
