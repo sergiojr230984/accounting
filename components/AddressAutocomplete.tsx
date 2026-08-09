@@ -6,14 +6,19 @@ import { MapPin, Loader2 } from "lucide-react";
 /**
  * Address input with OpenStreetMap Nominatim autocomplete.
  *
- * - No API key, no billing setup. Sends one request to nominatim.openstreetmap.org
- *   per ~350 ms of typing (debounced), restricted to US addresses.
+ * - No API key, no billing setup. Sends one request per ~350 ms of typing
+ *   (debounced), restricted to US addresses.
  * - Picking a suggestion fills the input with the formatted address and (if
  *   provided) calls onPlaceSelected with the structured components.
  * - Typing manually always works; the suggestion dropdown is purely additive.
  *
- * Nominatim usage policy: ≤1 req/sec per browser, browsers attach a Referer
- * automatically which satisfies the identification requirement.
+ * Goes through our own /api/geocode instead of calling
+ * nominatim.openstreetmap.org directly from the browser -- a direct client
+ * call can silently return nothing for two real reasons: Nominatim's usage
+ * policy wants a proper identifying header (unreliable to get from a
+ * browser fetch across devices/privacy settings), and mobile carriers share
+ * IPs across many customers, so Nominatim rate-limiting one heavy user can
+ * quietly block everyone else on that carrier too. See app/api/geocode/route.ts.
  */
 
 interface PlaceComponents {
@@ -56,7 +61,6 @@ interface NominatimResult {
 
 const DEBOUNCE_MS = 350;
 const MIN_CHARS = 3;
-const MAX_RESULTS = 5;
 
 export default function AddressAutocomplete({
   value,
@@ -88,15 +92,7 @@ export default function AddressAutocomplete({
     const timer = setTimeout(async () => {
       setLoading(true);
       try {
-        const url = new URL("https://nominatim.openstreetmap.org/search");
-        url.searchParams.set("q", q);
-        url.searchParams.set("format", "json");
-        url.searchParams.set("addressdetails", "1");
-        url.searchParams.set("limit", String(MAX_RESULTS));
-        url.searchParams.set("countrycodes", "us");
-        const res = await fetch(url.toString(), {
-          headers: { Accept: "application/json" },
-        });
+        const res = await fetch(`/api/geocode?q=${encodeURIComponent(q)}`);
         if (!res.ok) {
           setSuggestions([]);
           return;
