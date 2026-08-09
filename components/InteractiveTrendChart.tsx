@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   ResponsiveContainer,
   ComposedChart,
@@ -17,8 +17,8 @@ import {
 import { BarChart3, LineChart as LineChartIcon, AreaChart as AreaChartIcon, X } from "lucide-react";
 import { formatCurrency } from "@/lib/money";
 
-export interface MonthlyPoint {
-  month: string;
+export interface ChartPoint {
+  period: string;
   income: number;
   expenses: number;
   cogs: number;
@@ -28,9 +28,11 @@ export interface MonthlyPoint {
   profit: number;
 }
 
+export type Granularity = "daily" | "weekly" | "monthly";
+
 type ChartType = "area" | "bar" | "line";
 type SeriesKey = "income" | "expenses" | "profit";
-type ViewMode = "monthly" | "cumulative";
+type ViewMode = "period" | "cumulative";
 
 const SERIES: { key: SeriesKey; label: string; color: string }[] = [
   { key: "income", label: "Income", color: "#22c55e" },
@@ -52,27 +54,53 @@ const CATEGORY_LABELS: Record<string, string> = {
   other: "Other Expense",
 };
 
-function monthLabel(month: string) {
-  const [y, m] = month.split("-");
-  return new Date(Number(y), Number(m) - 1, 1).toLocaleDateString("en-US", {
-    month: "short",
-    year: "2-digit",
-  });
+// `period` is "YYYY-MM" for monthly granularity, "YYYY-MM-DD" (the bucket's
+// start date -- a Monday for weekly) for daily/weekly.
+function parsePeriod(period: string): Date {
+  const parts = period.split("-").map(Number);
+  return parts.length === 3
+    ? new Date(parts[0], parts[1] - 1, parts[2])
+    : new Date(parts[0], parts[1] - 1, 1);
 }
 
-export default function InteractiveTrendChart({ data }: { data: MonthlyPoint[] }) {
+function periodLabel(period: string, granularity: Granularity): string {
+  const d = parsePeriod(period);
+  if (granularity === "monthly") {
+    return d.toLocaleDateString("en-US", { month: "short", year: "2-digit" });
+  }
+  return d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+}
+
+function periodHeading(period: string, granularity: Granularity): string {
+  const label = periodLabel(period, granularity);
+  return granularity === "weekly" ? `Week of ${label}` : label;
+}
+
+const GRANULARITY_LABEL: Record<Granularity, string> = {
+  daily: "Daily",
+  weekly: "Weekly",
+  monthly: "Monthly",
+};
+
+export default function InteractiveTrendChart({
+  data,
+  granularity,
+}: {
+  data: ChartPoint[];
+  granularity: Granularity;
+}) {
   const [chartType, setChartType] = useState<ChartType>("area");
-  const [viewMode, setViewMode] = useState<ViewMode>("monthly");
+  const [viewMode, setViewMode] = useState<ViewMode>("period");
   const [hidden, setHidden] = useState<Set<SeriesKey>>(new Set());
   const [range, setRange] = useState<{ start: number; end: number }>({
     start: 0,
     end: Math.max(data.length - 1, 0),
   });
-  const [selectedMonth, setSelectedMonth] = useState<string | null>(null);
+  const [selectedPeriod, setSelectedPeriod] = useState<string | null>(null);
 
   const chartData = useMemo(() => {
-    const labeled = data.map((d) => ({ ...d, label: monthLabel(d.month) }));
-    if (viewMode === "monthly") return labeled;
+    const labeled = data.map((d) => ({ ...d, label: periodLabel(d.period, granularity) }));
+    if (viewMode === "period") return labeled;
     let income = 0,
       expenses = 0,
       profit = 0;
@@ -82,7 +110,16 @@ export default function InteractiveTrendChart({ data }: { data: MonthlyPoint[] }
       profit += d.profit;
       return { ...d, income, expenses, profit };
     });
-  }, [data, viewMode]);
+  }, [data, viewMode, granularity]);
+
+  // Reset the zoom/brush and any drill-down selection whenever the dataset
+  // itself changes shape (e.g. switching granularity swaps 12 months for 30
+  // days) -- otherwise a stale range/selection from the old data can point
+  // past the end of the new array or reference a period that no longer exists.
+  useEffect(() => {
+    setRange({ start: 0, end: Math.max(data.length - 1, 0) });
+    setSelectedPeriod(null);
+  }, [data]);
 
   const visibleRange = chartData.slice(range.start, range.end + 1);
 
@@ -105,7 +142,7 @@ export default function InteractiveTrendChart({ data }: { data: MonthlyPoint[] }
 
   const margin = rangeTotals.income !== 0 ? (rangeTotals.profit / rangeTotals.income) * 100 : 0;
 
-  const selected = data.find((d) => d.month === selectedMonth) || null;
+  const selected = data.find((d) => d.period === selectedPeriod) || null;
 
   function toggleSeries(key: SeriesKey) {
     setHidden((prev) => {
@@ -123,7 +160,7 @@ export default function InteractiveTrendChart({ data }: { data: MonthlyPoint[] }
   function handleChartClick(e: { activeLabel?: string }) {
     if (!e || !e.activeLabel) return;
     const point = chartData.find((d) => d.label === e.activeLabel);
-    if (point) setSelectedMonth((cur) => (cur === point.month ? null : point.month));
+    if (point) setSelectedPeriod((cur) => (cur === point.period ? null : point.period));
   }
 
   const CustomTooltip = ({
@@ -211,12 +248,12 @@ export default function InteractiveTrendChart({ data }: { data: MonthlyPoint[] }
         <div className="flex items-center gap-2">
           <div className="flex items-center rounded-lg border border-gray-200 p-0.5">
             <button
-              onClick={() => setViewMode("monthly")}
+              onClick={() => setViewMode("period")}
               className={`px-2.5 py-1 text-xs font-medium rounded-md transition-colors ${
-                viewMode === "monthly" ? "bg-gray-900 text-white" : "text-gray-500 hover:text-gray-700"
+                viewMode === "period" ? "bg-gray-900 text-white" : "text-gray-500 hover:text-gray-700"
               }`}
             >
-              Monthly
+              {GRANULARITY_LABEL[granularity]}
             </button>
             <button
               onClick={() => setViewMode("cumulative")}
@@ -328,9 +365,9 @@ export default function InteractiveTrendChart({ data }: { data: MonthlyPoint[] }
             strokeWidth={1}
             label={{ value: "Avg profit", position: "insideTopRight", fontSize: 10, fill: "#9ca3af" }}
           />
-          {selectedMonth && (
+          {selectedPeriod && (
             <ReferenceLine
-              x={monthLabel(selectedMonth)}
+              x={periodLabel(selectedPeriod, granularity)}
               stroke="#111827"
               strokeWidth={1.5}
             />
@@ -355,12 +392,12 @@ export default function InteractiveTrendChart({ data }: { data: MonthlyPoint[] }
         </ComposedChart>
       </ResponsiveContainer>
 
-      {/* Drill-down panel for the clicked month */}
+      {/* Drill-down panel for the clicked period */}
       {selected && (
         <div className="mt-4 rounded-lg border border-gray-200 p-4 bg-gray-50">
           <div className="flex items-center justify-between mb-3">
-            <h3 className="text-sm font-semibold text-gray-800">{monthLabel(selected.month)} breakdown</h3>
-            <button onClick={() => setSelectedMonth(null)} className="text-gray-400 hover:text-gray-600">
+            <h3 className="text-sm font-semibold text-gray-800">{periodHeading(selected.period, granularity)} breakdown</h3>
+            <button onClick={() => setSelectedPeriod(null)} className="text-gray-400 hover:text-gray-600">
               <X className="w-4 h-4" />
             </button>
           </div>

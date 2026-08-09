@@ -10,7 +10,7 @@ import {
   Receipt,
   Sliders,
 } from "lucide-react";
-import InteractiveTrendChart, { type MonthlyPoint } from "@/components/InteractiveTrendChart";
+import InteractiveTrendChart, { type ChartPoint, type Granularity } from "@/components/InteractiveTrendChart";
 import { formatCurrency } from "@/lib/money";
 
 interface DashboardData {
@@ -26,8 +26,14 @@ interface DashboardData {
   unpaidSupplierCount: number;
   unpaidSupplierTotal: string;
   totalSupplierExpenses: string;
-  monthlyChart: MonthlyPoint[];
+  chart: ChartPoint[];
 }
+
+const GRANULARITIES: { value: Granularity; label: string }[] = [
+  { value: "daily", label: "Daily" },
+  { value: "weekly", label: "Weekly" },
+  { value: "monthly", label: "Monthly" },
+];
 
 const QUICK_ACTIONS = [
   {
@@ -74,24 +80,36 @@ function greeting(): string {
 export default function DashboardPage() {
   const { data: session } = useSession();
   const [data, setData] = useState<DashboardData | null>(null);
+  // The granularity `data.chart` was actually fetched with -- kept separate
+  // from `granularity` (the button state) so the chart never renders one
+  // granularity's periods with another granularity's label format while a
+  // new request is still in flight.
+  const [chartGranularity, setChartGranularity] = useState<Granularity>("monthly");
   const [loading, setLoading] = useState(true);
+  const [granularity, setGranularity] = useState<Granularity>("monthly");
 
-  async function load() {
-    setLoading(true);
-    try {
-      const dashRes = await fetch(`/api/dashboard`);
-      // A non-ok response (e.g. 403 for a role that can't see company-wide
-      // P&L) still has a JSON body, but it's an error object, not real
-      // DashboardData -- setting it directly used to crash the whole page
-      // downstream (e.g. formatCurrency(undefined) throwing a DecimalError).
-      const dash = dashRes.ok ? await dashRes.json() : null;
-      setData(dash);
-    } finally {
-      setLoading(false);
+  useEffect(() => {
+    let cancelled = false;
+    async function load() {
+      setLoading(true);
+      try {
+        const dashRes = await fetch(`/api/dashboard?granularity=${granularity}`);
+        // A non-ok response (e.g. 403 for a role that can't see company-wide
+        // P&L) still has a JSON body, but it's an error object, not real
+        // DashboardData -- setting it directly used to crash the whole page
+        // downstream (e.g. formatCurrency(undefined) throwing a DecimalError).
+        const dash = dashRes.ok ? await dashRes.json() : null;
+        if (!cancelled) {
+          setData(dash);
+          setChartGranularity(granularity);
+        }
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
     }
-  }
-
-  useEffect(() => { load(); }, []);
+    load();
+    return () => { cancelled = true; };
+  }, [granularity]);
 
   const profitPositive = data ? parseFloat(data.netProfit) >= 0 : true;
   const firstName = (session?.user?.name ?? "").split(" ")[0];
@@ -125,14 +143,29 @@ export default function DashboardPage() {
       <div>
         <div className="flex items-center justify-between mb-4">
           <h2 className="text-2xl font-bold text-gray-900">Insights for you</h2>
-          <button className="btn-secondary text-xs" disabled>
-            <Sliders className="w-3.5 h-3.5" />
-            Customize
-          </button>
+          <div className="flex items-center gap-1.5 rounded-lg border border-gray-200 p-0.5">
+            <Sliders className="w-3.5 h-3.5 text-gray-400 ml-1.5" />
+            {GRANULARITIES.map(({ value, label }) => (
+              <button
+                key={value}
+                onClick={() => setGranularity(value)}
+                className={`px-2.5 py-1 text-xs font-medium rounded-md transition-colors ${
+                  granularity === value ? "bg-gray-900 text-white" : "text-gray-500 hover:text-gray-700"
+                }`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
         </div>
 
-        {/* Cash flow */}
-        {!loading && data && <InteractiveTrendChart data={data.monthlyChart} />}
+        {/* Cash flow -- keeps showing the previous granularity's data,
+            dimmed, while a new one loads instead of flashing empty. */}
+        {data && (
+          <div className={loading ? "opacity-50 transition-opacity" : "transition-opacity"}>
+            <InteractiveTrendChart data={data.chart} granularity={chartGranularity} />
+          </div>
+        )}
       </div>
 
       {/* P&L summary */}
