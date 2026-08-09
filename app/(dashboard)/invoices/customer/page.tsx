@@ -220,7 +220,7 @@ export default function CustomerInvoicesPage() {
 
       {/* Table */}
       <div className="bg-white border border-gray-200 rounded-2xl overflow-x-auto">
-        <table className="w-full text-sm min-w-[760px]">
+        <table className="w-full text-sm min-w-[860px]">
           <thead className="bg-gray-50 border-b border-gray-100">
             <tr>
               <th className="text-left px-5 py-3 text-xs font-semibold text-gray-600 uppercase">Status</th>
@@ -228,6 +228,7 @@ export default function CustomerInvoicesPage() {
               <th className="text-left px-5 py-3 text-xs font-semibold text-gray-600 uppercase">Date</th>
               <th className="text-left px-5 py-3 text-xs font-semibold text-gray-600 uppercase">Number</th>
               <th className="text-left px-5 py-3 text-xs font-semibold text-gray-600 uppercase">Customer</th>
+              <th className="text-right px-5 py-3 text-xs font-semibold text-gray-600 uppercase">Total</th>
               <th className="text-right px-5 py-3 text-xs font-semibold text-gray-600 uppercase">Amount due</th>
               <th className="text-right px-5 py-3 text-xs font-semibold text-gray-600 uppercase">Actions</th>
             </tr>
@@ -236,7 +237,7 @@ export default function CustomerInvoicesPage() {
             {loading ? (
               Array.from({ length: 5 }).map((_, i) => (
                 <tr key={i}>
-                  {Array.from({ length: 7 }).map((_, j) => (
+                  {Array.from({ length: 8 }).map((_, j) => (
                     <td key={j} className="px-5 py-4">
                       <div className="h-4 bg-gray-100 rounded animate-pulse" />
                     </td>
@@ -245,7 +246,7 @@ export default function CustomerInvoicesPage() {
               ))
             ) : filtered.length === 0 ? (
               <tr>
-                <td colSpan={7} className="text-center py-16 text-gray-400">
+                <td colSpan={8} className="text-center py-16 text-gray-400">
                   <DollarSign className="w-10 h-10 mx-auto mb-3 opacity-40" />
                   <p className="font-medium">No invoices match your filters</p>
                 </td>
@@ -285,6 +286,9 @@ export default function CustomerInvoicesPage() {
                       </Link>
                     </td>
                     <td className="px-5 py-4 text-gray-700">{inv.customer.name}</td>
+                    <td className="px-5 py-4 text-right text-gray-500">
+                      {formatCurrency(inv.totalAmount)}
+                    </td>
                     <td className="px-5 py-4 text-right font-semibold text-gray-900">
                       {formatCurrency(balance.toFixed(2))}
                     </td>
