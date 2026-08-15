@@ -201,5 +201,171 @@ export async function GET(request: Request) {
     });
   }
 
+  if (type === "account-transactions") {
+    const account = searchParams.get("account") === "payable" ? "payable" : "receivable";
+    const contactId = searchParams.get("contactId") || null;
+
+    type Entry = {
+      date: Date;
+      description: string;
+      debit: Decimal;
+      credit: Decimal;
+      // Signed change to the running "amount owed" balance -- positive on
+      // a new invoice/bill, negative on a payment -- independent of which
+      // side (debit/credit) that lands on for the chosen account.
+      delta: Decimal;
+      invoiceId: string;
+      invoiceType: "customer" | "supplier";
+    };
+
+    const entries: Entry[] = [];
+
+    if (account === "receivable") {
+      const [invoices, payments] = await Promise.all([
+        prisma.customerInvoice.findMany({
+          where: contactId ? { customerId: contactId } : {},
+          select: {
+            id: true,
+            invoiceNumber: true,
+            invoiceDate: true,
+            totalAmount: true,
+            customer: { select: { name: true } },
+          },
+        }),
+        prisma.payment.findMany({
+          where: {
+            customerInvoiceId: { not: null },
+            ...(contactId ? { customerInvoice: { customerId: contactId } } : {}),
+          },
+          select: {
+            amount: true,
+            paymentDate: true,
+            customerInvoice: { select: { id: true, invoiceNumber: true, customer: { select: { name: true } } } },
+          },
+        }),
+      ]);
+
+      for (const inv of invoices) {
+        const amount = new Decimal(inv.totalAmount.toString());
+        entries.push({
+          date: inv.invoiceDate,
+          description: `Invoice #${inv.invoiceNumber} - ${inv.customer.name}`,
+          debit: amount,
+          credit: new Decimal(0),
+          delta: amount,
+          invoiceId: inv.id,
+          invoiceType: "customer",
+        });
+      }
+      for (const p of payments) {
+        if (!p.customerInvoice) continue;
+        const amount = new Decimal(p.amount.toString());
+        entries.push({
+          date: p.paymentDate,
+          description: `Payment for Invoice #${p.customerInvoice.invoiceNumber} - ${p.customerInvoice.customer.name}`,
+          debit: new Decimal(0),
+          credit: amount,
+          delta: amount.negated(),
+          invoiceId: p.customerInvoice.id,
+          invoiceType: "customer",
+        });
+      }
+    } else {
+      // Unlike customer invoices (which get a real Payment row per
+      // /api/invoices/customer/[id]/payments call), supplier bills are
+      // only ever paid by PATCHing a single cumulative `paidAmount` field
+      // (see app/api/invoices/supplier/[id]/route.ts) -- no endpoint ever
+      // writes Payment.supplierInvoiceId. Querying the Payment table here
+      // would silently show zero payments on every bill, even paid ones.
+      // Best-effort fix: synthesize one payment entry per bill from its
+      // paidAmount, dated at updatedAt (the closest thing to a payment
+      // date this data model tracks) rather than misreporting nothing.
+      const invoices = await prisma.supplierInvoice.findMany({
+        where: contactId ? { supplierId: contactId } : {},
+        select: {
+          id: true,
+          invoiceNumber: true,
+          invoiceDate: true,
+          totalAmount: true,
+          paidAmount: true,
+          updatedAt: true,
+          supplier: { select: { name: true } },
+        },
+      });
+
+      for (const inv of invoices) {
+        const amount = new Decimal(inv.totalAmount.toString());
+        entries.push({
+          date: inv.invoiceDate,
+          description: `Bill #${inv.invoiceNumber} - ${inv.supplier.name}`,
+          debit: new Decimal(0),
+          credit: amount,
+          delta: amount,
+          invoiceId: inv.id,
+          invoiceType: "supplier",
+        });
+
+        const paid = new Decimal(inv.paidAmount.toString());
+        if (!paid.isZero()) {
+          entries.push({
+            date: inv.updatedAt,
+            description: `Payment for Bill #${inv.invoiceNumber} - ${inv.supplier.name}`,
+            debit: paid,
+            credit: new Decimal(0),
+            delta: paid.negated(),
+            invoiceId: inv.id,
+            invoiceType: "supplier",
+          });
+        }
+      }
+    }
+
+    entries.sort((a, b) => a.date.getTime() - b.date.getTime());
+
+    const fromDate = from ? new Date(from) : null;
+    // Inclusive end-of-day so a transaction dated exactly on `to` is kept.
+    const toDate = to ? new Date(new Date(to).getTime() + 24 * 60 * 60 * 1000 - 1) : null;
+
+    let balance = new Decimal(0);
+    let openingBalance = new Decimal(0);
+    const transactions: {
+      date: Date;
+      description: string;
+      debit: string | null;
+      credit: string | null;
+      balance: string;
+      invoiceId: string;
+      invoiceType: "customer" | "supplier";
+    }[] = [];
+
+    for (const e of entries) {
+      if (fromDate && e.date < fromDate) {
+        openingBalance = openingBalance.plus(e.delta);
+        balance = balance.plus(e.delta);
+        continue;
+      }
+      if (toDate && e.date > toDate) continue;
+
+      balance = balance.plus(e.delta);
+      transactions.push({
+        date: e.date,
+        description: e.description,
+        debit: e.debit.isZero() ? null : e.debit.toFixed(2),
+        credit: e.credit.isZero() ? null : e.credit.toFixed(2),
+        balance: balance.toFixed(2),
+        invoiceId: e.invoiceId,
+        invoiceType: e.invoiceType,
+      });
+    }
+
+    return NextResponse.json({
+      account,
+      contactId,
+      openingBalance: openingBalance.toFixed(2),
+      closingBalance: balance.toFixed(2),
+      transactions,
+    });
+  }
+
   return NextResponse.json({ error: "Unknown report type" }, { status: 400 });
 }

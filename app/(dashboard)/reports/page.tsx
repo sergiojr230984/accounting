@@ -1,13 +1,23 @@
 "use client";
 
-import { useState } from "react";
-import { Download, Loader2, FileText, TrendingUp } from "lucide-react";
+import { useState, useEffect } from "react";
+import { Download, Loader2, FileText, TrendingUp, ExternalLink } from "lucide-react";
+import Link from "next/link";
 import { formatCurrency } from "@/lib/money";
 import { formatDateOnly } from "@/lib/date";
 import PaymentBadge from "@/components/PaymentBadge";
 import CategoryBadge from "@/components/CategoryBadge";
 
-type ReportType = "profit-loss" | "income" | "expenses" | "customer-outstanding" | "supplier-outstanding" | "profitability";
+type ReportType =
+  | "profit-loss"
+  | "income"
+  | "expenses"
+  | "customer-outstanding"
+  | "supplier-outstanding"
+  | "profitability"
+  | "account-transactions";
+
+type LedgerAccount = "receivable" | "payable";
 
 interface PLData {
   income: string;
@@ -81,12 +91,46 @@ interface ProfitabilityData {
   }[];
 }
 
+interface AccountTransactionsData {
+  account: LedgerAccount;
+  contactId: string | null;
+  openingBalance: string;
+  closingBalance: string;
+  transactions: {
+    date: string;
+    description: string;
+    debit: string | null;
+    credit: string | null;
+    balance: string;
+    invoiceId: string;
+    invoiceType: "customer" | "supplier";
+  }[];
+}
+
+interface ContactOption {
+  id: string;
+  name: string;
+}
+
 export default function ReportsPage() {
   const [reportType, setReportType] = useState<ReportType>("profit-loss");
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
-  const [data, setData] = useState<PLData | IncomeData | ExpenseData | OutstandingData | ProfitabilityData | null>(null);
+  const [data, setData] = useState<PLData | IncomeData | ExpenseData | OutstandingData | ProfitabilityData | AccountTransactionsData | null>(null);
   const [loading, setLoading] = useState(false);
+
+  const [account, setAccount] = useState<LedgerAccount>("receivable");
+  const [contactId, setContactId] = useState("");
+  const [contacts, setContacts] = useState<ContactOption[]>([]);
+
+  useEffect(() => {
+    if (reportType !== "account-transactions") return;
+    setContactId("");
+    fetch(account === "receivable" ? "/api/customers" : "/api/suppliers")
+      .then((res) => res.json())
+      .then((list: ContactOption[]) => setContacts(Array.isArray(list) ? list : []))
+      .catch(() => setContacts([]));
+  }, [reportType, account]);
 
   async function generateReport() {
     setLoading(true);
@@ -94,6 +138,10 @@ export default function ReportsPage() {
       const params = new URLSearchParams({ type: reportType });
       if (from) params.set("from", from);
       if (to) params.set("to", to);
+      if (reportType === "account-transactions") {
+        params.set("account", account);
+        if (contactId) params.set("contactId", contactId);
+      }
       const res = await fetch(`/api/reports?${params}`);
       setData(await res.json());
     } finally {
@@ -146,6 +194,20 @@ export default function ReportsPage() {
       csv += `\nTotal Cost,${d.totalCost}`;
       csv += `\nTotal Profit,${d.totalProfit}`;
       csv += `\nOverall Margin,${d.overallMargin}%`;
+    } else if (reportType === "account-transactions") {
+      const d = data as AccountTransactionsData;
+      csv = [
+        d.account === "receivable" ? "Accounts Receivable Transactions" : "Accounts Payable Transactions",
+        `Period: ${dateRange}`,
+        "",
+        `Opening Balance,${d.openingBalance}`,
+        "",
+        "Date,Description,Debit,Credit,Balance",
+      ].join("\n");
+      csv += "\n" + d.transactions.map((t) =>
+        `${t.date.split("T")[0]},"${t.description.replace(/"/g, '""')}",${t.debit ?? ""},${t.credit ?? ""},${t.balance}`
+      ).join("\n");
+      csv += `\n\nClosing Balance,${d.closingBalance}`;
     } else {
       const d = data as OutstandingData;
       csv = ["Outstanding Balances", `Period: ${dateRange}`, "", "Invoice #,Party,Date,Total,Paid,Balance,Status"].join("\n");
@@ -241,6 +303,23 @@ export default function ReportsPage() {
         ]),
         foot: [["", "", "TOTAL", formatCurrency(d.totalRevenue), formatCurrency(d.totalCost), formatCurrency(d.totalProfit), `${d.overallMargin}%`, ""]],
       });
+    } else if (reportType === "account-transactions") {
+      const d = data as AccountTransactionsData;
+      autoTable(doc, {
+        startY: 35,
+        head: [["Date", "Description", "Debit", "Credit", "Balance"]],
+        body: [
+          ["", "Opening Balance", "", "", formatCurrency(d.openingBalance)],
+          ...d.transactions.map((t) => [
+            t.date.split("T")[0],
+            t.description,
+            t.debit ? formatCurrency(t.debit) : "",
+            t.credit ? formatCurrency(t.credit) : "",
+            formatCurrency(t.balance),
+          ]),
+        ],
+        foot: [["", "", "", "CLOSING BALANCE", formatCurrency(d.closingBalance)]],
+      });
     } else {
       const d = data as OutstandingData;
       autoTable(doc, {
@@ -268,6 +347,7 @@ export default function ReportsPage() {
     { value: "customer-outstanding", label: "Customer Outstanding" },
     { value: "supplier-outstanding", label: "Supplier Outstanding" },
     { value: "profitability", label: "Invoice Profitability" },
+    { value: "account-transactions", label: "Account Transactions" },
   ];
 
   function getReportLabel(type: ReportType) {
@@ -296,6 +376,34 @@ export default function ReportsPage() {
               ))}
             </select>
           </div>
+          {reportType === "account-transactions" && (
+            <>
+              <div>
+                <label className="label">Account</label>
+                <select
+                  className="input w-48"
+                  value={account}
+                  onChange={(e) => setAccount(e.target.value as LedgerAccount)}
+                >
+                  <option value="receivable">Accounts Receivable</option>
+                  <option value="payable">Accounts Payable</option>
+                </select>
+              </div>
+              <div>
+                <label className="label">Contact</label>
+                <select
+                  className="input w-52"
+                  value={contactId}
+                  onChange={(e) => setContactId(e.target.value)}
+                >
+                  <option value="">All Contacts</option>
+                  {contacts.map((c) => (
+                    <option key={c.id} value={c.id}>{c.name}</option>
+                  ))}
+                </select>
+              </div>
+            </>
+          )}
           <div>
             <label className="label">From Date</label>
             <input type="date" className="input w-40" value={from} onChange={(e) => setFrom(e.target.value)} />
@@ -550,6 +658,59 @@ export default function ReportsPage() {
                       </tr>
                     ))}
                   </tbody>
+                </table>
+              </div>
+            );
+          })()}
+
+          {reportType === "account-transactions" && (() => {
+            const d = data as AccountTransactionsData;
+            return (
+              <div>
+                <div className="mb-4 p-3 bg-gray-50 rounded-lg flex justify-between items-center border border-gray-200">
+                  <span className="font-semibold text-gray-700">Opening Balance</span>
+                  <span className="text-lg font-bold text-gray-700">{formatCurrency(d.openingBalance)}</span>
+                </div>
+                <table className="w-full text-sm">
+                  <thead className="border-b">
+                    <tr className="text-left text-gray-500 text-xs uppercase">
+                      <th className="pb-2">Date</th>
+                      <th className="pb-2">Description</th>
+                      <th className="pb-2 text-right">Debit</th>
+                      <th className="pb-2 text-right">Credit</th>
+                      <th className="pb-2 text-right">Balance</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-50">
+                    {d.transactions.map((t, i) => (
+                      <tr key={i}>
+                        <td className="py-2 text-gray-500">{formatDateOnly(t.date)}</td>
+                        <td className="py-2">
+                          <Link
+                            href={`/invoices/${t.invoiceType}/${t.invoiceId}`}
+                            className="text-brand-600 hover:underline inline-flex items-center gap-1"
+                          >
+                            {t.description}
+                            <ExternalLink className="w-3 h-3" />
+                          </Link>
+                        </td>
+                        <td className="py-2 text-right">{t.debit ? formatCurrency(t.debit) : ""}</td>
+                        <td className="py-2 text-right">{t.credit ? formatCurrency(t.credit) : ""}</td>
+                        <td className="py-2 text-right font-medium">{formatCurrency(t.balance)}</td>
+                      </tr>
+                    ))}
+                    {d.transactions.length === 0 && (
+                      <tr>
+                        <td colSpan={5} className="py-6 text-center text-gray-400">No transactions in this period</td>
+                      </tr>
+                    )}
+                  </tbody>
+                  <tfoot>
+                    <tr className="border-t font-bold">
+                      <td className="py-2" colSpan={4}>Closing Balance</td>
+                      <td className="py-2 text-right">{formatCurrency(d.closingBalance)}</td>
+                    </tr>
+                  </tfoot>
                 </table>
               </div>
             );
