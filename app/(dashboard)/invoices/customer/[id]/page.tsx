@@ -126,6 +126,7 @@ export default function CustomerInvoiceDetailPage() {
   const watchedDueDate = watch("dueDate");
   const watchedNotes = watch("notes");
   const watchedPaymentStatus = watch("paymentStatus");
+  const watchedCustomerAddress = watch("customerAddress");
 
   const load = useCallback(async () => {
     const res = await fetch(`/api/invoices/customer/${id}`);
@@ -565,7 +566,7 @@ export default function CustomerInvoiceDetailPage() {
               partyName={invoice.customer.name}
               partyEmail={invoice.customer.email}
               partyPhone={invoice.customer.phone}
-              partyAddress={invoice.customer.address}
+              partyAddress={watchedCustomerAddress}
               priceLabel="Unit Price"
               items={(watchedItems ?? []).map((item) => ({
                 description: item.description,
