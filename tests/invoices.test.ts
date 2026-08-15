@@ -232,7 +232,7 @@ describe("product-catalog auto-save — batched, not one query per line item", (
   });
 });
 
-describe("next invoice number — computed via SQL aggregate, not a full-table JS scan", () => {
+describe("next invoice number — a persisted counter, not a MAX() scan over existing rows", () => {
   it("suggests one past the highest existing sequence under the current prefix", async () => {
     const before = await admin.getJson<{ prefix: string; nextSeq: number }>(
       "/api/invoices/customer/next-number"
@@ -271,6 +271,37 @@ describe("next invoice number — computed via SQL aggregate, not a full-table J
 
     const after = await admin.getJson<{ nextSeq: number }>("/api/invoices/customer/next-number");
     expect(after.body.nextSeq).toBeGreaterThanOrEqual(8889);
+  });
+
+  it("never reissues a number after the invoice that used it is deleted", async () => {
+    const before = await admin.getJson<{ prefix: string }>("/api/invoices/customer/next-number");
+    const { prefix } = before.body;
+
+    // Deliberately far above whatever sequence other tests in this file
+    // reach, so this doesn't collide with them regardless of run order.
+    const usedNumber = `${prefix}20000`;
+    const created = await admin.postJson<{ id: string }>("/api/invoices/customer", {
+      customerId,
+      invoiceNumber: usedNumber,
+      invoiceDate: "2026-01-01",
+      dueDate: "2026-01-31",
+      items: [{ description: "x", quantity: "1", unitPrice: "1" }],
+    });
+    expect(created.status).toBe(201);
+
+    const afterCreate = await admin.getJson<{ nextNumber: string }>("/api/invoices/customer/next-number");
+    expect(afterCreate.body.nextNumber).toBe(`${prefix}20001`);
+
+    const del = await admin.postJson(`/api/invoices/customer/${created.body.id}`, {}, "DELETE");
+    expect(del.status).toBe(200);
+
+    // A MAX()-scan-based "next number" would drop right back down to 20000
+    // the moment the only invoice using it is gone -- the next invoice
+    // created would silently reuse a real, previously-issued number. The
+    // persisted counter must not care that the row is gone.
+    const afterDelete = await admin.getJson<{ nextNumber: string }>("/api/invoices/customer/next-number");
+    expect(afterDelete.body.nextNumber).toBe(`${prefix}20001`);
+    expect(afterDelete.body.nextNumber).not.toBe(usedNumber);
   });
 
   it("falls back to the default prefix instead of scanning every invoice number in the table when the configured prefix is blank", async () => {

@@ -107,44 +107,51 @@ export async function POST(request: Request) {
 
   const totalAmount = subtotal.plus(taxAmount);
 
-  const invoice = await prisma.supplierInvoice.create({
-    data: {
-      supplierId,
-      invoiceNumber,
-      invoiceDate: new Date(invoiceDate),
-      dueDate: dueDate ? new Date(dueDate) : null,
-      category,
-      subtotal: subtotal.toFixed(2),
-      taxAmount: taxAmount.toFixed(2),
-      totalAmount: totalAmount.toFixed(2),
-      paidAmount,
-      paymentStatus,
-      notes,
-      customerInvoiceRef: customerInvoiceRef || null,
-      items: {
-        create: computedItems.map((item) => ({
-          description: item.description,
-          itemDescription: item.itemDescription ?? null,
-          quantity: item.quantity,
-          unitCost: item.unitCost,
-          taxRate: item.taxRate,
-          lineTotal: item.lineTotal,
-        })),
+  // Creation and the PO-number counter bump happen in one transaction --
+  // previously the bump was fire-and-forget with a silently-swallowed
+  // error, which could leave the counter under-advanced with no visible
+  // failure. This bill's own invoiceNumber is usually the *supplier's*
+  // number, not ours, so (unlike customer invoices/estimates) the counter
+  // here isn't derived from parsing it -- it's a simple +1 per bill
+  // created, same as before, just no longer allowed to fail silently.
+  const invoice = await prisma.$transaction(async (tx) => {
+    const created = await tx.supplierInvoice.create({
+      data: {
+        supplierId,
+        invoiceNumber,
+        invoiceDate: new Date(invoiceDate),
+        dueDate: dueDate ? new Date(dueDate) : null,
+        category,
+        subtotal: subtotal.toFixed(2),
+        taxAmount: taxAmount.toFixed(2),
+        totalAmount: totalAmount.toFixed(2),
+        paidAmount,
+        paymentStatus,
+        notes,
+        customerInvoiceRef: customerInvoiceRef || null,
+        items: {
+          create: computedItems.map((item) => ({
+            description: item.description,
+            itemDescription: item.itemDescription ?? null,
+            quantity: item.quantity,
+            unitCost: item.unitCost,
+            taxRate: item.taxRate,
+            lineTotal: item.lineTotal,
+          })),
+        },
       },
-    },
-    // Narrowed select -- the create response's supplier field is unused by
-    // the client (it just reads the new bill's id and redirects), so bank
-    // account/routing/Zelle details have no reason to be in this response
-    // at all, let alone unscoped by role.
-    include: { supplier: { select: { id: true, name: true } }, items: true },
-  });
-
-  await prisma.companyProfile
-    .update({
+      // Narrowed select -- the create response's supplier field is unused
+      // by the client (it just reads the new bill's id and redirects), so
+      // bank account/routing/Zelle details have no reason to be in this
+      // response at all, let alone unscoped by role.
+      include: { supplier: { select: { id: true, name: true } }, items: true },
+    });
+    await tx.companyProfile.update({
       where: { id: "default" },
       data: { supplierInvoiceNextSeq: { increment: 1 } },
-    })
-    .catch(() => undefined);
+    });
+    return created;
+  });
 
   await writeAuditLog({
     ...actorFromSession(session),

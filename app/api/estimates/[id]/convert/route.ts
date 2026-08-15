@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { initializeDatabase } from "@/lib/init-db";
-import { nextSequenceNumber } from "@/lib/next-number";
+import { formatSequenceNumber, claimSequenceNumber } from "@/lib/next-number";
 
 export async function POST(
   _request: Request,
@@ -34,19 +34,8 @@ export async function POST(
     // `||`, not `??` -- see the matching comment in
     // app/api/invoices/customer/next-number/route.ts.
     const prefix = profile?.customerInvoicePrefix || "INV-2026-";
-    const settingsSeq = profile?.customerInvoiceNextSeq ?? 1001;
-    // Computed via `tx`, not the outer `prisma`, so this aggregate runs
-    // inside the same transaction holding the estimate row lock -- see
-    // nextSequenceNumber's doc comment for why this is done as a single
-    // SQL aggregate rather than a full-table fetch (it directly extends
-    // how long every other concurrent conversion has to wait).
-    const { nextNumber: invoiceNumber } = await nextSequenceNumber(
-      tx,
-      "CustomerInvoice",
-      "invoiceNumber",
-      prefix,
-      settingsSeq - 1
-    );
+    const nextSeq = profile?.customerInvoiceNextSeq ?? 1001;
+    const invoiceNumber = formatSequenceNumber(nextSeq, prefix);
 
     const today = new Date();
     const dueDate = new Date(today);
@@ -79,6 +68,12 @@ export async function POST(
       where: { id },
       data: { status: "ACCEPTED", convertedInvoiceId: invoice.id },
     });
+
+    // Same transaction as the invoice's creation -- see claimSequenceNumber's
+    // doc comment in lib/next-number.ts for why this (not a MAX-scan or a
+    // fire-and-forget increment) is what guarantees this number is never
+    // reissued, even if this invoice is later deleted.
+    await claimSequenceNumber(tx, "customerInvoiceNextSeq", invoiceNumber, prefix);
 
     return { error: null, invoiceId: invoice.id };
   });

@@ -3,8 +3,11 @@ import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { initializeDatabase } from "@/lib/init-db";
 import { computeLineTotals } from "@/lib/money";
+import { claimSequenceNumber } from "@/lib/next-number";
 import { z } from "zod";
 import type Decimal from "decimal.js";
+
+const ESTIMATE_PREFIX = `EST-${new Date().getFullYear()}-`;
 
 const updateSchema = z.object({
   estimateNumber: z.string().min(1).optional(),
@@ -115,10 +118,19 @@ export async function PATCH(
     };
   }
 
-  const updated = await prisma.estimate.update({
-    where: { id },
-    data: updateData,
-    include: { customer: true, items: true },
+  // If the estimate number is being changed here, the sequence counter
+  // still needs to account for it -- see claimSequenceNumber's doc comment
+  // in lib/next-number.ts.
+  const updated = await prisma.$transaction(async (tx) => {
+    const result = await tx.estimate.update({
+      where: { id },
+      data: updateData,
+      include: { customer: true, items: true },
+    });
+    if (data.estimateNumber) {
+      await claimSequenceNumber(tx, "estimateNextSeq", data.estimateNumber, ESTIMATE_PREFIX);
+    }
+    return result;
   });
 
   return NextResponse.json(updated);

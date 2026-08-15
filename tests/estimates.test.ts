@@ -65,7 +65,7 @@ describe("estimate creation", () => {
   });
 });
 
-describe("next estimate number — computed via SQL aggregate, not a full-table JS scan", () => {
+describe("next estimate number — a persisted counter, not a MAX() scan over existing rows", () => {
   it("suggests one past the highest existing sequence under the current prefix", async () => {
     const prefix = `EST-${new Date().getFullYear()}-`;
     await admin.postJson("/api/estimates", {
@@ -77,6 +77,33 @@ describe("next estimate number — computed via SQL aggregate, not a full-table 
 
     const { body } = await admin.getJson<{ nextNumber: string }>("/api/estimates/next-number");
     expect(body.nextNumber).toBe(`${prefix}10000`);
+  });
+
+  it("never reissues a number after the estimate that used it is deleted", async () => {
+    const prefix = `EST-${new Date().getFullYear()}-`;
+    // Deliberately far above whatever sequence other tests in this file
+    // reach, so this doesn't collide with them regardless of run order.
+    const usedNumber = `${prefix}20000`;
+    const created = await admin.postJson<{ id: string }>("/api/estimates", {
+      customerId,
+      estimateNumber: usedNumber,
+      estimateDate: "2026-01-01",
+      items: [{ description: "x", quantity: "1", unitPrice: "1" }],
+    });
+    expect(created.status).toBe(201);
+
+    const afterCreate = await admin.getJson<{ nextNumber: string }>("/api/estimates/next-number");
+    expect(afterCreate.body.nextNumber).toBe(`${prefix}20001`);
+
+    const del = await admin.postJson(`/api/estimates/${created.body.id}`, {}, "DELETE");
+    expect(del.status).toBe(200);
+
+    // A MAX()-scan-based "next number" would drop right back down to 20000
+    // the moment the only estimate using it is gone -- the next estimate
+    // created would silently reuse a real, previously-issued number.
+    const afterDelete = await admin.getJson<{ nextNumber: string }>("/api/estimates/next-number");
+    expect(afterDelete.body.nextNumber).toBe(`${prefix}20001`);
+    expect(afterDelete.body.nextNumber).not.toBe(usedNumber);
   });
 });
 

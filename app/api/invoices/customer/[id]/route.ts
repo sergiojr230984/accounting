@@ -4,6 +4,7 @@ import { requireAuth, requireRole } from "@/lib/api";
 import { syncProductCatalog } from "@/lib/product-catalog";
 import { writeAuditLog, extractMeta, actorFromSession, diffChanges } from "@/lib/audit";
 import { computeLineTotals } from "@/lib/money";
+import { claimSequenceNumber } from "@/lib/next-number";
 import { z } from "zod";
 import Decimal from "decimal.js";
 
@@ -366,10 +367,23 @@ export async function PATCH(
     }
   }
 
-  const updated = await prisma.customerInvoice.update({
-    where: { id },
-    data: updateData,
-    include: { customer: true, items: true },
+  // If the invoice number is being changed here (not just created via
+  // POST), the sequence counter still needs to account for it -- otherwise
+  // a manual bump-up during an edit wouldn't protect that number from ever
+  // being suggested/reused later. See lib/next-number.ts's claimSequenceNumber.
+  const updated = await prisma.$transaction(async (tx) => {
+    const result = await tx.customerInvoice.update({
+      where: { id },
+      data: updateData,
+      include: { customer: true, items: true },
+    });
+    if (data.invoiceNumber) {
+      const prefix =
+        (await tx.companyProfile.findUnique({ where: { id: "default" }, select: { customerInvoicePrefix: true } }))
+          ?.customerInvoicePrefix || "INV-2026-";
+      await claimSequenceNumber(tx, "customerInvoiceNextSeq", data.invoiceNumber, prefix);
+    }
+    return result;
   });
 
   await writeAuditLog({
