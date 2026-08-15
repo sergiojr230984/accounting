@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { requireAuth, requireReadAccess, scopeInvoicesToOwnEmployee } from "@/lib/api";
 import { syncProductCatalog } from "@/lib/product-catalog";
@@ -137,7 +138,11 @@ export async function POST(request: Request) {
     }
   }
 
-  // Duplicate check
+  // Duplicate check -- a fast path only. Two requests for the same
+  // invoiceNumber/customerId can both pass this check before either has
+  // inserted (a classic check-then-act race), so it doesn't by itself
+  // guarantee uniqueness; the DB's own unique constraint on
+  // (invoiceNumber, customerId) is the real guard, enforced below.
   const existing = await prisma.customerInvoice.findUnique({
     where: { invoiceNumber_customerId: { invoiceNumber, customerId } },
   });
@@ -228,40 +233,57 @@ export async function POST(request: Request) {
   // one transaction -- see lib/next-number.ts's claimSequenceNumber doc
   // comment for why this (not a fire-and-forget increment) is what actually
   // guarantees a deleted invoice's number is never reused.
-  const invoice = await prisma.$transaction(async (tx) => {
-    const created = await tx.customerInvoice.create({
-      data: {
-        customerId,
-        invoiceNumber,
-        invoiceDate: new Date(invoiceDate),
-        dueDate: new Date(dueDate),
-        subtotal: subtotal.toFixed(2),
-        taxAmount: taxAmount.toFixed(2),
-        totalAmount: totalAmount.toFixed(2),
-        creditCardFee: creditCardFee.toFixed(2),
-        appliedFees: appliedFees as unknown as object,
-        paidAmount: paidAmount ?? "0",
-        paymentStatus: paymentStatus ?? "UNPAID",
-        downPayment: downPayment ?? "0",
-        employeeId: employeeId ?? null,
-        commissionRate: commissionRate ?? "0",
-        notes,
-        items: {
-          create: computedItems.map((item) => ({
-            description: item.description,
-            itemDescription: item.itemDescription ?? null,
-            quantity: item.quantity,
-            unitPrice: item.unitPrice,
-            taxRate: item.taxRate,
-            lineTotal: item.lineTotal,
-          })),
+  let invoice;
+  try {
+    invoice = await prisma.$transaction(async (tx) => {
+      const created = await tx.customerInvoice.create({
+        data: {
+          customerId,
+          invoiceNumber,
+          invoiceDate: new Date(invoiceDate),
+          dueDate: new Date(dueDate),
+          subtotal: subtotal.toFixed(2),
+          taxAmount: taxAmount.toFixed(2),
+          totalAmount: totalAmount.toFixed(2),
+          creditCardFee: creditCardFee.toFixed(2),
+          appliedFees: appliedFees as unknown as object,
+          paidAmount: paidAmount ?? "0",
+          paymentStatus: paymentStatus ?? "UNPAID",
+          downPayment: downPayment ?? "0",
+          employeeId: employeeId ?? null,
+          commissionRate: commissionRate ?? "0",
+          notes,
+          items: {
+            create: computedItems.map((item) => ({
+              description: item.description,
+              itemDescription: item.itemDescription ?? null,
+              quantity: item.quantity,
+              unitPrice: item.unitPrice,
+              taxRate: item.taxRate,
+              lineTotal: item.lineTotal,
+            })),
+          },
         },
-      },
-      include: { customer: true, items: true },
+        include: { customer: true, items: true },
+      });
+      await claimSequenceNumber(tx, "customerInvoiceNextSeq", invoiceNumber, invoicePrefix);
+      return created;
     });
-    await claimSequenceNumber(tx, "customerInvoiceNextSeq", invoiceNumber, invoicePrefix);
-    return created;
-  });
+  } catch (err) {
+    // The findUnique check above is only a fast path -- it can't stop two
+    // concurrent requests for the same invoiceNumber/customerId from both
+    // passing it before either has inserted. When that happens, the DB's
+    // own unique constraint on (invoiceNumber, customerId) rejects the
+    // second insert with a P2002 error. Without this catch that surfaced as
+    // an unhandled 500 instead of the same clean 409 the fast path returns.
+    if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002") {
+      return NextResponse.json(
+        { error: "Invoice number already exists for this customer" },
+        { status: 409 }
+      );
+    }
+    throw err;
+  }
 
   const auditActor = { ...actorFromSession(guard), ...extractMeta(request) };
 
