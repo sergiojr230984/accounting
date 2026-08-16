@@ -99,6 +99,12 @@ export default async function PublicEstimatePage({
                 <span className="text-gray-500">Tax</span>
                 <span>{formatCurrency(estimate.taxAmount.toString())}</span>
               </div>
+              {(estimate.appliedFees as { id?: string; label: string; amount: string }[]).map((f, i) => (
+                <div key={f.id ?? i} className="flex justify-between">
+                  <span className="text-gray-500">{f.label}</span>
+                  <span>{formatCurrency(f.amount)}</span>
+                </div>
+              ))}
               <div className="flex justify-between font-bold text-base border-t pt-2 mt-2">
                 <span>Estimated Total</span>
                 <span>{formatCurrency(estimate.totalAmount.toString())}</span>

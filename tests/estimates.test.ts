@@ -163,6 +163,121 @@ describe("convert to invoice", () => {
   });
 });
 
+describe("applied fees on estimates — same server-side re-derivation as customer invoices", () => {
+  let feeId: string;
+  const feeRate = 0.1; // 10%
+
+  beforeAll(async () => {
+    feeId = `est-fee-${Date.now()}`;
+    const { status } = await admin.postJson(
+      "/api/settings",
+      { customFees: [{ id: feeId, label: "Delivery fee", rate: feeRate }] },
+      "PATCH"
+    );
+    expect(status).toBe(200);
+  });
+
+  it("rejects a fee id that isn't a currently configured fee", async () => {
+    const { status, body } = await admin.postJson<{ error: string }>("/api/estimates", {
+      customerId,
+      estimateNumber: `EST-FEE-UNKNOWN-${Date.now()}`,
+      estimateDate: "2026-01-01",
+      items: [{ description: "Service", quantity: "1", unitPrice: "100" }],
+      appliedFees: [{ id: "not-a-real-fee", label: "Made-up fee", rate: 0.5, amount: "50" }],
+    });
+    expect(status).toBe(400);
+    expect(body.error).toContain("not a currently configured fee");
+  });
+
+  it("rejects an amount above what the configured rate allows, even for a real fee id", async () => {
+    // subtotal 100, fee rate 10% -> the true ceiling is $10, no matter what
+    // amount the client claims.
+    const { status, body } = await admin.postJson<{ error: string }>("/api/estimates", {
+      customerId,
+      estimateNumber: `EST-FEE-INFLATED-${Date.now()}`,
+      estimateDate: "2026-01-01",
+      items: [{ description: "Service", quantity: "1", unitPrice: "100" }],
+      appliedFees: [{ id: feeId, label: "Delivery fee", rate: feeRate, amount: "9999" }],
+    });
+    expect(status).toBe(400);
+    expect(body.error).toContain("exceeds what its configured rate allows");
+  });
+
+  it("accepts a legitimate fee within its configured rate's ceiling and includes it in totalAmount", async () => {
+    const { status, body } = await admin.postJson<{ subtotal: string; totalAmount: string }>(
+      "/api/estimates",
+      {
+        customerId,
+        estimateNumber: `EST-FEE-LEGIT-${Date.now()}`,
+        estimateDate: "2026-01-01",
+        items: [{ description: "Service", quantity: "1", unitPrice: "100" }],
+        appliedFees: [{ id: feeId, label: "Delivery fee", rate: feeRate, amount: "10.00" }],
+      }
+    );
+    expect(status).toBe(201);
+    expect(Number(body.subtotal)).toBe(100);
+    expect(Number(body.totalAmount)).toBe(110); // 100 subtotal + 10 fee
+  });
+
+  it("rejects an inflated fee amount added via PATCH too", async () => {
+    const created = await admin.postJson<{ id: string }>("/api/estimates", {
+      customerId,
+      estimateNumber: `EST-FEE-PATCH-${Date.now()}`,
+      estimateDate: "2026-01-01",
+      items: [{ description: "Service", quantity: "1", unitPrice: "100" }],
+    });
+    const { status, body } = await admin.postJson<{ error: string }>(
+      `/api/estimates/${created.body.id}`,
+      { appliedFees: [{ id: feeId, label: "Delivery fee", rate: feeRate, amount: "9999" }] },
+      "PATCH"
+    );
+    expect(status).toBe(400);
+    expect(body.error).toContain("exceeds what its configured rate allows");
+  });
+
+  it("accepts a legitimate fee added via PATCH and recomputes totalAmount", async () => {
+    const created = await admin.postJson<{ id: string }>("/api/estimates", {
+      customerId,
+      estimateNumber: `EST-FEE-PATCH-OK-${Date.now()}`,
+      estimateDate: "2026-01-01",
+      items: [{ description: "Service", quantity: "1", unitPrice: "100" }],
+    });
+    const { status, body } = await admin.postJson<{ totalAmount: string }>(
+      `/api/estimates/${created.body.id}`,
+      { appliedFees: [{ id: feeId, label: "Delivery fee", rate: feeRate, amount: "10.00" }] },
+      "PATCH"
+    );
+    expect(status).toBe(200);
+    expect(Number(body.totalAmount)).toBe(110);
+  });
+
+  it("carries the applied fee over when converting to an invoice", async () => {
+    const est = await admin.postJson<{ id: string; totalAmount: string; appliedFees: { label: string; amount: string }[] }>(
+      "/api/estimates",
+      {
+        customerId,
+        estimateNumber: `EST-FEE-CONV-${Date.now()}`,
+        estimateDate: "2026-01-01",
+        items: [{ description: "Convert me", quantity: "1", unitPrice: "100" }],
+        appliedFees: [{ id: feeId, label: "Delivery fee", rate: feeRate, amount: "10.00" }],
+      }
+    );
+    expect(Number(est.body.totalAmount)).toBe(110);
+
+    const converted = await admin.postJson<{ invoiceId: string }>(
+      `/api/estimates/${est.body.id}/convert`,
+      {}
+    );
+    expect(converted.status).toBe(200);
+
+    const invoice = await admin.getJson<{ totalAmount: string; appliedFees: { label: string; amount: string }[] }>(
+      `/api/invoices/customer/${converted.body.invoiceId}`
+    );
+    expect(Number(invoice.body.totalAmount)).toBe(110);
+    expect(invoice.body.appliedFees).toEqual(est.body.appliedFees);
+  });
+});
+
 describe("invalid foreign keys are rejected cleanly, not a raw DB-constraint 500", () => {
   it("rejects estimate creation with a customerId that doesn't exist", async () => {
     const { status, body } = await admin.postJson<{ error: string }>("/api/estimates", {

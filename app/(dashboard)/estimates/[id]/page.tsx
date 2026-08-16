@@ -33,6 +33,8 @@ const editSchema = z.object({
 });
 type EditForm = z.infer<typeof editSchema>;
 
+interface FeeOption { id: string; label: string; rate: number }
+
 interface EstimateDetail {
   id: string;
   estimateNumber: string;
@@ -41,6 +43,7 @@ interface EstimateDetail {
   subtotal: string;
   taxAmount: string;
   totalAmount: string;
+  appliedFees: { id?: string; label: string; rate?: number; amount: string }[];
   status: EstimateStatus;
   notes: string | null;
   viewToken: string | null;
@@ -78,6 +81,13 @@ export default function EstimateDetailPage() {
   const [linkCopied, setLinkCopied] = useState(false);
   const [converting, setConverting] = useState(false);
 
+  // Fees (credit card fee + custom fees from Settings) — same mechanism as
+  // customer invoices; selected per line item inside InvoiceItemsEditor.
+  const [feeOptions, setFeeOptions] = useState<FeeOption[]>([]);
+  const [computedAppliedFees, setComputedAppliedFees] = useState<
+    { id: string; label: string; rate: number; amount: string }[]
+  >([]);
+
   const { register, handleSubmit, control, reset, watch, setValue, formState: { errors } } = useForm<EditForm>({
     resolver: zodResolver(editSchema),
   });
@@ -111,6 +121,21 @@ export default function EstimateDetailPage() {
 
   useEffect(() => { load(); }, [load]);
 
+  useEffect(() => {
+    fetch("/api/settings")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((p: { creditCardFeeRate?: string; customFees?: { id: string; label: string; rate: number }[] } | null) => {
+        if (!p) return;
+        const options: FeeOption[] = [];
+        if (Number(p.creditCardFeeRate) > 0) {
+          options.push({ id: "__cc__", label: "CARD FEE", rate: Number(p.creditCardFeeRate) });
+        }
+        if (Array.isArray(p.customFees)) options.push(...p.customFees);
+        setFeeOptions(options);
+      })
+      .catch(() => {});
+  }, []);
+
   async function onSave(data: EditForm) {
     setSaving(true);
     setError("");
@@ -118,7 +143,7 @@ export default function EstimateDetailPage() {
       const res = await fetch(`/api/estimates/${id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(data),
+        body: JSON.stringify({ ...data, appliedFees: computedAppliedFees }),
       });
       if (!res.ok) {
         const d = await res.json();
@@ -199,6 +224,7 @@ export default function EstimateDetailPage() {
       subtotal: estimate.subtotal,
       taxAmount: estimate.taxAmount,
       totalAmount: estimate.totalAmount,
+      appliedFees: estimate.appliedFees,
       paidAmount: "0",
       notes: estimate.notes,
       customer: estimate.customer,
@@ -363,7 +389,15 @@ export default function EstimateDetailPage() {
           </div>
 
           <div className="card">
-            <InvoiceItemsEditor control={control} register={register} type="customer" setValue={setValue} />
+            <InvoiceItemsEditor
+              control={control}
+              register={register}
+              type="customer"
+              setValue={setValue}
+              feeOptions={feeOptions}
+              initialAppliedFeeIds={estimate.appliedFees.map((f) => f.id).filter((fid): fid is string => !!fid)}
+              onFeesChange={setComputedAppliedFees}
+            />
           </div>
 
           <InvoiceDocumentPreview
@@ -384,6 +418,7 @@ export default function EstimateDetailPage() {
               price: item.unitPrice,
               taxRate: item.taxRate,
             }))}
+            fees={computedAppliedFees}
             notes={watchedNotes}
             paidAmount="0"
           />
@@ -464,6 +499,12 @@ export default function EstimateDetailPage() {
                 <span className="text-gray-500">Tax</span>
                 <span>{formatCurrency(estimate.taxAmount)}</span>
               </div>
+              {estimate.appliedFees.map((f, i) => (
+                <div key={f.id ?? i} className="flex justify-between">
+                  <span className="text-gray-500">{f.label}</span>
+                  <span>{formatCurrency(f.amount)}</span>
+                </div>
+              ))}
               <div className="flex justify-between font-bold text-base border-t pt-2">
                 <span>Estimated Total</span>
                 <span>{formatCurrency(estimate.totalAmount)}</span>

@@ -229,6 +229,7 @@ const SCHEMA_STATEMENTS: string[] = [
   );`,
   `CREATE UNIQUE INDEX IF NOT EXISTS "Estimate_viewToken_key" ON "Estimate"("viewToken");`,
   `CREATE UNIQUE INDEX IF NOT EXISTS "Estimate_convertedInvoiceId_key" ON "Estimate"("convertedInvoiceId");`,
+  `ALTER TABLE "Estimate" ADD COLUMN IF NOT EXISTS "appliedFees" JSONB NOT NULL DEFAULT '[]'::jsonb;`,
   `CREATE TABLE IF NOT EXISTS "EstimateItem" (
     "id" TEXT NOT NULL PRIMARY KEY,
     "estimateId" TEXT NOT NULL,

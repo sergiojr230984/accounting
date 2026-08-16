@@ -6,6 +6,7 @@ import { initializeDatabase } from "@/lib/init-db";
 import { computeLineTotals } from "@/lib/money";
 import { claimSequenceNumber } from "@/lib/next-number";
 import { z } from "zod";
+import Decimal from "decimal.js";
 
 const ESTIMATE_PREFIX = `EST-${new Date().getFullYear()}-`;
 
@@ -17,6 +18,13 @@ const itemSchema = z.object({
   taxRate: z.string().regex(/^\d+(\.\d+)?$/, "Must be a number").default("0"),
 });
 
+const appliedFeeSchema = z.object({
+  id: z.string(),
+  label: z.string(),
+  rate: z.number(),
+  amount: z.string(),
+});
+
 const estimateSchema = z.object({
   customerId: z.string().min(1),
   estimateNumber: z.string().min(1),
@@ -24,6 +32,7 @@ const estimateSchema = z.object({
   expiryDate: z.string().optional().nullable(),
   items: z.array(itemSchema).min(1),
   notes: z.string().optional(),
+  appliedFees: z.array(appliedFeeSchema).default([]),
 });
 
 export async function GET(request: Request) {
@@ -71,7 +80,7 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
   }
 
-  const { customerId, estimateNumber, estimateDate, expiryDate, items, notes } = parsed.data;
+  const { customerId, estimateNumber, estimateDate, expiryDate, items, notes, appliedFees } = parsed.data;
 
   // customerId is a foreign key the DB will reject with a raw constraint-
   // violation error if it references a row that doesn't exist -- checked
@@ -96,7 +105,53 @@ export async function POST(request: Request) {
   );
   const computedItems = items.map((item, i) => ({ ...item, lineTotal: lineTotals[i].lineTotal }));
 
-  const totalAmount = subtotal.plus(taxAmount);
+  // Each fee is applied per-line-item at the client's discretion (e.g. a
+  // "delivery fee" toggled on for only some items), so the server can't
+  // reproduce the client's exact amount without the per-item selection,
+  // which isn't part of this API's payload. It CAN still enforce a hard
+  // ceiling: a fee can never legitimately total more than its configured
+  // rate times the whole estimate's pre-tax subtotal -- that's the amount if
+  // the fee applied to every single line. Anything above that, or a fee id
+  // that isn't one of the company's configured fees at all, means the
+  // client-submitted amount can't be trusted and is rejected. Mirrors the
+  // same validation on customer invoices (app/api/invoices/customer/route.ts).
+  let feesSum = new Decimal(0);
+  if (appliedFees.length > 0) {
+    const companyProfile = await prisma.companyProfile.findUnique({ where: { id: "default" } });
+    const configuredFees: { id: string; label: string; rate: number }[] = [
+      ...(companyProfile && Number(companyProfile.creditCardFeeRate) > 0
+        ? [{ id: "__cc__", label: "CARD FEE", rate: Number(companyProfile.creditCardFeeRate) }]
+        : []),
+      ...((companyProfile?.customFees as { id: string; label: string; rate: number }[] | null) ?? []),
+    ];
+    for (const f of appliedFees) {
+      const canonical = configuredFees.find((cf) => cf.id === f.id);
+      if (!canonical) {
+        return NextResponse.json(
+          { error: `Fee "${f.label}" is not a currently configured fee. Refresh and try again.` },
+          { status: 400 }
+        );
+      }
+      let amt: Decimal;
+      try {
+        amt = new Decimal(f.amount);
+      } catch {
+        return NextResponse.json({ error: `Invalid amount for fee "${f.label}".` }, { status: 400 });
+      }
+      // Rounded to cents like every client-submitted amount is -- see the
+      // matching comment in app/api/invoices/customer/route.ts.
+      const cap = subtotal.times(canonical.rate).toDecimalPlaces(2);
+      if (amt.gt(cap)) {
+        return NextResponse.json(
+          { error: `Fee "${f.label}" amount exceeds what its configured rate allows.` },
+          { status: 400 }
+        );
+      }
+      feesSum = feesSum.plus(amt);
+    }
+  }
+
+  const totalAmount = subtotal.plus(taxAmount).plus(feesSum);
 
   // Creating the estimate and claiming its number's sequence value happen
   // in one transaction -- see lib/next-number.ts's claimSequenceNumber doc
@@ -112,6 +167,7 @@ export async function POST(request: Request) {
         subtotal: subtotal.toFixed(2),
         taxAmount: taxAmount.toFixed(2),
         totalAmount: totalAmount.toFixed(2),
+        appliedFees: appliedFees as unknown as object,
         notes,
         items: {
           create: computedItems.map((item) => ({

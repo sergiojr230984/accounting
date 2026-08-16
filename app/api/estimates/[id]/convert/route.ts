@@ -50,6 +50,7 @@ export async function POST(
         subtotal: estimate.subtotal,
         taxAmount: estimate.taxAmount,
         totalAmount: estimate.totalAmount,
+        appliedFees: estimate.appliedFees as unknown as object,
         notes: estimate.notes,
         items: {
           create: estimate.items.map((item) => ({

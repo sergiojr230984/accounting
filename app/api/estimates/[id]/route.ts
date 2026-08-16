@@ -5,9 +5,16 @@ import { initializeDatabase } from "@/lib/init-db";
 import { computeLineTotals } from "@/lib/money";
 import { claimSequenceNumber } from "@/lib/next-number";
 import { z } from "zod";
-import type Decimal from "decimal.js";
+import Decimal from "decimal.js";
 
 const ESTIMATE_PREFIX = `EST-${new Date().getFullYear()}-`;
+
+const appliedFeeSchema = z.object({
+  id: z.string(),
+  label: z.string(),
+  rate: z.number(),
+  amount: z.string(),
+});
 
 const updateSchema = z.object({
   estimateNumber: z.string().min(1).optional(),
@@ -15,6 +22,7 @@ const updateSchema = z.object({
   expiryDate: z.string().optional().nullable(),
   status: z.enum(["DRAFT", "SENT", "ACCEPTED", "DECLINED", "EXPIRED"]).optional(),
   notes: z.string().optional(),
+  appliedFees: z.array(appliedFeeSchema).optional(),
   items: z
     .array(
       z.object({
@@ -27,6 +35,40 @@ const updateSchema = z.object({
     )
     .optional(),
 });
+
+// A fee can never legitimately total more than its configured rate times
+// feeBase (the pre-tax subtotal) -- the amount if it applied to every line
+// item. Mirrors the same guard on customer invoices
+// (app/api/invoices/customer/[id]/route.ts).
+function validateAppliedFees(
+  fees: { id: string; label: string; amount: string }[],
+  feeBase: Decimal,
+  configuredFees: { id: string; label: string; rate: number }[]
+): NextResponse | null {
+  for (const f of fees) {
+    const canonical = configuredFees.find((cf) => cf.id === f.id);
+    if (!canonical) {
+      return NextResponse.json(
+        { error: `Fee "${f.label}" is not a currently configured fee. Refresh and try again.` },
+        { status: 400 }
+      );
+    }
+    let amt: Decimal;
+    try {
+      amt = new Decimal(f.amount);
+    } catch {
+      return NextResponse.json({ error: `Invalid amount for fee "${f.label}".` }, { status: 400 });
+    }
+    const cap = feeBase.times(canonical.rate).toDecimalPlaces(2);
+    if (amt.gt(cap)) {
+      return NextResponse.json(
+        { error: `Fee "${f.label}" amount exceeds what its configured rate allows.` },
+        { status: 400 }
+      );
+    }
+  }
+  return null;
+}
 
 export async function GET(
   _request: Request,
@@ -75,6 +117,42 @@ export async function PATCH(
   if (data.status) updateData.status = data.status;
   if (data.notes !== undefined) updateData.notes = data.notes;
 
+  // Each fee is applied per-line-item at the client's discretion, so the
+  // server can't reproduce the client's exact amount, but it can enforce a
+  // hard ceiling -- see validateAppliedFees above. Validated against the
+  // *existing* subtotal when the caller isn't also sending new items
+  // (below), so a fee can't be smuggled into storage just by leaving items
+  // out of the same request. Mirrors app/api/invoices/customer/[id]/route.ts.
+  let configuredFees: { id: string; label: string; rate: number }[] | null = null;
+  if (data.appliedFees !== undefined && data.appliedFees.length > 0) {
+    const profile = await prisma.companyProfile.findUnique({ where: { id: "default" } });
+    configuredFees = [
+      ...(profile && Number(profile.creditCardFeeRate) > 0
+        ? [{ id: "__cc__", label: "CARD FEE", rate: Number(profile.creditCardFeeRate) }]
+        : []),
+      ...((profile?.customFees as { id: string; label: string; rate: number }[] | null) ?? []),
+    ];
+    if (!(data.items && data.items.length > 0)) {
+      const feeBase = new Decimal(existing.subtotal.toString());
+      const err = validateAppliedFees(data.appliedFees, feeBase, configuredFees);
+      if (err) return err;
+    }
+  }
+  if (data.appliedFees !== undefined) updateData.appliedFees = data.appliedFees as unknown as object;
+
+  // A fee-only PATCH (no items in the same request) still changes the
+  // total -- recompute it off the existing subtotal/tax here, since the
+  // items branch below (which owns totalAmount when items ARE sent) won't
+  // run. Also covers clearing every fee (appliedFees: []), which must pull
+  // the total back down to subtotal + tax.
+  if (data.appliedFees !== undefined && !(data.items && data.items.length > 0)) {
+    const feesSum = data.appliedFees.reduce((acc, f) => acc.plus(f.amount), new Decimal(0));
+    updateData.totalAmount = new Decimal(existing.subtotal.toString())
+      .plus(existing.taxAmount.toString())
+      .plus(feesSum)
+      .toFixed(2);
+  }
+
   if (data.items && data.items.length > 0) {
     let subtotal: Decimal;
     let taxAmount: Decimal;
@@ -101,9 +179,16 @@ export async function PATCH(
       );
     }
 
+    let feesSum = new Decimal(0);
+    if (data.appliedFees !== undefined && data.appliedFees.length > 0 && configuredFees) {
+      const err = validateAppliedFees(data.appliedFees, subtotal, configuredFees);
+      if (err) return err;
+      for (const f of data.appliedFees) feesSum = feesSum.plus(f.amount);
+    }
+
     updateData.subtotal = subtotal.toFixed(2);
     updateData.taxAmount = taxAmount.toFixed(2);
-    updateData.totalAmount = subtotal.plus(taxAmount).toFixed(2);
+    updateData.totalAmount = subtotal.plus(taxAmount).plus(feesSum).toFixed(2);
 
     await prisma.estimateItem.deleteMany({ where: { estimateId: id } });
     updateData.items = {

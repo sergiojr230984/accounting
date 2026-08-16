@@ -29,6 +29,7 @@ const schema = z.object({
 type FormData = z.infer<typeof schema>;
 
 interface Customer { id: string; name: string; email: string | null; phone: string | null; address: string | null }
+interface FeeOption { id: string; label: string; rate: number }
 
 const todayISO = () => new Date().toISOString().split("T")[0];
 
@@ -37,6 +38,13 @@ export default function NewEstimatePage() {
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
+
+  // Fees (credit card fee + custom fees from Settings) — same mechanism as
+  // customer invoices; selected per line item inside InvoiceItemsEditor.
+  const [feeOptions, setFeeOptions] = useState<FeeOption[]>([]);
+  const [computedAppliedFees, setComputedAppliedFees] = useState<
+    { id: string; label: string; rate: number; amount: string }[]
+  >([]);
 
   const { register, handleSubmit, control, watch, setValue, formState: { errors } } = useForm<FormData>({
     resolver: zodResolver(schema),
@@ -63,6 +71,18 @@ export default function NewEstimatePage() {
       .then((r) => (r.ok ? r.json() : null))
       .then((d: { nextNumber?: string } | null) => { if (d?.nextNumber) setValue("estimateNumber", d.nextNumber); })
       .catch(() => {});
+    fetch("/api/settings")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((p: { creditCardFeeRate?: string; customFees?: { id: string; label: string; rate: number }[] } | null) => {
+        if (!p) return;
+        const options: FeeOption[] = [];
+        if (Number(p.creditCardFeeRate) > 0) {
+          options.push({ id: "__cc__", label: "CARD FEE", rate: Number(p.creditCardFeeRate) });
+        }
+        if (Array.isArray(p.customFees)) options.push(...p.customFees);
+        setFeeOptions(options);
+      })
+      .catch(() => {});
   }, [setValue]);
 
   async function onSubmit(data: FormData) {
@@ -72,7 +92,7 @@ export default function NewEstimatePage() {
       const res = await fetch("/api/estimates", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(data),
+        body: JSON.stringify({ ...data, appliedFees: computedAppliedFees }),
       });
       if (!res.ok) {
         const d = await res.json();
@@ -140,7 +160,14 @@ export default function NewEstimatePage() {
         </div>
 
         <div className="card">
-          <InvoiceItemsEditor control={control} register={register} type="customer" setValue={setValue} />
+          <InvoiceItemsEditor
+            control={control}
+            register={register}
+            type="customer"
+            setValue={setValue}
+            feeOptions={feeOptions}
+            onFeesChange={setComputedAppliedFees}
+          />
         </div>
 
         <InvoiceDocumentPreview
@@ -161,6 +188,7 @@ export default function NewEstimatePage() {
             price: item.unitPrice,
             taxRate: item.taxRate,
           }))}
+          fees={computedAppliedFees}
           notes={watchedNotes}
           paidAmount="0"
         />
