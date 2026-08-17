@@ -38,6 +38,11 @@ const editSchema = z.object({
       quantity: z.string(),
       unitPrice: z.string(),
       taxRate: z.string().default("0"),
+      // Deliberately optional -- see the matching schema comment in
+      // app/api/invoices/customer/[id]/route.ts (legacy lines predating
+      // this feature have neither).
+      supplierId: z.string().optional(),
+      partNumber: z.string().optional(),
     })
   ),
 });
@@ -63,13 +68,26 @@ interface InvoiceDetail {
   employee: { id: string; name: string } | null;
   appliedFees: { id?: string; label: string; rate?: number; amount: string }[];
   customer: { id: string; name: string; email: string | null; phone: string | null; address: string | null; emergencyContactName: string | null; emergencyContactPhone: string | null };
-  items: { id: string; description: string; itemDescription: string | null; quantity: string; unitPrice: string; taxRate: string; lineTotal: string }[];
+  items: {
+    id: string;
+    description: string;
+    itemDescription: string | null;
+    quantity: string;
+    unitPrice: string;
+    taxRate: string;
+    lineTotal: string;
+    partNumber: string | null;
+    actualCost: string | null;
+    supplier: { id: string; name: string; code: string | null; isHouse: boolean } | null;
+    purchaseRequest: { status: "PENDING" | "FULFILLED" } | null;
+  }[];
   payments: { id: string; amount: string; paymentDate: string; notes: string | null }[];
   files: { id: string; originalName: string; mimeType: string }[];
 }
 
 interface EmployeeOpt { id: string; name: string; commissionRate: string }
 interface FeeOption { id: string; label: string; rate: number }
+interface SupplierCodeOpt { id: string; name: string; code: string | null; active: boolean }
 
 export default function CustomerInvoiceDetailPage() {
   const { id } = useParams() as { id: string };
@@ -112,6 +130,7 @@ export default function CustomerInvoiceDetailPage() {
   const [computedAppliedFees, setComputedAppliedFees] = useState<
     { id: string; label: string; rate: number; amount: string }[]
   >([]);
+  const [suppliers, setSuppliers] = useState<SupplierCodeOpt[]>([]);
 
   const { register, handleSubmit, control, reset, setValue, watch, formState: { errors } } = useForm<EditForm>({
     resolver: zodResolver(editSchema),
@@ -151,6 +170,8 @@ export default function CustomerInvoiceDetailPage() {
         quantity: item.quantity,
         unitPrice: item.unitPrice,
         taxRate: item.taxRate,
+        supplierId: item.supplier?.id ?? "",
+        partNumber: item.partNumber ?? "",
       })),
     });
   }, [id, reset, router]);
@@ -179,6 +200,10 @@ export default function CustomerInvoiceDetailPage() {
         if (Array.isArray(p.customFees)) options.push(...p.customFees);
         setFeeOptions(options);
       })
+      .catch(() => {});
+    fetch("/api/suppliers")
+      .then((r) => (r.ok ? r.json() : []))
+      .then((list: SupplierCodeOpt[]) => setSuppliers(Array.isArray(list) ? list.filter((s) => s.active) : []))
       .catch(() => {});
   }, []);
 
@@ -554,6 +579,8 @@ export default function CustomerInvoiceDetailPage() {
                 initialAppliedFeeIds={invoice.appliedFees.map((f) => f.id).filter((fid): fid is string => !!fid)}
                 onFeesChange={setComputedAppliedFees}
                 lockedCount={invoice.paymentStatus !== "UNPAID" ? invoice.items.length : 0}
+                showItemCode
+                supplierOptions={suppliers}
               />
             </div>
 
@@ -654,16 +681,28 @@ export default function CustomerInvoiceDetailPage() {
               <table className="w-full text-sm">
                 <thead className="border-b">
                   <tr className="text-left text-gray-500">
+                    <th className="pb-2">Item Code</th>
                     <th className="pb-2">Description</th>
                     <th className="pb-2 text-right">Qty</th>
                     <th className="pb-2 text-right">Unit Price</th>
                     <th className="pb-2 text-right">Tax Rate</th>
                     <th className="pb-2 text-right">Total</th>
+                    {/* Cost is never shown to SALES -- same gate as commission below. */}
+                    {canSeeCommission && <th className="pb-2 text-right">Cost</th>}
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-50">
                   {invoice.items.map((item) => (
                     <tr key={item.id}>
+                      <td className="py-2 text-gray-500">
+                        {item.supplier?.code && item.partNumber ? (
+                          <span className={`inline-block px-1.5 py-0.5 rounded text-xs font-mono ${item.supplier.isHouse ? "bg-amber-50 text-amber-700" : "bg-gray-100 text-gray-600"}`}>
+                            {item.supplier.code}/{item.partNumber}
+                          </span>
+                        ) : (
+                          <span className="text-gray-300">—</span>
+                        )}
+                      </td>
                       <td className="py-2">
                         <div>{item.description}</div>
                         {item.itemDescription && (
@@ -674,6 +713,19 @@ export default function CustomerInvoiceDetailPage() {
                       <td className="py-2 text-right">{formatCurrency(item.unitPrice)}</td>
                       <td className="py-2 text-right">{(parseFloat(item.taxRate) * 100).toFixed(0)}%</td>
                       <td className="py-2 text-right font-medium">{formatCurrency(item.lineTotal)}</td>
+                      {canSeeCommission && (
+                        <td className="py-2 text-right">
+                          {item.supplier?.isHouse ? (
+                            <span className="text-xs text-amber-600">House</span>
+                          ) : item.actualCost !== null ? (
+                            formatCurrency(item.actualCost)
+                          ) : item.purchaseRequest ? (
+                            <span className="text-xs text-yellow-600 font-medium">Pending cost</span>
+                          ) : (
+                            <span className="text-gray-300">—</span>
+                          )}
+                        </td>
+                      )}
                     </tr>
                   ))}
                 </tbody>

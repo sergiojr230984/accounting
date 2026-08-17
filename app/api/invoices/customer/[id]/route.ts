@@ -5,6 +5,7 @@ import { syncProductCatalog } from "@/lib/product-catalog";
 import { writeAuditLog, extractMeta, actorFromSession, diffChanges } from "@/lib/audit";
 import { computeLineTotals } from "@/lib/money";
 import { claimSequenceNumber } from "@/lib/next-number";
+import { ensurePurchaseRequestsForInvoice } from "@/lib/purchase-requests";
 import { z } from "zod";
 import Decimal from "decimal.js";
 
@@ -36,6 +37,16 @@ const updateSchema = z.object({
         quantity: z.string(),
         unitPrice: z.string(),
         taxRate: z.string().default("0"),
+        // Deliberately NOT required here the way it is on the create route
+        // (app/api/invoices/customer/route.ts) -- this endpoint's items
+        // array can include lines from an invoice created before this
+        // feature shipped, which have no supplierId/partNumber at all.
+        // Requiring them here would make an old invoice un-editable (even
+        // for something as unrelated as changing notes) until every legacy
+        // line got a supplier backfilled. The UI still requires them for any
+        // genuinely new line the user adds.
+        supplierId: z.string().optional(),
+        partNumber: z.string().optional(),
       })
     )
     .optional(),
@@ -93,7 +104,12 @@ export async function GET(
     where: { id },
     include: {
       customer: true,
-      items: true,
+      items: {
+        include: {
+          supplier: { select: { id: true, name: true, code: true, isHouse: true } },
+          purchaseRequest: { select: { status: true } },
+        },
+      },
       payments: { orderBy: { paymentDate: "desc" } },
       files: true,
       employee: { select: { id: true, name: true } },
@@ -154,7 +170,9 @@ export async function PATCH(
         (match.itemDescription ?? "") === (item.itemDescription ?? "") &&
         new Decimal(match.quantity.toString()).equals(new Decimal(item.quantity || "0")) &&
         new Decimal(match.unitPrice.toString()).equals(new Decimal(item.unitPrice || "0")) &&
-        new Decimal(match.taxRate.toString()).equals(new Decimal(item.taxRate || "0"));
+        new Decimal(match.taxRate.toString()).equals(new Decimal(item.taxRate || "0")) &&
+        (match.supplierId ?? "") === (item.supplierId ?? "") &&
+        (match.partNumber ?? "") === (item.partNumber ?? "");
       if (!unchanged) {
         return NextResponse.json(
           { error: "This invoice has a recorded payment -- existing line items can't be changed or removed. You can still add new items." },
@@ -236,9 +254,33 @@ export async function PATCH(
   // IMPORTANT: compute and validate items BEFORE any destructive DB operation
   // so that a bad value can never leave the invoice with no items.
   if (data.items && data.items.length > 0) {
+    // supplierId is a foreign key like customerId/employeeId elsewhere --
+    // checked as one batch query. Empty/omitted values (grandfathered
+    // legacy lines, see the schema comment above) are excluded rather than
+    // treated as an invalid reference.
+    const suppliedIds = Array.from(new Set(data.items.map((i) => i.supplierId).filter((v): v is string => !!v)));
+    if (suppliedIds.length > 0) {
+      const knownSuppliers = await prisma.supplier.findMany({ where: { id: { in: suppliedIds } }, select: { id: true } });
+      if (knownSuppliers.length !== suppliedIds.length) {
+        return NextResponse.json(
+          { error: "One or more line items reference a supplier that no longer exists. Refresh and try again." },
+          { status: 400 }
+        );
+      }
+    }
+
     let subtotal: Decimal;
     let taxAmount: Decimal;
-    let computedItems: { description: string; itemDescription?: string; quantity: string; unitPrice: string; taxRate: string; lineTotal: string }[];
+    let computedItems: {
+      description: string;
+      itemDescription?: string;
+      quantity: string;
+      unitPrice: string;
+      taxRate: string;
+      lineTotal: string;
+      supplierId?: string;
+      partNumber?: string;
+    }[];
 
     try {
       const totals = computeLineTotals(
@@ -253,6 +295,8 @@ export async function PATCH(
         unitPrice: item.unitPrice,
         taxRate: item.taxRate,
         lineTotal: totals.lines[i].lineTotal,
+        supplierId: item.supplierId,
+        partNumber: item.partNumber,
       }));
     } catch {
       return NextResponse.json(
@@ -294,6 +338,8 @@ export async function PATCH(
           unitPrice: item.unitPrice,
           taxRate: item.taxRate,
           lineTotal: item.lineTotal,
+          supplierId: item.supplierId || null,
+          partNumber: item.partNumber || null,
         })),
       };
     } else {
@@ -317,6 +363,8 @@ export async function PATCH(
             unitPrice: item.unitPrice,
             taxRate: item.taxRate,
             lineTotal: item.lineTotal,
+            supplierId: item.supplierId || null,
+            partNumber: item.partNumber || null,
           })),
         };
       }
@@ -390,6 +438,19 @@ export async function PATCH(
           ?.customerInvoicePrefix || "INV-2026-";
       await claimSequenceNumber(tx, "customerInvoiceNextSeq", data.invoiceNumber, prefix);
     }
+
+    // Second write path (besides the payments POST route) that can move
+    // paidAmount off zero -- the edit screen's own "Amount Paid" field. Also
+    // covers a new line item added to an invoice that's already paid (an
+    // existing, deliberate feature -- see the post-payment append logic
+    // above): that new line needs its own purchase_request the moment it's
+    // saved, not just the lines that existed at the original payment.
+    // ensurePurchaseRequestsForInvoice is itself idempotent, so calling it
+    // on every qualifying save (not just the one that crossed zero) is safe.
+    if (new Decimal(result.paidAmount.toString()).gt(0)) {
+      await ensurePurchaseRequestsForInvoice(tx, id);
+    }
+
     return result;
   });
 

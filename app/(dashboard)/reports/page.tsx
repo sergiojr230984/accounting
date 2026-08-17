@@ -1,7 +1,7 @@
 "use client";
 
-import { useState, useEffect } from "react";
-import { Download, Loader2, FileText, TrendingUp, ExternalLink } from "lucide-react";
+import { Fragment, useState, useEffect } from "react";
+import { Download, Loader2, FileText, TrendingUp, ExternalLink, ChevronDown, ChevronRight } from "lucide-react";
 import Link from "next/link";
 import { formatCurrency } from "@/lib/money";
 import { formatDateOnly } from "@/lib/date";
@@ -15,7 +15,10 @@ type ReportType =
   | "customer-outstanding"
   | "supplier-outstanding"
   | "profitability"
-  | "account-transactions";
+  | "account-transactions"
+  | "items-ordered";
+
+type PurchaseRequestStatus = "PENDING" | "FULFILLED" | "HOUSE";
 
 type LedgerAccount = "receivable" | "payable";
 
@@ -72,11 +75,23 @@ interface OutstandingData {
   }[];
 }
 
+interface ProfitabilityLine {
+  id: string;
+  description: string;
+  itemCode: string | null;
+  status: "pending" | "entered" | "house";
+  cost: string | null;
+}
+
 interface ProfitabilityData {
   totalRevenue: string;
   totalCost: string;
   totalProfit: string;
   overallMargin: string;
+  // Portfolio-level count of invoices with at least one line still pending
+  // cost -- surfaced as a banner so the totals never silently present an
+  // incomplete number as final.
+  invoicesWithPendingCost: number;
   rows: {
     id: string;
     invoiceNumber: string;
@@ -88,7 +103,33 @@ interface ProfitabilityData {
     grossMargin: string;
     paymentStatus: string;
     hasCost: boolean;
+    pendingLineCount: number;
+    costSource: "lines" | "legacy" | "none";
+    lines: ProfitabilityLine[];
   }[];
+}
+
+interface ItemsOrderedRow {
+  id: string;
+  invoiceId: string;
+  invoiceNumber: string;
+  supplierId: string;
+  supplierName: string;
+  itemCode: string;
+  description: string;
+  quantity: string;
+  status: PurchaseRequestStatus;
+  createdAt: string;
+  fulfilledAt: string | null;
+  cost: string | null;
+}
+
+interface ItemsOrderedData {
+  rows: ItemsOrderedRow[];
+  pendingCount: number;
+  fulfilledCount: number;
+  houseCount: number;
+  cogs: string;
 }
 
 interface AccountTransactionsData {
@@ -116,12 +157,17 @@ export default function ReportsPage() {
   const [reportType, setReportType] = useState<ReportType>("profit-loss");
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
-  const [data, setData] = useState<PLData | IncomeData | ExpenseData | OutstandingData | ProfitabilityData | AccountTransactionsData | null>(null);
+  const [data, setData] = useState<PLData | IncomeData | ExpenseData | OutstandingData | ProfitabilityData | AccountTransactionsData | ItemsOrderedData | null>(null);
   const [loading, setLoading] = useState(false);
+  const [expandedRow, setExpandedRow] = useState<string | null>(null);
 
   const [account, setAccount] = useState<LedgerAccount>("receivable");
   const [contactId, setContactId] = useState("");
   const [contacts, setContacts] = useState<ContactOption[]>([]);
+
+  const [prStatus, setPrStatus] = useState<PurchaseRequestStatus | "">("");
+  const [prSupplierId, setPrSupplierId] = useState("");
+  const [prSuppliers, setPrSuppliers] = useState<ContactOption[]>([]);
 
   useEffect(() => {
     if (reportType !== "account-transactions") return;
@@ -132,8 +178,17 @@ export default function ReportsPage() {
       .catch(() => setContacts([]));
   }, [reportType, account]);
 
+  useEffect(() => {
+    if (reportType !== "items-ordered") return;
+    fetch("/api/suppliers")
+      .then((res) => res.json())
+      .then((list: ContactOption[]) => setPrSuppliers(Array.isArray(list) ? list : []))
+      .catch(() => setPrSuppliers([]));
+  }, [reportType]);
+
   async function generateReport() {
     setLoading(true);
+    setExpandedRow(null);
     try {
       const params = new URLSearchParams({ type: reportType });
       if (from) params.set("from", from);
@@ -141,6 +196,10 @@ export default function ReportsPage() {
       if (reportType === "account-transactions") {
         params.set("account", account);
         if (contactId) params.set("contactId", contactId);
+      }
+      if (reportType === "items-ordered") {
+        if (prStatus) params.set("status", prStatus);
+        if (prSupplierId) params.set("supplierId", prSupplierId);
       }
       const res = await fetch(`/api/reports?${params}`);
       setData(await res.json());
@@ -208,6 +267,21 @@ export default function ReportsPage() {
         `${t.date.split("T")[0]},"${t.description.replace(/"/g, '""')}",${t.debit ?? ""},${t.credit ?? ""},${t.balance}`
       ).join("\n");
       csv += `\n\nClosing Balance,${d.closingBalance}`;
+    } else if (reportType === "items-ordered") {
+      const d = data as ItemsOrderedData;
+      csv = [
+        "Items Ordered / Pending to Order",
+        `Period: ${dateRange}`,
+        "",
+        "Invoice #,Supplier,Item Code,Description,Qty,Status,Date,Cost",
+      ].join("\n");
+      csv += "\n" + d.rows.map((r) =>
+        `${r.invoiceNumber},"${r.supplierName.replace(/"/g, '""')}",${r.itemCode},"${r.description.replace(/"/g, '""')}",${r.quantity},${r.status},${(r.fulfilledAt ?? r.createdAt).split("T")[0]},${r.cost ?? ""}`
+      ).join("\n");
+      csv += `\n\nPending,${d.pendingCount}`;
+      csv += `\nFulfilled,${d.fulfilledCount}`;
+      csv += `\nHouse,${d.houseCount}`;
+      csv += `\nCost of Goods Sold (fulfilled only),${d.cogs}`;
     } else {
       const d = data as OutstandingData;
       csv = ["Outstanding Balances", `Period: ${dateRange}`, "", "Invoice #,Party,Date,Total,Paid,Balance,Status"].join("\n");
@@ -320,6 +394,23 @@ export default function ReportsPage() {
         ],
         foot: [["", "", "", "CLOSING BALANCE", formatCurrency(d.closingBalance)]],
       });
+    } else if (reportType === "items-ordered") {
+      const d = data as ItemsOrderedData;
+      autoTable(doc, {
+        startY: 35,
+        head: [["Invoice #", "Supplier", "Item Code", "Description", "Qty", "Status", "Date", "Cost"]],
+        body: d.rows.map((r) => [
+          r.invoiceNumber,
+          r.supplierName,
+          r.itemCode,
+          r.description,
+          r.quantity,
+          r.status,
+          (r.fulfilledAt ?? r.createdAt).split("T")[0],
+          r.cost ? formatCurrency(r.cost) : "",
+        ]),
+        foot: [["", "", "", "", "", "", "COGS (fulfilled)", formatCurrency(d.cogs)]],
+      });
     } else {
       const d = data as OutstandingData;
       autoTable(doc, {
@@ -348,6 +439,7 @@ export default function ReportsPage() {
     { value: "supplier-outstanding", label: "Supplier Outstanding" },
     { value: "profitability", label: "Invoice Profitability" },
     { value: "account-transactions", label: "Account Transactions" },
+    { value: "items-ordered", label: "Items Ordered / Pending to Order" },
   ];
 
   function getReportLabel(type: ReportType) {
@@ -399,6 +491,36 @@ export default function ReportsPage() {
                   <option value="">All Contacts</option>
                   {contacts.map((c) => (
                     <option key={c.id} value={c.id}>{c.name}</option>
+                  ))}
+                </select>
+              </div>
+            </>
+          )}
+          {reportType === "items-ordered" && (
+            <>
+              <div>
+                <label className="label">Status</label>
+                <select
+                  className="input w-40"
+                  value={prStatus}
+                  onChange={(e) => setPrStatus(e.target.value as PurchaseRequestStatus | "")}
+                >
+                  <option value="">All</option>
+                  <option value="PENDING">Pending</option>
+                  <option value="FULFILLED">Fulfilled</option>
+                  <option value="HOUSE">House stock</option>
+                </select>
+              </div>
+              <div>
+                <label className="label">Supplier</label>
+                <select
+                  className="input w-52"
+                  value={prSupplierId}
+                  onChange={(e) => setPrSupplierId(e.target.value)}
+                >
+                  <option value="">All Suppliers</option>
+                  {prSuppliers.map((s) => (
+                    <option key={s.id} value={s.id}>{s.name}</option>
                   ))}
                 </select>
               </div>
@@ -573,9 +695,18 @@ export default function ReportsPage() {
                     <p className={`font-bold mt-1 text-lg ${margin >= 20 ? "text-green-700" : margin >= 0 ? "text-yellow-700" : "text-red-700"}`}>{d.overallMargin}%</p>
                   </div>
                 </div>
+
+                {d.invoicesWithPendingCost > 0 && (
+                  <div className="mb-4 p-3 bg-yellow-50 border border-yellow-200 rounded-lg text-sm text-yellow-800">
+                    {d.invoicesWithPendingCost} invoice{d.invoicesWithPendingCost !== 1 ? "s" : ""} {d.invoicesWithPendingCost !== 1 ? "have" : "has"} line
+                    items pending cost — totals above may understate final profit. Expand a row (▸) to see which lines.
+                  </div>
+                )}
+
                 <table className="w-full text-sm">
                   <thead className="border-b">
                     <tr className="text-left text-gray-500 text-xs uppercase">
+                      <th className="pb-2 w-6" />
                       <th className="pb-2">Invoice #</th>
                       <th className="pb-2">Customer</th>
                       <th className="pb-2">Date</th>
@@ -590,25 +721,152 @@ export default function ReportsPage() {
                     {d.rows.map((row) => {
                       const m = parseFloat(row.grossMargin);
                       const marginColor = m >= 20 ? "text-green-600" : m >= 0 ? "text-yellow-600" : "text-red-600";
+                      const expandable = row.lines.length > 0;
+                      const expanded = expandedRow === row.id;
                       return (
-                        <tr key={row.id}>
-                          <td className="py-2 font-medium">{row.invoiceNumber}</td>
-                          <td className="py-2">{row.customerName}</td>
-                          <td className="py-2 text-gray-500">{formatDateOnly(row.invoiceDate)}</td>
-                          <td className="py-2 text-right">{formatCurrency(row.revenue)}</td>
-                          <td className="py-2 text-right">
-                            {row.hasCost ? formatCurrency(row.cost) : <span className="text-gray-400 text-xs">No cost linked</span>}
-                          </td>
-                          <td className="py-2 text-right font-medium">{formatCurrency(row.grossProfit)}</td>
-                          <td className={`py-2 text-right font-semibold ${marginColor}`}>
-                            {row.hasCost ? `${row.grossMargin}%` : <span className="text-gray-400 text-xs">&mdash;</span>}
-                          </td>
-                          <td className="py-2 text-center">
-                            <PaymentBadge status={row.paymentStatus as "UNPAID" | "PARTIALLY_PAID" | "PAID"} />
-                          </td>
-                        </tr>
+                        <Fragment key={row.id}>
+                          <tr
+                            className={expandable ? "cursor-pointer hover:bg-gray-50/50" : ""}
+                            onClick={() => expandable && setExpandedRow(expanded ? null : row.id)}
+                          >
+                            <td className="py-2 text-gray-400">
+                              {expandable && (expanded ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />)}
+                            </td>
+                            <td className="py-2 font-medium">{row.invoiceNumber}</td>
+                            <td className="py-2">{row.customerName}</td>
+                            <td className="py-2 text-gray-500">{formatDateOnly(row.invoiceDate)}</td>
+                            <td className="py-2 text-right">{formatCurrency(row.revenue)}</td>
+                            <td className="py-2 text-right">
+                              {row.hasCost ? (
+                                <>
+                                  {formatCurrency(row.cost)}
+                                  {row.pendingLineCount > 0 && (
+                                    <span className="ml-1.5 text-[10px] text-yellow-700 bg-yellow-50 border border-yellow-200 rounded-full px-1.5 py-0.5">
+                                      {row.pendingLineCount} pending
+                                    </span>
+                                  )}
+                                </>
+                              ) : row.pendingLineCount > 0 ? (
+                                <span className="text-yellow-600 text-xs font-medium">Pending cost</span>
+                              ) : (
+                                <span className="text-gray-400 text-xs">No cost linked</span>
+                              )}
+                            </td>
+                            <td className="py-2 text-right font-medium">{formatCurrency(row.grossProfit)}</td>
+                            <td className={`py-2 text-right font-semibold ${marginColor}`}>
+                              {row.hasCost ? `${row.grossMargin}%` : <span className="text-gray-400 text-xs">&mdash;</span>}
+                            </td>
+                            <td className="py-2 text-center">
+                              <PaymentBadge status={row.paymentStatus as "UNPAID" | "PARTIALLY_PAID" | "PAID"} />
+                            </td>
+                          </tr>
+                          {expanded && (
+                            <tr>
+                              <td colSpan={9} className="bg-gray-50/70 px-4 py-3">
+                                <table className="w-full text-xs">
+                                  <thead>
+                                    <tr className="text-gray-400 uppercase">
+                                      <th className="pb-1 text-left font-medium">Item Code</th>
+                                      <th className="pb-1 text-left font-medium">Description</th>
+                                      <th className="pb-1 text-left font-medium">Cost Status</th>
+                                      <th className="pb-1 text-right font-medium">Cost</th>
+                                    </tr>
+                                  </thead>
+                                  <tbody className="divide-y divide-gray-100">
+                                    {row.lines.map((line) => (
+                                      <tr key={line.id}>
+                                        <td className="py-1 font-mono text-gray-600">{line.itemCode ?? "—"}</td>
+                                        <td className="py-1 text-gray-700">{line.description}</td>
+                                        <td className="py-1">
+                                          {line.status === "entered" && <span className="text-green-700 font-medium">Cost entered</span>}
+                                          {line.status === "pending" && <span className="text-yellow-700 font-medium">Pending cost</span>}
+                                          {line.status === "house" && <span className="text-amber-700 font-medium">House stock</span>}
+                                        </td>
+                                        <td className="py-1 text-right">{line.cost ? formatCurrency(line.cost) : "—"}</td>
+                                      </tr>
+                                    ))}
+                                  </tbody>
+                                </table>
+                              </td>
+                            </tr>
+                          )}
+                        </Fragment>
                       );
                     })}
+                  </tbody>
+                </table>
+              </div>
+            );
+          })()}
+
+          {reportType === "items-ordered" && (() => {
+            const d = data as ItemsOrderedData;
+            const statusStyles: Record<PurchaseRequestStatus, string> = {
+              PENDING: "bg-yellow-50 text-yellow-700 border border-yellow-200",
+              FULFILLED: "bg-green-50 text-green-700 border border-green-200",
+              HOUSE: "bg-amber-50 text-amber-700 border border-amber-200",
+            };
+            return (
+              <div>
+                <div className="mb-4 grid grid-cols-2 md:grid-cols-4 gap-3">
+                  <div className="bg-yellow-50 rounded-lg p-3 border border-yellow-100">
+                    <span className="text-xs font-medium text-yellow-700 uppercase">Pending</span>
+                    <p className="font-bold mt-1 text-yellow-800 text-lg">{d.pendingCount}</p>
+                  </div>
+                  <div className="bg-green-50 rounded-lg p-3 border border-green-100">
+                    <span className="text-xs font-medium text-green-700 uppercase">Fulfilled</span>
+                    <p className="font-bold mt-1 text-green-800 text-lg">{d.fulfilledCount}</p>
+                  </div>
+                  <div className="bg-amber-50 rounded-lg p-3 border border-amber-100">
+                    <span className="text-xs font-medium text-amber-700 uppercase">House stock</span>
+                    <p className="font-bold mt-1 text-amber-800 text-lg">{d.houseCount}</p>
+                  </div>
+                  <div className="bg-blue-50 rounded-lg p-3 border border-blue-100">
+                    <span className="text-xs font-medium text-blue-700 uppercase">COGS (fulfilled)</span>
+                    <p className="font-bold mt-1 text-blue-800 text-lg">{formatCurrency(d.cogs)}</p>
+                  </div>
+                </div>
+                <table className="w-full text-sm">
+                  <thead className="border-b">
+                    <tr className="text-left text-gray-500 text-xs uppercase">
+                      <th className="pb-2">Invoice #</th>
+                      <th className="pb-2">Supplier</th>
+                      <th className="pb-2">Item Code</th>
+                      <th className="pb-2">Description</th>
+                      <th className="pb-2 text-right">Qty</th>
+                      <th className="pb-2 text-center">Status</th>
+                      <th className="pb-2">Date</th>
+                      <th className="pb-2 text-right">Cost</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-50">
+                    {d.rows.map((row) => (
+                      <tr key={row.id}>
+                        <td className="py-2 font-medium">
+                          <Link href={`/invoices/customer/${row.invoiceId}`} className="text-brand-700 hover:underline">
+                            {row.invoiceNumber}
+                          </Link>
+                        </td>
+                        <td className="py-2">{row.supplierName}</td>
+                        <td className="py-2 font-mono text-xs text-gray-600">{row.itemCode}</td>
+                        <td className="py-2 text-gray-700 max-w-xs truncate">{row.description}</td>
+                        <td className="py-2 text-right">{row.quantity}</td>
+                        <td className="py-2 text-center">
+                          <span className={`inline-flex px-2 py-0.5 rounded-full text-xs font-medium ${statusStyles[row.status]}`}>
+                            {row.status === "PENDING" ? "Pending" : row.status === "FULFILLED" ? "Fulfilled" : "House stock"}
+                          </span>
+                        </td>
+                        <td className="py-2 text-gray-500 text-xs">
+                          {row.status === "FULFILLED" && row.fulfilledAt ? formatDateOnly(row.fulfilledAt) : formatDateOnly(row.createdAt)}
+                        </td>
+                        <td className="py-2 text-right">{row.cost ? formatCurrency(row.cost) : <span className="text-gray-300">—</span>}</td>
+                      </tr>
+                    ))}
+                    {d.rows.length === 0 && (
+                      <tr>
+                        <td colSpan={8} className="py-6 text-center text-gray-400">No items in this range</td>
+                      </tr>
+                    )}
                   </tbody>
                 </table>
               </div>

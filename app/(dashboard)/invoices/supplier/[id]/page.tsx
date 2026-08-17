@@ -51,8 +51,9 @@ interface InvoiceDetail {
   category: "COGS" | "SERVICES_EXPENSE" | "OPERATING_EXPENSE" | "OTHER";
   notes: string | null;
   customerInvoiceRef: string | null;
+  purchaseRequestId: string | null;
   supplier: { id: string; name: string; email: string | null; phone: string | null; address: string | null; zelle: string | null };
-  items: { id: string; description: string; itemDescription: string | null; quantity: string; unitCost: string; taxRate: string; lineTotal: string }[];
+  items: { id: string; description: string; itemDescription: string | null; quantity: string; unitCost: string; taxRate: string; lineTotal: string; partNumber: string | null }[];
   payments: { id: string; amount: string; paymentDate: string; notes: string | null }[];
   files: { id: string; originalName: string; mimeType: string }[];
 }
@@ -60,6 +61,15 @@ interface InvoiceDetail {
 export default function SupplierInvoiceDetailPage() {
   const { id } = useParams() as { id: string };
   const router = useRouter();
+  // Read directly off window.location rather than next/navigation's
+  // useSearchParams(), which would force this whole page out of static
+  // rendering and require a Suspense boundary just for this one
+  // post-create informational banner.
+  const [warning, setWarning] = useState<string | null>(null);
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    setWarning(params.get("warning"));
+  }, []);
   const [invoice, setInvoice] = useState<InvoiceDetail | null>(null);
   const [editing, setEditing] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -129,8 +139,18 @@ export default function SupplierInvoiceDetailPage() {
 
   async function handleDelete() {
     setDeleting(true);
-    await fetch(`/api/invoices/supplier/${id}`, { method: "DELETE" });
-    router.push("/invoices/supplier");
+    try {
+      const res = await fetch(`/api/invoices/supplier/${id}`, { method: "DELETE" });
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}));
+        setError(d.error ?? "Failed to delete");
+        setConfirmDelete(false);
+        return;
+      }
+      router.push("/invoices/supplier");
+    } finally {
+      setDeleting(false);
+    }
   }
 
   async function fetchCompany() {
@@ -250,6 +270,21 @@ export default function SupplierInvoiceDetailPage() {
       </div>
 
       {error && <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg text-sm">{error}</div>}
+
+      {warning && (
+        <div className="bg-yellow-50 border border-yellow-200 text-yellow-800 px-4 py-3 rounded-lg text-sm flex items-start justify-between gap-3">
+          <span>{warning}</span>
+          <button onClick={() => setWarning(null)} className="text-yellow-600 hover:text-yellow-800 shrink-0">
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+      )}
+
+      {invoice?.purchaseRequestId && (
+        <div className="bg-brand-50 border border-brand-200 text-brand-800 px-4 py-2 rounded-lg text-xs">
+          This bill fulfills a purchase request — its cost has been written back to the linked invoice line and is locked.
+        </div>
+      )}
 
       {editing ? (
         <form className="space-y-6">
@@ -392,6 +427,11 @@ export default function SupplierInvoiceDetailPage() {
                 {invoice.items.map((item) => (
                   <tr key={item.id}>
                     <td className="py-2">
+                      {item.partNumber && (
+                        <span className="inline-block mb-0.5 px-1.5 py-0.5 rounded bg-gray-100 text-gray-600 text-xs font-mono">
+                          {item.partNumber}
+                        </span>
+                      )}
                       <div>{item.description}</div>
                       {item.itemDescription && (
                         <div className="text-xs text-gray-400 mt-0.5">{item.itemDescription}</div>

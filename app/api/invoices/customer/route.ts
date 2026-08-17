@@ -6,6 +6,7 @@ import { syncProductCatalog } from "@/lib/product-catalog";
 import { writeAuditLog, extractMeta, actorFromSession } from "@/lib/audit";
 import { computeLineTotals } from "@/lib/money";
 import { claimSequenceNumber } from "@/lib/next-number";
+import { ensurePurchaseRequestsForInvoice } from "@/lib/purchase-requests";
 import { z } from "zod";
 import Decimal from "decimal.js";
 
@@ -15,6 +16,19 @@ const itemSchema = z.object({
   quantity: z.string().regex(/^\d+(\.\d+)?$/, "Must be a number"),
   unitPrice: z.string().regex(/^\d+(\.\d+)?$/, "Must be a number"),
   taxRate: z.string().regex(/^\d+(\.\d+)?$/, "Must be a number").default("0"),
+  // Item code (`XX/PARTNUMBER`) -- supplierId is picked from the supplier
+  // dropdown (never free-typed, see the Supplier model's doc comment on
+  // `code`), partNumber is free-typed. The actual app UI
+  // (invoices/customer/new) requires both client-side for every line a
+  // sales rep types in -- deliberately NOT re-required here at the schema
+  // level, so any other caller of this endpoint (integration scripts, the
+  // existing test suite, a future API consumer) that doesn't know about
+  // this feature keeps working exactly as before. A line missing either
+  // field simply never gets a purchase_request (see
+  // lib/purchase-requests.ts) -- the same graceful-skip this endpoint's
+  // PATCH counterpart already relies on for pre-existing invoices.
+  supplierId: z.string().optional(),
+  partNumber: z.string().optional(),
 });
 
 const appliedFeeSchema = z.object({
@@ -133,6 +147,25 @@ export async function POST(request: Request) {
     if (!employeeExists) {
       return NextResponse.json(
         { error: "Selected sales rep no longer exists. Please pick another." },
+        { status: 400 }
+      );
+    }
+  }
+
+  // Every line's supplierId is a foreign key too -- same reasoning as
+  // customerId/employeeId above. Checked as one batch query rather than
+  // per-item. Empty/omitted values (supplierId is optional -- see the item
+  // schema's doc comment) are excluded rather than treated as an invalid
+  // reference.
+  const suppliedIds = Array.from(new Set(items.map((i) => i.supplierId).filter((v): v is string => !!v)));
+  if (suppliedIds.length > 0) {
+    const knownSuppliers = await prisma.supplier.findMany({
+      where: { id: { in: suppliedIds } },
+      select: { id: true },
+    });
+    if (knownSuppliers.length !== suppliedIds.length) {
+      return NextResponse.json(
+        { error: "One or more line items reference a supplier that no longer exists. Refresh and try again." },
         { status: 400 }
       );
     }
@@ -261,12 +294,23 @@ export async function POST(request: Request) {
               unitPrice: item.unitPrice,
               taxRate: item.taxRate,
               lineTotal: item.lineTotal,
+              supplierId: item.supplierId,
+              partNumber: item.partNumber,
             })),
           },
         },
         include: { customer: true, items: true },
       });
       await claimSequenceNumber(tx, "customerInvoiceNextSeq", invoiceNumber, invoicePrefix);
+
+      // Covers the (currently unused by the UI, but API-reachable) case of
+      // creating an invoice that's already paid -- same trigger as the
+      // payments POST route and the PATCH route, see
+      // lib/purchase-requests.ts.
+      if (new Decimal(created.paidAmount.toString()).gt(0)) {
+        await ensurePurchaseRequestsForInvoice(tx, created.id);
+      }
+
       return created;
     });
   } catch (err) {

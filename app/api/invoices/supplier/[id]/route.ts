@@ -77,6 +77,20 @@ export async function PATCH(
   });
   if (!existing) return NextResponse.json({ error: "Not found" }, { status: 404 });
 
+  // A bill that closed out a purchase_request already wrote its cost back
+  // to the linked invoice line (app/api/invoices/supplier/route.ts) the
+  // moment it was created -- rewriting its items here would desync that
+  // write-back (the invoice line's actualCost, and the purchase_request's
+  // own cost snapshot, would silently stop matching this bill). Everything
+  // else about the bill (notes, due date, our own payment status/amount
+  // toward the supplier) is unrelated to that and still freely editable.
+  if (existing.purchaseRequestId && parsed.data.items !== undefined) {
+    return NextResponse.json(
+      { error: "This bill fulfills a purchase request -- its cost is locked. Its other fields can still be edited." },
+      { status: 409 }
+    );
+  }
+
   const beforeSnapshot = {
     invoiceNumber: existing.invoiceNumber,
     paymentStatus: existing.paymentStatus,
@@ -293,6 +307,18 @@ export async function DELETE(
   if (existing.paymentStatus !== "UNPAID") {
     return NextResponse.json(
       { error: "This bill has a recorded payment and can no longer be deleted." },
+      { status: 409 }
+    );
+  }
+
+  // Deleting a bill that closed out a purchase_request would leave the
+  // linked invoice line's actualCost and the purchase_request's FULFILLED
+  // status/cost as orphaned, unrecoverable history -- there's no "reopen"
+  // flow to put it back to PENDING. Same reasoning as the payment guard
+  // above, just for the purchasing-trigger side of this bill's data.
+  if (existing.purchaseRequestId) {
+    return NextResponse.json(
+      { error: "This bill fulfills a purchase request and can no longer be deleted." },
       { status: 409 }
     );
   }

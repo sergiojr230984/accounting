@@ -54,6 +54,10 @@ const navItems: NavItem[] = [
     icon: ShoppingCart,
     children: [
       { href: "/invoices/supplier", label: "Bills" },
+      // Auto-generated the moment a customer invoice line is paid -- see
+      // lib/purchase-requests.ts. Cost eventually shows up here once a bill
+      // closes one out, so same gate as Suppliers/Reports below.
+      { href: "/purchasing", label: "Purchasing", roles: ["ADMIN", "MANAGER"] },
       // Suppliers include bank account/routing/Zelle details -- the API
       // (app/api/suppliers/route.ts) restricts this to ADMIN/MANAGER, but
       // this nav item wasn't updated to match, so SALES could click through
