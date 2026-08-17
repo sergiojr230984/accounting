@@ -279,6 +279,45 @@ const SCHEMA_STATEMENTS: string[] = [
   );`,
   `ALTER TABLE "ApiKey" ADD COLUMN IF NOT EXISTS "scopes" JSONB NOT NULL DEFAULT '[]'::jsonb;`,
   `CREATE INDEX IF NOT EXISTS "ApiKey_active_idx" ON "ApiKey" ("active");`,
+
+  // Purchasing trigger workflow: a paid customer-invoice line auto-generates
+  // a purchase_request, which purchasing later closes with a bill that
+  // writes real cost back to the line. See lib/purchase-requests.ts.
+  `ALTER TABLE "Supplier" ADD COLUMN IF NOT EXISTS "code" TEXT;`,
+  `ALTER TABLE "Supplier" ADD COLUMN IF NOT EXISTS "active" BOOLEAN NOT NULL DEFAULT true;`,
+  `ALTER TABLE "Supplier" ADD COLUMN IF NOT EXISTS "isHouse" BOOLEAN NOT NULL DEFAULT false;`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS "Supplier_code_key" ON "Supplier"("code");`,
+  `ALTER TABLE "CustomerInvoiceItem" ADD COLUMN IF NOT EXISTS "supplierId" TEXT;`,
+  `ALTER TABLE "CustomerInvoiceItem" ADD COLUMN IF NOT EXISTS "partNumber" TEXT;`,
+  `ALTER TABLE "CustomerInvoiceItem" ADD COLUMN IF NOT EXISTS "actualCost" DECIMAL(15,2);`,
+  `DO $$ BEGIN
+    ALTER TABLE "CustomerInvoiceItem" ADD CONSTRAINT "CustomerInvoiceItem_supplierId_fkey" FOREIGN KEY ("supplierId") REFERENCES "Supplier"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+   EXCEPTION WHEN duplicate_object THEN NULL; END $$;`,
+  `DO $$ BEGIN CREATE TYPE "PurchaseRequestStatus" AS ENUM ('PENDING', 'FULFILLED'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;`,
+  `CREATE TABLE IF NOT EXISTS "PurchaseRequest" (
+    "id" TEXT NOT NULL PRIMARY KEY,
+    "customerInvoiceId" TEXT NOT NULL,
+    "customerInvoiceItemId" TEXT NOT NULL UNIQUE,
+    "supplierId" TEXT NOT NULL,
+    "partNumber" TEXT NOT NULL,
+    "description" TEXT NOT NULL,
+    "quantity" DECIMAL(15,4) NOT NULL,
+    "status" "PurchaseRequestStatus" NOT NULL DEFAULT 'PENDING',
+    "cost" DECIMAL(15,2),
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "fulfilledAt" TIMESTAMP(3),
+    CONSTRAINT "PurchaseRequest_customerInvoiceId_fkey" FOREIGN KEY ("customerInvoiceId") REFERENCES "CustomerInvoice"("id") ON DELETE RESTRICT ON UPDATE CASCADE,
+    CONSTRAINT "PurchaseRequest_customerInvoiceItemId_fkey" FOREIGN KEY ("customerInvoiceItemId") REFERENCES "CustomerInvoiceItem"("id") ON DELETE RESTRICT ON UPDATE CASCADE,
+    CONSTRAINT "PurchaseRequest_supplierId_fkey" FOREIGN KEY ("supplierId") REFERENCES "Supplier"("id") ON DELETE RESTRICT ON UPDATE CASCADE
+  );`,
+  `CREATE INDEX IF NOT EXISTS "PurchaseRequest_status_idx" ON "PurchaseRequest" ("status");`,
+  `CREATE INDEX IF NOT EXISTS "PurchaseRequest_supplierId_idx" ON "PurchaseRequest" ("supplierId");`,
+  `ALTER TABLE "SupplierInvoice" ADD COLUMN IF NOT EXISTS "purchaseRequestId" TEXT;`,
+  `ALTER TABLE "SupplierInvoiceItem" ADD COLUMN IF NOT EXISTS "partNumber" TEXT;`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS "SupplierInvoice_purchaseRequestId_key" ON "SupplierInvoice"("purchaseRequestId");`,
+  `DO $$ BEGIN
+    ALTER TABLE "SupplierInvoice" ADD CONSTRAINT "SupplierInvoice_purchaseRequestId_fkey" FOREIGN KEY ("purchaseRequestId") REFERENCES "PurchaseRequest"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+   EXCEPTION WHEN duplicate_object THEN NULL; END $$;`,
 ];
 
 export function initializeDatabase(): Promise<void> {

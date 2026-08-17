@@ -21,12 +21,20 @@ interface ItemRow {
   unitPrice?: string;
   unitCost?: string;
   taxRate: string;
+  supplierId?: string;
+  partNumber?: string;
 }
 
 interface FeeOption {
   id: string;
   label: string;
   rate: number;
+}
+
+interface SupplierCodeOption {
+  id: string;
+  name: string;
+  code: string | null;
 }
 
 interface AppliedFee {
@@ -61,6 +69,13 @@ interface InvoiceItemsEditorProps<T extends FieldValues> {
   // that will bounce back as a 409 on save. Rows beyond this count are new
   // additions and stay fully editable.
   lockedCount?: number;
+  // Opt-in, customer-invoice-only: replaces the secondary "Description
+  // (optional)" input with the item-code fields (supplier dropdown + free-
+  // typed part number, printed as `XX/PARTNUMBER`). Defaults to false so
+  // every other existing caller (estimates, supplier bills) is unaffected
+  // -- only app/(dashboard)/invoices/customer/[id]/page.tsx passes true.
+  showItemCode?: boolean;
+  supplierOptions?: SupplierCodeOption[];
 }
 
 function LinePreview({ quantity, price, taxRate }: { quantity: string; price: string; taxRate: string }) {
@@ -92,6 +107,8 @@ export default function InvoiceItemsEditor<T extends FieldValues = any>({
   onFeesChange,
   lockedCount = 0,
   setValue,
+  showItemCode = false,
+  supplierOptions = [],
 }: InvoiceItemsEditorProps<T>) {
   const { fields, append, remove } = useFieldArray({ control, name: fieldName as Path<T> as never });
   const items = useWatch({ control, name: fieldName as Path<T> as never }) as unknown as ItemRow[];
@@ -228,7 +245,7 @@ export default function InvoiceItemsEditor<T extends FieldValues = any>({
           onClick={() => {
             append({
               description: "",
-              itemDescription: "",
+              ...(showItemCode ? { supplierId: "", partNumber: "" } : { itemDescription: "" }),
               quantity: "1",
               [priceField]: "0",
               taxRate: "0",
@@ -279,12 +296,23 @@ export default function InvoiceItemsEditor<T extends FieldValues = any>({
                       }}
                       onSelect={(product) => {
                         if (!setValue) return;
-                        setValue(`${fieldName}.${index}.description` as Path<T>, product.name as never, { shouldDirty: true });
-                        setValue(
-                          `${fieldName}.${index}.itemDescription` as Path<T>,
-                          (product.description ?? "") as never,
-                          { shouldDirty: true }
-                        );
+                        // showItemCode mode has no secondary description
+                        // field to put the catalog item's own description
+                        // into (description is the single combined
+                        // product-description-and-color field there) --
+                        // fold it into the description itself instead of
+                        // silently dropping it.
+                        const name = showItemCode && product.description
+                          ? `${product.name} — ${product.description}`
+                          : product.name;
+                        setValue(`${fieldName}.${index}.description` as Path<T>, name as never, { shouldDirty: true });
+                        if (!showItemCode) {
+                          setValue(
+                            `${fieldName}.${index}.itemDescription` as Path<T>,
+                            (product.description ?? "") as never,
+                            { shouldDirty: true }
+                          );
+                        }
                         setValue(`${fieldName}.${index}.unitPrice` as Path<T>, product.price as never, { shouldDirty: true });
                         setValue(`${fieldName}.${index}.taxRate` as Path<T>, product.taxRate as never, { shouldDirty: true });
                       }}
@@ -298,14 +326,36 @@ export default function InvoiceItemsEditor<T extends FieldValues = any>({
                     />
                   )}
                 </div>
-                {/* Item description — col 3-5 */}
+                {/* Item description, OR (customer invoices only) item code
+                    -- col 3-5 */}
                 <div className="col-span-3">
-                  <input
-                    className="input text-sm text-gray-600"
-                    placeholder="Description (optional)"
-                    disabled={locked}
-                    {...register(`${fieldName}.${index}.itemDescription` as Path<T>)}
-                  />
+                  {showItemCode ? (
+                    <div className="flex gap-1">
+                      <select
+                        className="input text-sm w-24 shrink-0 px-1.5"
+                        disabled={locked}
+                        {...register(`${fieldName}.${index}.supplierId` as Path<T>)}
+                      >
+                        <option value="">Supplier…</option>
+                        {supplierOptions.map((s) => (
+                          <option key={s.id} value={s.id}>{s.code ?? "??"} — {s.name}</option>
+                        ))}
+                      </select>
+                      <input
+                        className="input text-sm flex-1 min-w-0"
+                        placeholder="Part number"
+                        disabled={locked}
+                        {...register(`${fieldName}.${index}.partNumber` as Path<T>)}
+                      />
+                    </div>
+                  ) : (
+                    <input
+                      className="input text-sm text-gray-600"
+                      placeholder="Description (optional)"
+                      disabled={locked}
+                      {...register(`${fieldName}.${index}.itemDescription` as Path<T>)}
+                    />
+                  )}
                 </div>
                 {/* Qty */}
                 <div className="col-span-1">
@@ -461,7 +511,9 @@ export default function InvoiceItemsEditor<T extends FieldValues = any>({
 
       <div className="mt-2 grid grid-cols-12 gap-2">
         <div className="col-span-10 text-right text-xs text-gray-500 pr-2">
-          <span className="uppercase tracking-wide">Name · Description · Qty · {priceLabel} · Tax · Total</span>
+          <span className="uppercase tracking-wide">
+            Name · {showItemCode ? "Item Code" : "Description"} · Qty · {priceLabel} · Tax · Total
+          </span>
         </div>
       </div>
     </div>

@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { writeAuditLog, extractMeta, actorFromSession } from "@/lib/audit";
+import { ensurePurchaseRequestsForInvoice } from "@/lib/purchase-requests";
 import { z } from "zod";
 import Decimal from "decimal.js";
 
@@ -82,6 +83,15 @@ export async function POST(
       where: { id },
       data: { paidAmount: newPaidAmount.toFixed(2), paymentStatus },
     });
+
+    // Sell-then-source workflow: the invoice's first recorded payment of
+    // any amount (partial or full -- both fire the identical process) is
+    // what triggers purchasing. Safe to call on every payment, not just the
+    // first, since ensurePurchaseRequestsForInvoice is itself the
+    // idempotency guarantee -- see its doc comment.
+    if (newPaidAmount.gt(0)) {
+      await ensurePurchaseRequestsForInvoice(tx, id);
+    }
 
     return { error: null, paymentId: created.id };
   });

@@ -30,10 +30,23 @@ const schema = z.object({
       taxRate: z.string().default("0"),
     })
   ).min(1),
+  // Set only when this bill is closing out a specific purchase request --
+  // see the "Fulfilling a purchase request" banner/mode below.
+  purchaseRequestId: z.string().optional(),
 });
 type FormData = z.infer<typeof schema>;
 
 interface Supplier { id: string; name: string; email?: string | null; phone?: string | null; address?: string | null }
+
+interface PurchaseRequestDetail {
+  id: string;
+  partNumber: string;
+  description: string;
+  quantity: string;
+  supplierId: string;
+  supplier: { id: string; name: string; code: string | null };
+  customerInvoice: { id: string; invoiceNumber: string };
+}
 
 export default function NewSupplierInvoicePage() {
   const router = useRouter();
@@ -42,6 +55,18 @@ export default function NewSupplierInvoicePage() {
   const [error, setError] = useState("");
   const [newSupplierName, setNewSupplierName] = useState("");
   const [creatingSupplier, setCreatingSupplier] = useState(false);
+
+  // "Create Bill" from the Items Ordered / Pending report or the Purchasing
+  // queue (app/(dashboard)/purchasing/page.tsx) lands here with
+  // ?purchaseRequestId=... -- read off window.location rather than
+  // next/navigation's useSearchParams(), which would force this whole page
+  // out of static rendering just for this one query param.
+  const [purchaseRequest, setPurchaseRequest] = useState<PurchaseRequestDetail | null>(null);
+  const [prLoading, setPrLoading] = useState(false);
+  const [prError, setPrError] = useState("");
+  const [prQuantity, setPrQuantity] = useState("");
+  const [prCost, setPrCost] = useState("");
+  const fulfillingPR = Boolean(purchaseRequest);
 
   const { register, handleSubmit, control, watch, setValue, formState: { errors } } = useForm<FormData>({
     resolver: zodResolver(schema),
@@ -90,6 +115,29 @@ export default function NewSupplierInvoicePage() {
         }
       )
       .catch(() => {});
+
+    const purchaseRequestId = new URLSearchParams(window.location.search).get("purchaseRequestId");
+    if (purchaseRequestId) {
+      setPrLoading(true);
+      fetch(`/api/purchase-requests/${purchaseRequestId}`)
+        .then((r) => (r.ok ? r.json() : Promise.reject(r)))
+        .then((pr: PurchaseRequestDetail) => {
+          setPurchaseRequest(pr);
+          setValue("purchaseRequestId", pr.id);
+          setValue("supplierId", pr.supplierId);
+          setValue("category", "COGS");
+          setValue("items", [
+            { description: pr.description, quantity: pr.quantity, unitCost: "0", taxRate: "0" },
+          ]);
+          setPrQuantity(pr.quantity);
+          setPrCost("0");
+        })
+        .catch(async (r) => {
+          const d = await (r as Response).json?.().catch(() => ({})) ?? {};
+          setPrError(d.error ?? "That purchase request could not be found or already has a bill.");
+        })
+        .finally(() => setPrLoading(false));
+    }
   }, [setValue]);
 
   async function handleExtracted(data: {
@@ -151,13 +199,29 @@ export default function NewSupplierInvoicePage() {
   }
 
   async function onSubmit(data: FormData) {
-    setSubmitting(true);
     setError("");
+    if (fulfillingPR && (!prCost || parseFloat(prCost) <= 0)) {
+      setError("Enter the actual cost for this item.");
+      return;
+    }
+    setSubmitting(true);
     try {
+      // In PR mode, quantity/cost are tracked in their own simplified inputs
+      // (see the "Fulfilling a purchase request" card below) rather than
+      // the full InvoiceItemsEditor, so they're folded into the payload's
+      // single item here rather than being registered form fields.
+      const payload = fulfillingPR && purchaseRequest
+        ? {
+            ...data,
+            items: [
+              { description: purchaseRequest.description, quantity: prQuantity, unitCost: prCost, taxRate: "0" },
+            ],
+          }
+        : data;
       const res = await fetch("/api/invoices/supplier", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(data),
+        body: JSON.stringify(payload),
       });
       if (!res.ok) {
         const d = await res.json();
@@ -165,7 +229,8 @@ export default function NewSupplierInvoicePage() {
         return;
       }
       const inv = await res.json();
-      router.push(`/invoices/supplier/${inv.id}`);
+      const warningQS = inv.warning ? `?warning=${encodeURIComponent(inv.warning)}` : "";
+      router.push(`/invoices/supplier/${inv.id}${warningQS}`);
     } finally {
       setSubmitting(false);
     }
@@ -183,17 +248,43 @@ export default function NewSupplierInvoicePage() {
         </div>
       </div>
 
-      {/* AI Extractor */}
-      <div className="card">
-        <div className="flex items-center justify-between mb-3">
-          <h2 className="font-semibold text-gray-800">Step 1 &mdash; Upload Invoice (optional)</h2>
-          <span className="text-xs text-gray-400 bg-gray-100 px-2 py-1 rounded-full">AI-powered</span>
+      {prLoading && (
+        <div className="card flex items-center gap-2 text-sm text-gray-500">
+          <Loader2 className="w-4 h-4 animate-spin" /> Loading purchase request…
         </div>
-        <InvoiceExtractor type="supplier" onExtracted={handleExtracted} />
-      </div>
+      )}
+
+      {prError && (
+        <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg text-sm">{prError}</div>
+      )}
+
+      {purchaseRequest && (
+        <div className="bg-brand-50 border border-brand-200 rounded-xl p-4">
+          <p className="text-sm font-semibold text-brand-800">
+            Fulfilling a purchase request for Invoice #{purchaseRequest.customerInvoice.invoiceNumber}
+          </p>
+          <p className="text-xs text-brand-600 mt-0.5">
+            {purchaseRequest.supplier.code ?? "??"}/{purchaseRequest.partNumber} — {purchaseRequest.description}.
+            Enter the actual cost below and save -- this closes the request and writes the cost back to that
+            invoice line. Supplier, part number, and description are locked to match the request.
+          </p>
+        </div>
+      )}
+
+      {/* AI Extractor -- not applicable when fulfilling a specific purchase
+          request (supplier/item are already fixed by it). */}
+      {!fulfillingPR && (
+        <div className="card">
+          <div className="flex items-center justify-between mb-3">
+            <h2 className="font-semibold text-gray-800">Step 1 &mdash; Upload Invoice (optional)</h2>
+            <span className="text-xs text-gray-400 bg-gray-100 px-2 py-1 rounded-full">AI-powered</span>
+          </div>
+          <InvoiceExtractor type="supplier" onExtracted={handleExtracted} />
+        </div>
+      )}
 
       {/* Unmatched supplier prompt */}
-      {newSupplierName && (
+      {!fulfillingPR && newSupplierName && (
         <div className="bg-yellow-50 border border-yellow-200 rounded-xl p-4 flex items-center justify-between gap-4">
           <div>
             <p className="text-sm font-medium text-yellow-800">
@@ -218,14 +309,16 @@ export default function NewSupplierInvoicePage() {
           <div className="grid grid-cols-2 gap-4">
             <div>
               <label className="label">Supplier *</label>
-              <select className="input" {...register("supplierId")}>
+              <select className="input" disabled={fulfillingPR} {...register("supplierId")}>
                 <option value="">Select supplier…</option>
                 {suppliers.map((s) => (
                   <option key={s.id} value={s.id}>{s.name}</option>
                 ))}
               </select>
               {errors.supplierId && <p className="text-red-500 text-xs mt-1">{errors.supplierId.message}</p>}
-              <Link href="/suppliers" className="text-xs text-brand-600 mt-1 inline-block">+ Add new supplier</Link>
+              {!fulfillingPR && (
+                <Link href="/suppliers" className="text-xs text-brand-600 mt-1 inline-block">+ Add new supplier</Link>
+              )}
             </div>
 
             <div>
@@ -270,15 +363,17 @@ export default function NewSupplierInvoicePage() {
               <input type="number" step="0.01" min="0" className="input" {...register("paidAmount")} />
             </div>
 
-            <div>
-              <label className="label">Customer Invoice # (for profitability)</label>
-              <input
-                className="input"
-                placeholder="e.g. INV-2026-1001"
-                {...register("customerInvoiceRef")}
-              />
-              <p className="text-xs text-gray-400 mt-0.5">Links this cost to a customer invoice for the profitability report</p>
-            </div>
+            {!fulfillingPR && (
+              <div>
+                <label className="label">Customer Invoice # (for profitability)</label>
+                <input
+                  className="input"
+                  placeholder="e.g. INV-2026-1001"
+                  {...register("customerInvoiceRef")}
+                />
+                <p className="text-xs text-gray-400 mt-0.5">Links this cost to a customer invoice for the profitability report</p>
+              </div>
+            )}
           </div>
 
           <div>
@@ -287,9 +382,46 @@ export default function NewSupplierInvoicePage() {
           </div>
         </div>
 
-        <div className="card">
-          <InvoiceItemsEditor control={control} register={register} type="supplier" />
-        </div>
+        {fulfillingPR && purchaseRequest ? (
+          // Strictly 1:1 with the invoice line it fulfills -- one cost, one
+          // supplier, one part number (see app/api/invoices/supplier/
+          // route.ts). The general multi-item InvoiceItemsEditor doesn't
+          // apply here.
+          <div className="card space-y-4">
+            <h2 className="font-semibold text-gray-800">Item &amp; Cost</h2>
+            <div className="grid grid-cols-2 gap-4">
+              <div className="col-span-2">
+                <label className="label">Item</label>
+                <input className="input bg-gray-50" disabled value={`${purchaseRequest.supplier.code ?? "??"}/${purchaseRequest.partNumber} — ${purchaseRequest.description}`} />
+              </div>
+              <div>
+                <label className="label">Quantity</label>
+                <input
+                  type="number" step="0.0001" min="0" className="input"
+                  value={prQuantity}
+                  onChange={(e) => setPrQuantity(e.target.value)}
+                />
+                {prQuantity !== purchaseRequest.quantity && (
+                  <p className="text-xs text-yellow-600 mt-1">
+                    Differs from the invoice line&apos;s quantity ({purchaseRequest.quantity}) -- allowed, just flagged.
+                  </p>
+                )}
+              </div>
+              <div>
+                <label className="label">Actual cost ($) *</label>
+                <input
+                  type="number" step="0.01" min="0" className="input"
+                  value={prCost}
+                  onChange={(e) => setPrCost(e.target.value)}
+                />
+              </div>
+            </div>
+          </div>
+        ) : (
+          <div className="card">
+            <InvoiceItemsEditor control={control} register={register} type="supplier" />
+          </div>
+        )}
 
         <InvoiceDocumentPreview
           docType="BILL"
@@ -302,12 +434,16 @@ export default function NewSupplierInvoicePage() {
           partyPhone={selectedSupplier?.phone}
           partyAddress={selectedSupplier?.address}
           priceLabel="Unit Cost"
-          items={(watchedItems ?? []).map((item) => ({
-            description: item.description,
-            quantity: item.quantity,
-            price: item.unitCost,
-            taxRate: item.taxRate,
-          }))}
+          items={
+            fulfillingPR && purchaseRequest
+              ? [{ description: purchaseRequest.description, quantity: prQuantity, price: prCost, taxRate: "0" }]
+              : (watchedItems ?? []).map((item) => ({
+                  description: item.description,
+                  quantity: item.quantity,
+                  price: item.unitCost,
+                  taxRate: item.taxRate,
+                }))
+          }
           notes={watchedNotes}
           paymentStatus={watchedPaymentStatus}
           paidAmount={watchedPaidAmount}

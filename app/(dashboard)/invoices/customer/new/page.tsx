@@ -39,9 +39,23 @@ interface Employee {
   active: boolean;
 }
 
+interface SupplierOption {
+  id: string;
+  name: string;
+  code: string | null;
+  active: boolean;
+  isHouse: boolean;
+}
+
 interface LineItem {
+  // Combined product description + color, single free-typed field by
+  // design -- see the CustomerInvoiceItem.description doc comment.
   description: string;
-  itemDescription: string;
+  // Item code (`XX/PARTNUMBER`) -- supplierId is picked from the supplier
+  // dropdown (never free-typed), partNumber is free-typed. No cost field
+  // anywhere on this page: sales never sees cost.
+  supplierId: string;
+  partNumber: string;
   quantity: string;
   unitPrice: string;
   taxRate: string;
@@ -50,7 +64,8 @@ interface LineItem {
 
 const blankItem = (): LineItem => ({
   description: "",
-  itemDescription: "",
+  supplierId: "",
+  partNumber: "",
   quantity: "1",
   unitPrice: "0",
   taxRate: "0",
@@ -73,6 +88,7 @@ export default function NewCustomerInvoicePage() {
   const [customerOpen, setCustomerOpen] = useState(false);
 
   const [products, setProducts] = useState<ProductOption[]>([]);
+  const [suppliers, setSuppliers] = useState<SupplierOption[]>([]);
 
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [employeeId, setEmployeeId] = useState("");
@@ -133,6 +149,10 @@ export default function NewCustomerInvoicePage() {
     fetch("/api/products")
       .then((r) => (r.ok ? r.json() : []))
       .then((list: ProductOption[]) => setProducts(list.filter((p) => p.active)))
+      .catch(() => {});
+    fetch("/api/suppliers")
+      .then((r) => (r.ok ? r.json() : []))
+      .then((list: SupplierOption[]) => setSuppliers(Array.isArray(list) ? list.filter((s) => s.active) : []))
       .catch(() => {});
     Promise.all([
       fetch("/api/settings").then((r) => (r.ok ? r.json() : null)).catch(() => null),
@@ -269,8 +289,10 @@ export default function NewCustomerInvoicePage() {
       const next = [...prev];
       next[idx] = {
         ...next[idx],
-        description: product.name,
-        itemDescription: product.description ?? "",
+        // description is the single combined product-description-and-color
+        // field now (no separate secondary field) -- fold the catalog
+        // item's own description into it rather than silently dropping it.
+        description: product.description ? `${product.name} — ${product.description}` : product.name,
         unitPrice: product.price,
         taxRate: product.taxRate,
       };
@@ -298,7 +320,10 @@ export default function NewCustomerInvoicePage() {
     if (data.items?.length) {
       const fresh: LineItem[] = data.items.map((i) => ({
         ...i,
-        itemDescription: "",
+        // The extractor has no way to know the supplier/part number split --
+        // sales still has to pick those manually for each extracted line.
+        supplierId: "",
+        partNumber: "",
         taxRate: i.taxRate || "0",
         fees: allFees.length > 0 ? [null] : [],
       }));
@@ -341,7 +366,6 @@ export default function NewCustomerInvoicePage() {
       },
       items: real.map((i) => ({
         description: i.description,
-        itemDescription: i.itemDescription,
         quantity: i.quantity,
         unitPrice: i.unitPrice,
         taxRate: i.taxRate,
@@ -364,6 +388,11 @@ export default function NewCustomerInvoicePage() {
     const real = items.filter((i) => i.description.trim() !== "");
     if (real.length === 0) {
       setError("Add at least one line item");
+      return;
+    }
+    const missingCode = real.find((i) => !i.supplierId || !i.partNumber.trim());
+    if (missingCode) {
+      setError(`"${missingCode.description}" is missing a supplier or part number.`);
       return;
     }
     setSaving(action);
@@ -556,18 +585,33 @@ export default function NewCustomerInvoicePage() {
                     <Fragment key={`item-${idx}`}>
                       <tr className="border-b last:border-b-0 hover:bg-gray-50/50">
                         <td className="px-2 py-1 relative">
+                          {/* Item code: XX/PARTNUMBER -- supplier is picked
+                              from a dropdown (never free-typed), part number
+                              is free-typed. */}
+                          <div className="flex gap-1">
+                            <select
+                              className="w-24 shrink-0 px-1.5 py-1 border-0 focus:outline-none focus:bg-brand-50 rounded text-xs text-gray-600 bg-transparent"
+                              value={item.supplierId}
+                              onChange={(e) => updateItem(idx, "supplierId", e.target.value)}
+                            >
+                              <option value="">Supplier…</option>
+                              {suppliers.map((s) => (
+                                <option key={s.id} value={s.id}>{s.code ?? "??"} — {s.name}</option>
+                              ))}
+                            </select>
+                            <input
+                              className="flex-1 min-w-0 px-2 py-1 border-0 focus:outline-none focus:bg-brand-50 rounded text-xs text-gray-600"
+                              placeholder="Part number"
+                              value={item.partNumber}
+                              onChange={(e) => updateItem(idx, "partNumber", e.target.value)}
+                            />
+                          </div>
                           <ProductAutocomplete
                             className="w-full px-2 py-1.5 border-0 focus:outline-none focus:bg-brand-50 rounded text-sm"
                             products={products}
                             value={item.description}
                             onChange={(v) => updateItem(idx, "description", v)}
                             onSelect={(product) => applyProduct(idx, product)}
-                          />
-                          <input
-                            className="w-full px-2 py-1 border-0 focus:outline-none focus:bg-brand-50 rounded text-xs text-gray-500"
-                            placeholder="Description (optional)"
-                            value={item.itemDescription}
-                            onChange={(e) => updateItem(idx, "itemDescription", e.target.value)}
                           />
                         </td>
                         <td className="px-2 py-1">
