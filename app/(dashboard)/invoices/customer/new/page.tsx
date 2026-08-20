@@ -364,13 +364,19 @@ export default function NewCustomerInvoicePage() {
         emergencyContactName: customer?.emergencyContactName ?? null,
         emergencyContactPhone: customer?.emergencyContactPhone ?? null,
       },
-      items: real.map((i) => ({
-        description: i.description,
-        quantity: i.quantity,
-        unitPrice: i.unitPrice,
-        taxRate: i.taxRate,
-        lineTotal: new Decimal(i.quantity || "0").times(i.unitPrice || "0").toFixed(2),
-      })),
+      items: real.map((i) => {
+        const supplier = suppliers.find((s) => s.id === i.supplierId);
+        const itemCode =
+          supplier?.code && i.partNumber.trim() ? `${supplier.code}/${i.partNumber.trim()}` : null;
+        return {
+          description: i.description,
+          itemCode,
+          quantity: i.quantity,
+          unitPrice: i.unitPrice,
+          taxRate: i.taxRate,
+          lineTotal: new Decimal(i.quantity || "0").times(i.unitPrice || "0").toFixed(2),
+        };
+      }),
       employee: (() => {
         const emp = employees.find((e) => e.id === employeeId);
         return emp ? { id: emp.id, name: emp.name } : null;
