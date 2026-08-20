@@ -189,6 +189,9 @@ export default function SupplierInvoiceDetailPage() {
         unitCost: i.unitCost,
         taxRate: i.taxRate,
         lineTotal: i.lineTotal,
+        // No supplier-code prefix needed here (unlike the customer invoice
+        // PDF) -- the vendor is already the page's single "VENDOR" header.
+        itemCode: i.partNumber,
       })),
       company,
       kind: "supplier",
