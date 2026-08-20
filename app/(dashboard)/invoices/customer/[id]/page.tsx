@@ -369,17 +369,37 @@ export default function CustomerInvoiceDetailPage() {
     return null;
   }
 
+  // The item's supplier code + part number (e.g. "DA/R4433") is joined here
+  // -- generateInvoicePDF has no DB access to resolve item.supplier itself,
+  // so a raw `{ ...invoice, company }` spread silently drops it (this was
+  // the bug: the code/part number showed on-screen but never on the PDF).
+  function buildPdfInvoice(company: unknown) {
+    if (!invoice) return null;
+    return {
+      ...invoice,
+      company: company as Parameters<typeof generateInvoicePDF>[0]["company"],
+      items: invoice.items.map((i) => ({
+        ...i,
+        itemCode: i.supplier?.code && i.partNumber ? `${i.supplier.code}/${i.partNumber}` : null,
+      })),
+    };
+  }
+
   async function downloadPDF() {
     if (!invoice) return;
     const company = await fetchCompany();
-    const doc = generateInvoicePDF({ ...invoice, company });
+    const pdfInvoice = buildPdfInvoice(company);
+    if (!pdfInvoice) return;
+    const doc = generateInvoicePDF(pdfInvoice);
     doc.save(`${invoice.invoiceNumber}.pdf`);
   }
 
   async function printPDF() {
     if (!invoice) return;
     const company = await fetchCompany();
-    const doc = generateInvoicePDF({ ...invoice, company });
+    const pdfInvoice = buildPdfInvoice(company);
+    if (!pdfInvoice) return;
+    const doc = generateInvoicePDF(pdfInvoice);
     const url = doc.output("bloburl");
     window.open(url, "_blank");
   }

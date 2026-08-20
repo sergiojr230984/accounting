@@ -57,6 +57,12 @@ export interface InvoicePDFData {
     unitCost?: string | number;
     taxRate: string | number;
     lineTotal: string | number;
+    // Printed item code: `SUPPLIERCODE/PARTNUMBER` for customer invoices,
+    // bare part number for supplier bills (vendor is already the page's
+    // single "VENDOR" header there, so no code prefix is needed). Callers
+    // must pre-join supplier code + part number themselves -- this module
+    // has no DB access to resolve a supplierId into a code.
+    itemCode?: string | null;
   }[];
   // Payment history — individual lines rendered inline in the totals block.
   payments?: {
@@ -273,8 +279,9 @@ export function generateInvoicePDF(invoice: InvoicePDFData): jsPDF {
   const tableStartY = Math.max(leftColBottom, metaY) + 28;
   const priceHeader = isPO ? "Cost" : "Price";
 
-  // Pre-compute per-item descriptions for use in didDrawCell
+  // Pre-compute per-item descriptions/codes for use in didDrawCell
   const itemDescs = invoice.items.map((i) => i.itemDescription?.trim() ?? "");
+  const itemCodes = invoice.items.map((i) => i.itemCode?.trim() ?? "");
 
   autoTable(doc, {
     startY: tableStartY,
@@ -310,21 +317,23 @@ export function generateInvoicePDF(invoice: InvoicePDFData): jsPDF {
     didParseCell: (data) => {
       if (data.section === "body" && data.column.index === 0) {
         const desc = itemDescs[data.row.index];
-        if (desc) {
-          // Increase minimum cell height to fit the name + description stack,
-          // and blank autoTable's own (vertically-centered) text so it
+        const code = itemCodes[data.row.index];
+        if (desc || code) {
+          // Increase minimum cell height to fit the name + code + description
+          // stack, and blank autoTable's own (vertically-centered) text so it
           // doesn't get drawn on top of the name we render in didDrawCell.
-          data.cell.styles.minCellHeight = 38;
+          data.cell.styles.minCellHeight = 24 + (code ? 13 : 0) + (desc ? 14 : 0);
           data.cell.text = [];
         }
       }
     },
     didDrawCell: (data) => {
-      // Draw the bold item name above the smaller gray description so they
-      // stack instead of both landing on the same centered line.
+      // Draw the bold item name above the smaller code/description lines so
+      // they stack instead of all landing on the same centered line.
       if (data.section !== "body" || data.column.index !== 0) return;
       const desc = itemDescs[data.row.index];
-      if (!desc) return;
+      const code = itemCodes[data.row.index];
+      if (!desc && !code) return;
       const cellX = (data.cell as unknown as { x: number }).x;
       const cellY = (data.cell as unknown as { y: number }).y;
       const cellW = (data.cell as unknown as { width: number }).width;
@@ -339,12 +348,24 @@ export function generateInvoicePDF(invoice: InvoicePDFData): jsPDF {
       const nameTopY = cellY + 16;
       doc.text(nameLines, cellX + padX, nameTopY);
 
-      doc.setFont("helvetica", "normal");
-      doc.setFontSize(8);
-      doc.setTextColor(...TEXT_MID);
-      const descLines = doc.splitTextToSize(desc, maxW);
-      const descTopY = nameTopY + (nameLines.length - 1) * 11 + 14;
-      doc.text(descLines, cellX + padX, descTopY);
+      let lineY = nameTopY + (nameLines.length - 1) * 11;
+
+      if (code) {
+        lineY += 13;
+        doc.setFont("helvetica", "normal");
+        doc.setFontSize(8);
+        doc.setTextColor(...TEXT_LIGHT);
+        doc.text(code, cellX + padX, lineY);
+      }
+
+      if (desc) {
+        lineY += 13;
+        doc.setFont("helvetica", "normal");
+        doc.setFontSize(8);
+        doc.setTextColor(...TEXT_MID);
+        const descLines = doc.splitTextToSize(desc, maxW);
+        doc.text(descLines, cellX + padX, lineY);
+      }
     },
   });
 
