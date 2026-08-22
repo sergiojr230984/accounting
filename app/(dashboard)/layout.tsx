@@ -1,30 +1,97 @@
 import { auth } from "@/lib/auth";
 import { redirect } from "next/navigation";
-import Sidebar from "@/components/Sidebar";
-import TopBar from "@/components/TopBar";
+import Providers from "@/components/Providers";
+import DashboardShell from "@/components/DashboardShell";
+import { resolveViewer } from "@/lib/viewer";
+import { prisma } from "@/lib/prisma";
+
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
+
+// The owner's one and only sign-in account is permanently treated as ADMIN
+// here, regardless of what the Settings UI shows -- this is a deliberate,
+// owner-approved policy (confirmed 2026-08), not a bug. admin@lacuevita.com
+// and admin@bizledger.com were leftover placeholder identities from this
+// app's initial build-out, are not used to sign in, and are intentionally
+// no longer listed here -- see lib/auth.ts / lib/viewer.ts / lib/init-db.ts
+// for the matching backend policy.
+const ADMIN_EMAILS = new Set([
+  "sales@lacuevitafurniture.com",
+]);
 
 export default async function DashboardLayout({
   children,
 }: {
   children: React.ReactNode;
 }) {
-  let session;
-  try {
-    session = await auth();
-  } catch {
-    redirect("/login");
-  }
-  if (!session?.user) redirect("/login");
+  const session = await auth();
+  if (!session) redirect("/login");
 
-  const role = (session.user as { role?: string }).role;
+  // resolveViewer() decodes the JWT cookie directly — immune to the NextAuth
+  // v5-beta bug where auth() returns a truthy but empty session object.
+  const viewer = await resolveViewer();
+  const su = session.user as { id?: string; email?: string; role?: string } | undefined;
+
+  // Collect the best available identity from either source
+  const userId = viewer.userId || su?.id || "";
+  const userEmail = (viewer.email || su?.email || "").toLowerCase().trim();
+
+  const sessionUser = session?.user ?? {};
+
+  // If resolveViewer already determined the full role, trust it directly
+  if (viewer.role === "ADMIN" || viewer.isAdmin) {
+    return (
+      <Providers>
+        <DashboardShell role="ADMIN" user={sessionUser}>
+          {children}
+        </DashboardShell>
+      </Providers>
+    );
+  }
+
+  if (viewer.role === "SALES") {
+    return (
+      <Providers>
+        <DashboardShell role="SALES" user={sessionUser}>
+          {children}
+        </DashboardShell>
+      </Providers>
+    );
+  }
+
+  // resolveViewer() didn't get a definitive role — fall back to DB lookup
+  let role = "MANAGER";
+  try {
+    let dbUser: { role: string; email: string } | null = null;
+
+    if (userId) {
+      dbUser = await prisma.user.findUnique({
+        where: { id: userId },
+        select: { role: true, email: true },
+      });
+    }
+    if (!dbUser && userEmail) {
+      dbUser = await prisma.user.findFirst({
+        where: { email: { equals: userEmail, mode: "insensitive" } },
+        select: { role: true, email: true },
+      });
+    }
+
+    if (dbUser) {
+      const dbEmail = dbUser.email.toLowerCase().trim();
+      role = ADMIN_EMAILS.has(dbEmail) ? "ADMIN" : (dbUser.role ?? "MANAGER");
+    } else if (userEmail && ADMIN_EMAILS.has(userEmail)) {
+      role = "ADMIN";
+    }
+  } catch {
+    if (userEmail && ADMIN_EMAILS.has(userEmail)) role = "ADMIN";
+  }
 
   return (
-    <div className="flex h-screen overflow-hidden">
-      <Sidebar role={role} />
-      <div className="flex-1 flex flex-col overflow-hidden">
-        <TopBar user={session.user ?? {}} />
-        <main className="flex-1 overflow-y-auto p-6">{children}</main>
-      </div>
-    </div>
+    <Providers>
+      <DashboardShell role={role} user={sessionUser}>
+        {children}
+      </DashboardShell>
+    </Providers>
   );
 }

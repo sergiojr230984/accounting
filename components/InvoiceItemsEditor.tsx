@@ -1,15 +1,18 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import {
   useFieldArray,
   useWatch,
   type Control,
   type UseFormRegister,
+  type UseFormSetValue,
   type FieldValues,
   type Path,
 } from "react-hook-form";
 import { Plus, Trash2 } from "lucide-react";
 import Decimal from "decimal.js";
+import ProductAutocomplete, { type ProductOption } from "./ProductAutocomplete";
 
 interface ItemRow {
   description: string;
@@ -18,6 +21,27 @@ interface ItemRow {
   unitPrice?: string;
   unitCost?: string;
   taxRate: string;
+  supplierId?: string;
+  partNumber?: string;
+}
+
+interface FeeOption {
+  id: string;
+  label: string;
+  rate: number;
+}
+
+interface SupplierCodeOption {
+  id: string;
+  name: string;
+  code: string | null;
+}
+
+interface AppliedFee {
+  id: string;
+  label: string;
+  rate: number;
+  amount: string;
 }
 
 interface InvoiceItemsEditorProps<T extends FieldValues> {
@@ -27,6 +51,31 @@ interface InvoiceItemsEditorProps<T extends FieldValues> {
   register: UseFormRegister<T> | any;
   fieldName?: string;
   type: "customer" | "supplier";
+  // Needed to auto-fill price/tax when a catalog product is picked (customer type only)
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  setValue?: UseFormSetValue<T> | any;
+  // Optional per-line fees (credit card fee / custom fees from Settings).
+  // Only rendered when provided and non-empty.
+  feeOptions?: FeeOption[];
+  // Fee ids previously applied to the invoice as a whole — seeded onto the
+  // first line item the first time fee options become available, since
+  // fees aren't tracked per-line in the database.
+  initialAppliedFeeIds?: string[];
+  onFeesChange?: (fees: AppliedFee[]) => void;
+  // Number of leading rows (by original load order) that already existed
+  // when a payment was recorded against this invoice/bill. The server
+  // rejects any change to those rows once money has changed hands, so they
+  // render locked here too rather than letting the user fill out edits
+  // that will bounce back as a 409 on save. Rows beyond this count are new
+  // additions and stay fully editable.
+  lockedCount?: number;
+  // Opt-in, customer-invoice-only: replaces the secondary "Description
+  // (optional)" input with the item-code fields (supplier dropdown + free-
+  // typed part number, printed as `XX/PARTNUMBER`). Defaults to false so
+  // every other existing caller (estimates, supplier bills) is unaffected
+  // -- only app/(dashboard)/invoices/customer/[id]/page.tsx passes true.
+  showItemCode?: boolean;
+  supplierOptions?: SupplierCodeOption[];
 }
 
 function LinePreview({ quantity, price, taxRate }: { quantity: string; price: string; taxRate: string }) {
@@ -53,6 +102,13 @@ export default function InvoiceItemsEditor<T extends FieldValues = any>({
   register,
   fieldName = "items",
   type,
+  feeOptions = [],
+  initialAppliedFeeIds = [],
+  onFeesChange,
+  lockedCount = 0,
+  setValue,
+  showItemCode = false,
+  supplierOptions = [],
 }: InvoiceItemsEditorProps<T>) {
   const { fields, append, remove } = useFieldArray({ control, name: fieldName as Path<T> as never });
   const items = useWatch({ control, name: fieldName as Path<T> as never }) as unknown as ItemRow[];
@@ -60,21 +116,142 @@ export default function InvoiceItemsEditor<T extends FieldValues = any>({
   const priceField = type === "customer" ? "unitPrice" : "unitCost";
   const priceLabel = type === "customer" ? "Unit Price" : "Unit Cost";
 
+  const [products, setProducts] = useState<ProductOption[]>([]);
+  useEffect(() => {
+    if (type !== "customer") return;
+    fetch("/api/products")
+      .then((r) => (r.ok ? r.json() : []))
+      .then(setProducts)
+      .catch(() => {});
+  }, [type]);
+
+  const [taxRates, setTaxRates] = useState<{ id: string; name: string; rate: string; active: boolean }[]>([]);
+  useEffect(() => {
+    fetch("/api/settings/taxes")
+      .then((r) => (r.ok ? r.json() : []))
+      .then((list: { id: string; name: string; rate: string; active: boolean }[]) =>
+        setTaxRates(list.filter((t) => t.active))
+      )
+      .catch(() => {});
+  }, []);
+
+  // Per-line fee selections, kept positionally in sync with `fields`.
+  const [itemFeeSlots, setItemFeeSlots] = useState<(string | null)[][]>([]);
+  const [feesSeeded, setFeesSeeded] = useState(false);
+
+  // Seed previously-applied fees onto the first line the first time fee
+  // options are available (fees aren't tracked per-line in the database).
+  useEffect(() => {
+    if (feesSeeded || feeOptions.length === 0 || fields.length === 0) return;
+    if (initialAppliedFeeIds.length > 0) {
+      setItemFeeSlots((prev) => {
+        const next = fields.map((_, i) => prev[i] ?? []);
+        next[0] = [...initialAppliedFeeIds, null];
+        return next;
+      });
+    }
+    setFeesSeeded(true);
+  }, [feeOptions.length, fields.length, feesSeeded, initialAppliedFeeIds]);
+
+  // Keep itemFeeSlots positionally aligned with the items field array.
+  useEffect(() => {
+    setItemFeeSlots((prev) => {
+      if (prev.length === fields.length) return prev;
+      const next = fields.map((_, i) => prev[i] ?? []);
+      return next;
+    });
+  }, [fields.length]);
+
+  function selectLineFee(itemIdx: number, slotIdx: number, feeId: string | null) {
+    setItemFeeSlots((prev) => {
+      const next = [...prev];
+      const slots = next[itemIdx] && next[itemIdx].length > 0 ? [...next[itemIdx]] : [null];
+      slots[slotIdx] = feeId;
+      if (feeId && slotIdx === slots.length - 1) slots.push(null);
+      next[itemIdx] = slots;
+      return next;
+    });
+  }
+
+  function removeLineFee(itemIdx: number, slotIdx: number) {
+    setItemFeeSlots((prev) => {
+      const next = [...prev];
+      const filtered = (next[itemIdx] ?? []).filter((_, i) => i !== slotIdx);
+      next[itemIdx] = filtered;
+      return next;
+    });
+  }
+
+  // Aggregate all per-line fee selections into totals and report them up.
+  useEffect(() => {
+    if (!onFeesChange) return;
+    // Kept as full-precision Decimals while accumulating -- rounding each
+    // line's contribution to cents before adding it to the running total
+    // (as opposed to rounding once at the end) compounds upward across
+    // several lines and can push the reported amount a cent above the
+    // server's cap (feeBase * rate), which is computed from the unrounded
+    // subtotal and rejects the invoice as "exceeds what its configured
+    // rate allows" even though the true fee is within the ceiling.
+    const feeAgg = new Map<string, { id: string; label: string; rate: number; amount: Decimal }>();
+    (items ?? []).forEach((item, idx) => {
+      let lineTotal = new Decimal(0);
+      try {
+        const price = (item as unknown as Record<string, string>)[priceField] ?? "0";
+        lineTotal = new Decimal(item.quantity || "0").times(price || "0");
+      } catch {
+        // ignore unparsable rows while the user is still typing
+      }
+      // Card fee (and other configured fees) apply to the pre-tax line
+      // amount only, matching the accounting system of record -- not to
+      // price + tax.
+      const base = lineTotal;
+      for (const feeId of itemFeeSlots[idx] ?? []) {
+        if (!feeId) continue;
+        const opt = feeOptions.find((f) => f.id === feeId);
+        if (!opt) continue;
+        let amt = new Decimal(0);
+        try {
+          amt = base.times(opt.rate);
+        } catch {
+          // ignore
+        }
+        const cur = feeAgg.get(feeId);
+        if (cur) {
+          cur.amount = cur.amount.plus(amt);
+        } else {
+          feeAgg.set(feeId, { id: opt.id, label: opt.label, rate: opt.rate, amount: amt });
+        }
+      }
+    });
+    onFeesChange(
+      Array.from(feeAgg.values()).map((f) => ({ ...f, amount: f.amount.toFixed(2) }))
+    );
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [items, itemFeeSlots, feeOptions]);
+
   return (
     <div>
       <div className="flex items-center justify-between mb-3">
-        <h3 className="text-sm font-semibold text-gray-700">Line Items</h3>
+        <div>
+          <h3 className="text-sm font-semibold text-gray-700">Line Items</h3>
+          {lockedCount > 0 && (
+            <p className="text-xs text-gray-400 mt-0.5">
+              A payment has been recorded — existing items are locked, but you can still add new ones.
+            </p>
+          )}
+        </div>
         <button
           type="button"
-          onClick={() =>
+          onClick={() => {
             append({
               description: "",
-              itemDescription: "",
+              ...(showItemCode ? { supplierId: "", partNumber: "" } : { itemDescription: "" }),
               quantity: "1",
               [priceField]: "0",
               taxRate: "0",
-            } as never)
-          }
+            } as never);
+            setItemFeeSlots((prev) => [...prev, []]);
+          }}
           className="btn-secondary text-xs py-1.5"
         >
           <Plus className="w-3.5 h-3.5" />
@@ -83,85 +260,260 @@ export default function InvoiceItemsEditor<T extends FieldValues = any>({
       </div>
 
       <div className="space-y-2">
-        {fields.map((field, index) => (
-          <div key={field.id} className="grid grid-cols-12 gap-2 items-start bg-gray-50 rounded-lg p-2">
-            {/* Item name */}
-            <div className="col-span-3">
-              <input
-                className="input text-sm"
-                placeholder="Item name"
-                {...register(`${fieldName}.${index}.description` as Path<T>)}
-              />
+        {fields.map((field, index) => {
+          const feeSlots = feeOptions.length > 0
+            ? (itemFeeSlots[index] && itemFeeSlots[index].length > 0 ? itemFeeSlots[index] : [null])
+            : [];
+          const usedFeeIds = feeSlots.filter((fid): fid is string => fid !== null);
+          const locked = index < lockedCount;
+
+          return (
+            // Keyed on position, not `field.id` -- react-hook-form regenerates
+            // a fieldArray row's internal id whenever a field inside it is
+            // written with `setValue` (as the ProductAutocomplete below does)
+            // rather than the fieldArray's own update/replace. Keying on that
+            // id then made React treat the row as a brand-new element on the
+            // very first keystroke, unmounting and remounting it -- which
+            // dropped focus and silently ate every keystroke after the first
+            // in the item-name field.
+            <div key={index} className={`rounded-lg p-2 space-y-1 ${locked ? "bg-gray-100" : "bg-gray-50"}`}>
+              {/* Carries the existing row's database id through submission so
+                  the server can tell an unchanged existing line apart from a
+                  newly-added one once a payment has been recorded. */}
+              <input type="hidden" {...register(`${fieldName}.${index}.id` as Path<T>)} />
+              <div className="grid grid-cols-12 gap-2 items-start">
+                {/* Item name — col 0-2 */}
+                <div className="col-span-3">
+                  {type === "customer" ? (
+                    <ProductAutocomplete
+                      className="input text-sm"
+                      products={products}
+                      value={items?.[index]?.description ?? ""}
+                      disabled={locked}
+                      onChange={(v) => {
+                        if (!setValue) return;
+                        setValue(`${fieldName}.${index}.description` as Path<T>, v as never, { shouldDirty: true });
+                      }}
+                      onSelect={(product) => {
+                        if (!setValue) return;
+                        // showItemCode mode has no secondary description
+                        // field to put the catalog item's own description
+                        // into (description is the single combined
+                        // product-description-and-color field there) --
+                        // fold it into the description itself instead of
+                        // silently dropping it.
+                        const name = showItemCode && product.description
+                          ? `${product.name} — ${product.description}`
+                          : product.name;
+                        setValue(`${fieldName}.${index}.description` as Path<T>, name as never, { shouldDirty: true });
+                        if (!showItemCode) {
+                          setValue(
+                            `${fieldName}.${index}.itemDescription` as Path<T>,
+                            (product.description ?? "") as never,
+                            { shouldDirty: true }
+                          );
+                        }
+                        setValue(`${fieldName}.${index}.unitPrice` as Path<T>, product.price as never, { shouldDirty: true });
+                        setValue(`${fieldName}.${index}.taxRate` as Path<T>, product.taxRate as never, { shouldDirty: true });
+                      }}
+                    />
+                  ) : (
+                    <input
+                      className="input text-sm"
+                      placeholder="Item name"
+                      disabled={locked}
+                      {...register(`${fieldName}.${index}.description` as Path<T>)}
+                    />
+                  )}
+                </div>
+                {/* Item description, OR (customer invoices only) item code
+                    -- col 3-5 */}
+                <div className="col-span-3">
+                  {showItemCode ? (
+                    <div className="flex gap-1">
+                      <select
+                        className="input text-sm w-24 shrink-0 px-1.5"
+                        disabled={locked}
+                        {...register(`${fieldName}.${index}.supplierId` as Path<T>)}
+                      >
+                        <option value="">Supplier…</option>
+                        {supplierOptions.map((s) => (
+                          <option key={s.id} value={s.id}>{s.code ?? "??"} — {s.name}</option>
+                        ))}
+                      </select>
+                      <input
+                        className="input text-sm flex-1 min-w-0"
+                        placeholder="Part number"
+                        disabled={locked}
+                        {...register(`${fieldName}.${index}.partNumber` as Path<T>)}
+                      />
+                    </div>
+                  ) : (
+                    <input
+                      className="input text-sm text-gray-600"
+                      placeholder="Description (optional)"
+                      disabled={locked}
+                      {...register(`${fieldName}.${index}.itemDescription` as Path<T>)}
+                    />
+                  )}
+                </div>
+                {/* Qty */}
+                <div className="col-span-1">
+                  <input
+                    className="input text-sm"
+                    placeholder="Qty"
+                    type="number"
+                    step="0.0001"
+                    min="0"
+                    disabled={locked}
+                    {...register(`${fieldName}.${index}.quantity` as Path<T>)}
+                  />
+                </div>
+                {/* Price */}
+                <div className="col-span-2">
+                  <input
+                    className="input text-sm"
+                    placeholder={priceLabel}
+                    type="number"
+                    step="0.01"
+                    min="0"
+                    disabled={locked}
+                    {...register(`${fieldName}.${index}.${priceField}` as Path<T>)}
+                  />
+                </div>
+                {/* Tax rate */}
+                <div className="col-span-1">
+                  {taxRates.length > 0 ? (
+                    <select
+                      className="input text-sm"
+                      disabled={locked}
+                      {...register(`${fieldName}.${index}.taxRate` as Path<T>)}
+                    >
+                      <option value="0">No tax</option>
+                      {taxRates.map((t) => (
+                        <option key={t.id} value={t.rate}>
+                          {t.name} ({(parseFloat(t.rate) * 100).toFixed(2)}%)
+                        </option>
+                      ))}
+                      {(() => {
+                        const currentRate = items?.[index]?.taxRate;
+                        if (
+                          currentRate &&
+                          parseFloat(currentRate) !== 0 &&
+                          !taxRates.some((t) => parseFloat(t.rate) === parseFloat(currentRate))
+                        ) {
+                          return (
+                            <option value={currentRate}>
+                              Custom ({(parseFloat(currentRate) * 100).toFixed(2)}%)
+                            </option>
+                          );
+                        }
+                        return null;
+                      })()}
+                    </select>
+                  ) : (
+                    <input
+                      className="input text-sm"
+                      placeholder="Tax"
+                      type="number"
+                      step="0.001"
+                      min="0"
+                      max="1"
+                      disabled={locked}
+                      {...register(`${fieldName}.${index}.taxRate` as Path<T>)}
+                    />
+                  )}
+                </div>
+                {/* Line total */}
+                <div className="col-span-1 text-right pt-2">
+                  <LinePreview
+                    quantity={items?.[index]?.quantity ?? "0"}
+                    price={(items?.[index] as unknown as Record<string, string>)?.[priceField] ?? "0"}
+                    taxRate={items?.[index]?.taxRate ?? "0"}
+                  />
+                </div>
+                {/* Delete */}
+                <div className="col-span-1 flex justify-end pt-1">
+                  {fields.length > 1 && !locked && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        remove(index);
+                        setItemFeeSlots((prev) => prev.filter((_, i) => i !== index));
+                      }}
+                      className="p-1 text-red-400 hover:text-red-600"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              {/* Per-line fees */}
+              {feeSlots.map((feeId, slotIdx) => {
+                const opt = feeId ? feeOptions.find((f) => f.id === feeId) : null;
+                let amt: Decimal | null = null;
+                if (opt) {
+                  try {
+                    const price = (items?.[index] as unknown as Record<string, string>)?.[priceField] ?? "0";
+                    const lineTotal = new Decimal(items?.[index]?.quantity || "0").times(price || "0");
+                    // Card fee (and other configured fees) apply to the pre-tax
+                    // line amount only, matching the accounting system of record.
+                    amt = lineTotal.times(opt.rate);
+                  } catch {
+                    amt = new Decimal(0);
+                  }
+                }
+                const isLast = slotIdx === feeSlots.length - 1;
+                return (
+                  <div key={slotIdx} className="grid grid-cols-12 gap-2 items-center pl-4">
+                    <div className="col-span-1 text-right text-xs uppercase tracking-wide text-gray-400 font-medium">
+                      Fee
+                    </div>
+                    <div className="col-span-6">
+                      <select
+                        className="input text-sm"
+                        value={feeId ?? ""}
+                        onChange={(e) => selectLineFee(index, slotIdx, e.target.value || null)}
+                      >
+                        <option value="">Select a fee</option>
+                        {feeOptions
+                          .filter((f) => f.id === feeId || !usedFeeIds.includes(f.id))
+                          .map((f) => (
+                            <option key={f.id} value={f.id}>
+                              {f.label} ({(f.rate * 100).toFixed(2)}%)
+                            </option>
+                          ))}
+                      </select>
+                    </div>
+                    <div className="col-span-2 text-right text-sm font-medium text-gray-700">
+                      {amt !== null ? `$${amt.toFixed(2)}` : <span className="text-gray-300">—</span>}
+                    </div>
+                    <div className="col-span-1 flex justify-end">
+                      {(feeId || !isLast) && (
+                        <button
+                          type="button"
+                          onClick={() => removeLineFee(index, slotIdx)}
+                          className="p-1 text-gray-300 hover:text-red-500"
+                          aria-label="Remove fee"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
             </div>
-            {/* Item description */}
-            <div className="col-span-3">
-              <input
-                className="input text-sm text-gray-600"
-                placeholder="Description (optional)"
-                {...register(`${fieldName}.${index}.itemDescription` as Path<T>)}
-              />
-            </div>
-            {/* Qty */}
-            <div className="col-span-1">
-              <input
-                className="input text-sm"
-                placeholder="Qty"
-                type="number"
-                step="0.0001"
-                min="0"
-                {...register(`${fieldName}.${index}.quantity` as Path<T>)}
-              />
-            </div>
-            {/* Price */}
-            <div className="col-span-2">
-              <input
-                className="input text-sm"
-                placeholder={priceLabel}
-                type="number"
-                step="0.01"
-                min="0"
-                {...register(`${fieldName}.${index}.${priceField}` as Path<T>)}
-              />
-            </div>
-            {/* Tax rate */}
-            <div className="col-span-1">
-              <input
-                className="input text-sm"
-                placeholder="Tax"
-                type="number"
-                step="0.001"
-                min="0"
-                max="1"
-                {...register(`${fieldName}.${index}.taxRate` as Path<T>)}
-              />
-            </div>
-            {/* Line total */}
-            <div className="col-span-1 text-right pt-2">
-              <LinePreview
-                quantity={items?.[index]?.quantity ?? "0"}
-                price={(items?.[index] as unknown as Record<string, string>)?.[priceField] ?? "0"}
-                taxRate={items?.[index]?.taxRate ?? "0"}
-              />
-            </div>
-            {/* Delete */}
-            <div className="col-span-1 flex justify-end pt-1">
-              {fields.length > 1 && (
-                <button
-                  type="button"
-                  onClick={() => remove(index)}
-                  className="p-1 text-red-400 hover:text-red-600"
-                >
-                  <Trash2 className="w-4 h-4" />
-                </button>
-              )}
-            </div>
-          </div>
-        ))}
+          );
+        })}
       </div>
 
       <div className="mt-2 grid grid-cols-12 gap-2">
         <div className="col-span-10 text-right text-xs text-gray-500 pr-2">
-          <span className="uppercase tracking-wide">Name · Description · Qty · {priceLabel} · Tax · Total</span>
+          <span className="uppercase tracking-wide">
+            Name · {showItemCode ? "Item Code" : "Description"} · Qty · {priceLabel} · Tax · Total
+          </span>
         </div>
       </div>
     </div>

@@ -2,17 +2,19 @@
 
 import { useEffect, useState, useCallback } from "react";
 import { useParams, useRouter } from "next/navigation";
-import { useForm } from "react-hook-form";
+import { useForm, Controller } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import Link from "next/link";
-import { ArrowLeft, Edit2, Save, X, Trash2, Loader2, Send, Copy, Check, Printer, Plus, Eye } from "lucide-react";
+import { ArrowLeft, Edit2, Save, X, Trash2, Loader2, Send, Copy, Check, Printer, Plus, Pencil } from "lucide-react";
 import { generateInvoicePDF } from "@/lib/invoice-pdf";
 import { format } from "date-fns";
 import PaymentBadge from "@/components/PaymentBadge";
 import FileUpload from "@/components/FileUpload";
 import InvoiceItemsEditor from "@/components/InvoiceItemsEditor";
 import InvoiceDocumentPreview from "@/components/InvoiceDocumentPreview";
+import CustomerCreateModal from "@/components/CustomerCreateModal";
+import AddressAutocomplete from "@/components/AddressAutocomplete";
 import { formatCurrency } from "@/lib/money";
 import { formatDateOnly } from "@/lib/date";
 import Decimal from "decimal.js";
@@ -27,13 +29,20 @@ const editSchema = z.object({
   employeeId: z.string().default(""),
   commissionRate: z.string().default("0"),
   notes: z.string().optional(),
+  customerAddress: z.string().optional(),
   items: z.array(
     z.object({
+      id: z.string().optional(),
       description: z.string().min(1),
       itemDescription: z.string().optional(),
       quantity: z.string(),
       unitPrice: z.string(),
       taxRate: z.string().default("0"),
+      // Deliberately optional -- see the matching schema comment in
+      // app/api/invoices/customer/[id]/route.ts (legacy lines predating
+      // this feature have neither).
+      supplierId: z.string().optional(),
+      partNumber: z.string().optional(),
     })
   ),
 });
@@ -59,12 +68,26 @@ interface InvoiceDetail {
   employee: { id: string; name: string } | null;
   appliedFees: { id?: string; label: string; rate?: number; amount: string }[];
   customer: { id: string; name: string; email: string | null; phone: string | null; address: string | null; emergencyContactName: string | null; emergencyContactPhone: string | null };
-  items: { id: string; description: string; itemDescription: string | null; quantity: string; unitPrice: string; taxRate: string; lineTotal: string }[];
+  items: {
+    id: string;
+    description: string;
+    itemDescription: string | null;
+    quantity: string;
+    unitPrice: string;
+    taxRate: string;
+    lineTotal: string;
+    partNumber: string | null;
+    actualCost: string | null;
+    supplier: { id: string; name: string; code: string | null; isHouse: boolean } | null;
+    purchaseRequest: { status: "PENDING" | "FULFILLED" } | null;
+  }[];
   payments: { id: string; amount: string; paymentDate: string; notes: string | null }[];
   files: { id: string; originalName: string; mimeType: string }[];
 }
 
 interface EmployeeOpt { id: string; name: string; commissionRate: string }
+interface FeeOption { id: string; label: string; rate: number }
+interface SupplierCodeOpt { id: string; name: string; code: string | null; active: boolean }
 
 export default function CustomerInvoiceDetailPage() {
   const { id } = useParams() as { id: string };
@@ -79,31 +102,41 @@ export default function CustomerInvoiceDetailPage() {
   const [sendMessage, setSendMessage] = useState<{ kind: "success" | "error"; text: string } | null>(null);
   const [linkCopied, setLinkCopied] = useState(false);
   const [employees, setEmployees] = useState<EmployeeOpt[]>([]);
+  const [customerModalOpen, setCustomerModalOpen] = useState(false);
 
+  // Record new payment
   const [showPaymentForm, setShowPaymentForm] = useState(false);
   const [paymentForm, setPaymentForm] = useState({ amount: "", paymentDate: new Date().toISOString().split("T")[0], notes: "" });
   const [paymentSubmitting, setPaymentSubmitting] = useState(false);
   const [paymentError, setPaymentError] = useState("");
 
+  // Edit existing payment
   const [editingPaymentId, setEditingPaymentId] = useState<string | null>(null);
   const [editPaymentForm, setEditPaymentForm] = useState({ amount: "", paymentDate: "", notes: "" });
   const [editPaymentSubmitting, setEditPaymentSubmitting] = useState(false);
   const [editPaymentError, setEditPaymentError] = useState("");
 
+  // Remove payment
   const [deletingPaymentId, setDeletingPaymentId] = useState<string | null>(null);
   const [confirmDeletePaymentId, setConfirmDeletePaymentId] = useState<string | null>(null);
-
-  const [showPreview, setShowPreview] = useState(false);
-  const [previewUrl, setPreviewUrl] = useState("");
-  const [previewing, setPreviewing] = useState(false);
 
   const [userRole, setUserRole] = useState<string | null>(null);
   const canSeeCommission = userRole === "ADMIN" || userRole === "MANAGER";
 
-  const { register, handleSubmit, control, reset, getValues, setValue, watch, formState: { errors } } = useForm<EditForm>({
+  // Fees (credit card fee + custom fees from Settings) — selected per line
+  // item inside InvoiceItemsEditor; this page just tracks the aggregated
+  // result for submission and for the live preview.
+  const [feeOptions, setFeeOptions] = useState<FeeOption[]>([]);
+  const [computedAppliedFees, setComputedAppliedFees] = useState<
+    { id: string; label: string; rate: number; amount: string }[]
+  >([]);
+  const [suppliers, setSuppliers] = useState<SupplierCodeOpt[]>([]);
+
+  const { register, handleSubmit, control, reset, setValue, watch, formState: { errors } } = useForm<EditForm>({
     resolver: zodResolver(editSchema),
   });
 
+  // Watch paidAmount and downPayment to auto-derive paymentStatus in real-time
   const watchedPaid = watch("paidAmount");
   const watchedDown = watch("downPayment");
   const watchedItems = watch("items");
@@ -112,6 +145,7 @@ export default function CustomerInvoiceDetailPage() {
   const watchedDueDate = watch("dueDate");
   const watchedNotes = watch("notes");
   const watchedPaymentStatus = watch("paymentStatus");
+  const watchedCustomerAddress = watch("customerAddress");
 
   const load = useCallback(async () => {
     const res = await fetch(`/api/invoices/customer/${id}`);
@@ -128,12 +162,16 @@ export default function CustomerInvoiceDetailPage() {
       employeeId: data.employeeId ?? "",
       commissionRate: data.commissionRate ?? "0",
       notes: data.notes ?? "",
+      customerAddress: data.customer.address ?? "",
       items: data.items.map((item: InvoiceDetail["items"][0]) => ({
+        id: item.id,
         description: item.description,
         itemDescription: item.itemDescription ?? "",
         quantity: item.quantity,
         unitPrice: item.unitPrice,
         taxRate: item.taxRate,
+        supplierId: item.supplier?.id ?? "",
+        partNumber: item.partNumber ?? "",
       })),
     });
   }, [id, reset, router]);
@@ -147,12 +185,29 @@ export default function CustomerInvoiceDetailPage() {
         setEmployees(list.filter((e) => e.active).map((e) => ({ id: e.id, name: e.name, commissionRate: e.commissionRate })))
       )
       .catch(() => {});
-    fetch("/api/auth/session")
+    fetch("/api/me")
       .then((r) => (r.ok ? r.json() : null))
-      .then((s: { user?: { role?: string } } | null) => setUserRole(s?.user?.role ?? null))
+      .then((d: { viewer?: { role?: string } } | null) => setUserRole(d?.viewer?.role ?? null))
+      .catch(() => {});
+    fetch("/api/settings")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((p: { creditCardFeeRate?: string; customFees?: { id: string; label: string; rate: number }[] } | null) => {
+        if (!p) return;
+        const options: FeeOption[] = [];
+        if (Number(p.creditCardFeeRate) > 0) {
+          options.push({ id: "__cc__", label: "CARD FEE", rate: Number(p.creditCardFeeRate) });
+        }
+        if (Array.isArray(p.customFees)) options.push(...p.customFees);
+        setFeeOptions(options);
+      })
+      .catch(() => {});
+    fetch("/api/suppliers")
+      .then((r) => (r.ok ? r.json() : []))
+      .then((list: SupplierCodeOpt[]) => setSuppliers(Array.isArray(list) ? list.filter((s) => s.active) : []))
       .catch(() => {});
   }, []);
 
+  // Auto-update paymentStatus when paidAmount or downPayment changes in edit mode
   useEffect(() => {
     if (!editing || !invoice) return;
     try {
@@ -170,7 +225,7 @@ export default function CustomerInvoiceDetailPage() {
       }
       setValue("paymentStatus", status, { shouldValidate: false });
     } catch {
-      // ignore
+      // Ignore Decimal parse errors on incomplete / empty input
     }
   }, [watchedPaid, watchedDown, editing, invoice, setValue]);
 
@@ -181,7 +236,7 @@ export default function CustomerInvoiceDetailPage() {
       const res = await fetch(`/api/invoices/customer/${id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(data),
+        body: JSON.stringify({ ...data, appliedFees: computedAppliedFees }),
       });
       if (!res.ok) {
         const d = await res.json();
@@ -314,79 +369,39 @@ export default function CustomerInvoiceDetailPage() {
     return null;
   }
 
+  // The item's supplier code + part number (e.g. "DA/R4433") is joined here
+  // -- generateInvoicePDF has no DB access to resolve item.supplier itself,
+  // so a raw `{ ...invoice, company }` spread silently drops it (this was
+  // the bug: the code/part number showed on-screen but never on the PDF).
+  function buildPdfInvoice(company: unknown) {
+    if (!invoice) return null;
+    return {
+      ...invoice,
+      company: company as Parameters<typeof generateInvoicePDF>[0]["company"],
+      items: invoice.items.map((i) => ({
+        ...i,
+        itemCode: i.supplier?.code && i.partNumber ? `${i.supplier.code}/${i.partNumber}` : null,
+      })),
+    };
+  }
+
   async function downloadPDF() {
     if (!invoice) return;
     const company = await fetchCompany();
-    const doc = generateInvoicePDF({ ...invoice, company });
+    const pdfInvoice = buildPdfInvoice(company);
+    if (!pdfInvoice) return;
+    const doc = generateInvoicePDF(pdfInvoice);
     doc.save(`${invoice.invoiceNumber}.pdf`);
   }
 
   async function printPDF() {
     if (!invoice) return;
     const company = await fetchCompany();
-    const doc = generateInvoicePDF({ ...invoice, company });
+    const pdfInvoice = buildPdfInvoice(company);
+    if (!pdfInvoice) return;
+    const doc = generateInvoicePDF(pdfInvoice);
     const url = doc.output("bloburl");
     window.open(url, "_blank");
-  }
-
-  async function handlePreview() {
-    if (!invoice) return;
-    setPreviewing(true);
-    try {
-      const vals = getValues();
-      const company = await fetchCompany();
-
-      let subtotal = new Decimal(0);
-      let taxAmount = new Decimal(0);
-      const computedItems = (vals.items ?? invoice.items).map((item) => {
-        const qty = new Decimal(item.quantity || "0");
-        const price = new Decimal(item.unitPrice || "0");
-        const rate = new Decimal(item.taxRate || "0");
-        const lineTotal = qty.times(price);
-        subtotal = subtotal.plus(lineTotal);
-        taxAmount = taxAmount.plus(lineTotal.times(rate));
-        return { ...item, lineTotal: lineTotal.toFixed(2) };
-      });
-      const total = subtotal.plus(taxAmount);
-      const paid = new Decimal(vals.paidAmount || "0");
-      const down = new Decimal(vals.downPayment || "0");
-
-      const empId = vals.employeeId || (invoice.employeeId ?? "");
-      const emp = employees.find((e) => e.id === empId);
-
-      const doc = generateInvoicePDF({
-        invoiceNumber: vals.invoiceNumber || invoice.invoiceNumber,
-        invoiceDate: vals.invoiceDate || invoice.invoiceDate,
-        dueDate: vals.dueDate || invoice.dueDate,
-        subtotal: subtotal.toFixed(2),
-        taxAmount: taxAmount.toFixed(2),
-        totalAmount: total.toFixed(2),
-        paidAmount: paid.toFixed(2),
-        downPayment: down.toFixed(2),
-        creditCardFee: invoice.creditCardFee,
-        appliedFees: invoice.appliedFees,
-        notes: (vals.notes ?? invoice.notes) ?? "",
-        customer: invoice.customer,
-        items: computedItems,
-        payments: invoice.payments,
-        employee: emp ? { id: emp.id, name: emp.name } : invoice.employee,
-        company,
-      });
-
-      const blob = doc.output("blob");
-      if (previewUrl) URL.revokeObjectURL(previewUrl);
-      const url = URL.createObjectURL(blob);
-      setPreviewUrl(url);
-      setShowPreview(true);
-    } finally {
-      setPreviewing(false);
-    }
-  }
-
-  function closePreview() {
-    setShowPreview(false);
-    if (previewUrl) URL.revokeObjectURL(previewUrl);
-    setPreviewUrl("");
   }
 
   if (!invoice) {
@@ -395,34 +410,6 @@ export default function CustomerInvoiceDetailPage() {
 
   return (
     <>
-      {showPreview && (
-        <div className="fixed inset-0 z-50 flex flex-col bg-black/70 backdrop-blur-sm">
-          <div className="flex items-center justify-between px-4 py-3 bg-white border-b shadow-sm shrink-0">
-            <div className="flex items-center gap-3">
-              <Eye className="w-5 h-5 text-brand-600" />
-              <h2 className="font-semibold text-gray-800">Invoice Preview</h2>
-              <span className="text-xs text-gray-400 bg-gray-100 px-2 py-0.5 rounded-full">unsaved changes</span>
-            </div>
-            <div className="flex items-center gap-2">
-              <button onClick={closePreview} className="btn-secondary">
-                <X className="w-4 h-4" /> Close
-              </button>
-              <button
-                onClick={() => { closePreview(); handleSubmit(onSave)(); }}
-                disabled={saving}
-                className="btn-primary"
-              >
-                {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
-                Save changes
-              </button>
-            </div>
-          </div>
-          <div className="flex-1 overflow-hidden">
-            <iframe src={previewUrl} className="w-full h-full border-0" title="Invoice Preview" />
-          </div>
-        </div>
-      )}
-
       <div className="max-w-4xl mx-auto space-y-6">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-3">
@@ -481,10 +468,6 @@ export default function CustomerInvoiceDetailPage() {
                   <X className="w-4 h-4" />
                   Cancel
                 </button>
-                <button onClick={handlePreview} disabled={previewing || saving} className="btn-secondary">
-                  {previewing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Eye className="w-4 h-4" />}
-                  Preview
-                </button>
                 <button onClick={handleSubmit(onSave)} disabled={saving} className="btn-primary">
                   {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
                   Save
@@ -508,7 +491,10 @@ export default function CustomerInvoiceDetailPage() {
               {errors.paidAmount && <li>Amount paid must be a number</li>}
               {errors.downPayment && <li>Down payment must be a number</li>}
               {errors.items && (
-                <li>One or more line items are missing a description, quantity, or price.</li>
+                <li>
+                  One or more line items are missing a description, quantity, or price.
+                  Open the Line Items section and fill in every row, or remove empty rows.
+                </li>
               )}
             </ul>
           </div>
@@ -567,31 +553,55 @@ export default function CustomerInvoiceDetailPage() {
                   <label className="label">Down payment ($)</label>
                   <input type="number" step="0.01" min="0" className="input" {...register("downPayment")} />
                 </div>
+                <div>
+                  <label className="label">Sales rep</label>
+                  <select className="input" {...register("employeeId")}>
+                    <option value="">— None —</option>
+                    {employees.map((e) => (
+                      <option key={e.id} value={e.id}>{e.name}</option>
+                    ))}
+                  </select>
+                </div>
                 {canSeeCommission && (
-                  <>
-                    <div>
-                      <label className="label">Sales rep</label>
-                      <select className="input" {...register("employeeId")}>
-                        <option value="">— None —</option>
-                        {employees.map((e) => (
-                          <option key={e.id} value={e.id}>{e.name}</option>
-                        ))}
-                      </select>
-                    </div>
-                    <div>
-                      <label className="label">Commission rate (decimal)</label>
-                      <input type="number" step="0.0001" min="0" max="1" className="input" {...register("commissionRate")} />
-                    </div>
-                  </>
+                  <div>
+                    <label className="label">Commission rate (decimal)</label>
+                    <input type="number" step="0.0001" min="0" max="1" className="input" {...register("commissionRate")} />
+                  </div>
                 )}
               </div>
               <div>
                 <label className="label">Notes</label>
                 <textarea className="input" rows={2} {...register("notes")} />
               </div>
+              <div>
+                <label className="label">Customer Address</label>
+                <Controller
+                  control={control}
+                  name="customerAddress"
+                  render={({ field }) => (
+                    <AddressAutocomplete
+                      value={field.value ?? ""}
+                      onChange={field.onChange}
+                      placeholder="Street, City, State ZIP"
+                    />
+                  )}
+                />
+                <p className="text-xs text-gray-400 mt-1">Updates the customer record</p>
+              </div>
             </div>
             <div className="card">
-              <InvoiceItemsEditor control={control} register={register} type="customer" />
+              <InvoiceItemsEditor
+                control={control}
+                register={register}
+                type="customer"
+                setValue={setValue}
+                feeOptions={feeOptions}
+                initialAppliedFeeIds={invoice.appliedFees.map((f) => f.id).filter((fid): fid is string => !!fid)}
+                onFeesChange={setComputedAppliedFees}
+                lockedCount={invoice.paymentStatus !== "UNPAID" ? invoice.items.length : 0}
+                showItemCode
+                supplierOptions={suppliers}
+              />
             </div>
 
             <InvoiceDocumentPreview
@@ -603,7 +613,7 @@ export default function CustomerInvoiceDetailPage() {
               partyName={invoice.customer.name}
               partyEmail={invoice.customer.email}
               partyPhone={invoice.customer.phone}
-              partyAddress={invoice.customer.address}
+              partyAddress={watchedCustomerAddress}
               priceLabel="Unit Price"
               items={(watchedItems ?? []).map((item) => ({
                 description: item.description,
@@ -611,6 +621,7 @@ export default function CustomerInvoiceDetailPage() {
                 price: item.unitPrice,
                 taxRate: item.taxRate,
               }))}
+              fees={computedAppliedFees}
               notes={watchedNotes}
               paymentStatus={watchedPaymentStatus}
               paidAmount={watchedPaid}
@@ -634,12 +645,12 @@ export default function CustomerInvoiceDetailPage() {
                     <span className="text-gray-500">Status</span>
                     <PaymentBadge status={invoice.paymentStatus} />
                   </div>
-                  {canSeeCommission && invoice.employeeId && (
+                  {invoice.employeeId && (
                     <div className="flex justify-between pt-2 border-t">
                       <span className="text-gray-500">Sales rep</span>
                       <span className="font-medium">
                         {employees.find((e) => e.id === invoice.employeeId)?.name ?? "—"}
-                        {parseFloat(invoice.commissionRate) > 0 && (
+                        {canSeeCommission && parseFloat(invoice.commissionRate) > 0 && (
                           <span className="text-green-700 text-xs ml-2">
                             ({(parseFloat(invoice.commissionRate) * 100).toFixed(1)}% = {formatCurrency((parseFloat(invoice.totalAmount) * parseFloat(invoice.commissionRate)).toFixed(2))})
                           </span>
@@ -656,7 +667,16 @@ export default function CustomerInvoiceDetailPage() {
                 </div>
               </div>
               <div className="card space-y-3">
-                <h2 className="font-semibold text-gray-800">Customer</h2>
+                <div className="flex items-center justify-between">
+                  <h2 className="font-semibold text-gray-800">Customer</h2>
+                  <button
+                    onClick={() => setCustomerModalOpen(true)}
+                    className="p-1.5 text-gray-400 hover:text-brand-600 hover:bg-brand-50 rounded-lg transition-colors"
+                    title="Edit customer"
+                  >
+                    <Pencil className="w-3.5 h-3.5" />
+                  </button>
+                </div>
                 <div className="space-y-2 text-sm">
                   <p className="font-medium">{invoice.customer.name}</p>
                   {invoice.customer.email && <p className="text-gray-500">{invoice.customer.email}</p>}
@@ -681,16 +701,28 @@ export default function CustomerInvoiceDetailPage() {
               <table className="w-full text-sm">
                 <thead className="border-b">
                   <tr className="text-left text-gray-500">
+                    <th className="pb-2">Item Code</th>
                     <th className="pb-2">Description</th>
                     <th className="pb-2 text-right">Qty</th>
                     <th className="pb-2 text-right">Unit Price</th>
                     <th className="pb-2 text-right">Tax Rate</th>
                     <th className="pb-2 text-right">Total</th>
+                    {/* Cost is never shown to SALES -- same gate as commission below. */}
+                    {canSeeCommission && <th className="pb-2 text-right">Cost</th>}
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-50">
                   {invoice.items.map((item) => (
                     <tr key={item.id}>
+                      <td className="py-2 text-gray-500">
+                        {item.supplier?.code && item.partNumber ? (
+                          <span className={`inline-block px-1.5 py-0.5 rounded text-xs font-mono ${item.supplier.isHouse ? "bg-amber-50 text-amber-700" : "bg-gray-100 text-gray-600"}`}>
+                            {item.supplier.code}/{item.partNumber}
+                          </span>
+                        ) : (
+                          <span className="text-gray-300">—</span>
+                        )}
+                      </td>
                       <td className="py-2">
                         <div>{item.description}</div>
                         {item.itemDescription && (
@@ -701,6 +733,19 @@ export default function CustomerInvoiceDetailPage() {
                       <td className="py-2 text-right">{formatCurrency(item.unitPrice)}</td>
                       <td className="py-2 text-right">{(parseFloat(item.taxRate) * 100).toFixed(0)}%</td>
                       <td className="py-2 text-right font-medium">{formatCurrency(item.lineTotal)}</td>
+                      {canSeeCommission && (
+                        <td className="py-2 text-right">
+                          {item.supplier?.isHouse ? (
+                            <span className="text-xs text-amber-600">House</span>
+                          ) : item.actualCost !== null ? (
+                            formatCurrency(item.actualCost)
+                          ) : item.purchaseRequest ? (
+                            <span className="text-xs text-yellow-600 font-medium">Pending cost</span>
+                          ) : (
+                            <span className="text-gray-300">—</span>
+                          )}
+                        </td>
+                      )}
                     </tr>
                   ))}
                 </tbody>
@@ -728,21 +773,28 @@ export default function CustomerInvoiceDetailPage() {
                   <span>Paid</span>
                   <span>{formatCurrency(invoice.paidAmount)}</span>
                 </div>
-                <div className="flex justify-between font-semibold text-red-600">
-                  <span>Balance Due</span>
-                  <span>
-                    {formatCurrency(
-                      (
-                        parseFloat(invoice.totalAmount) -
-                        parseFloat(invoice.paidAmount) -
-                        parseFloat(invoice.downPayment)
-                      ).toFixed(2)
-                    )}
-                  </span>
-                </div>
+                {(() => {
+                  const balance = (
+                    parseFloat(invoice.totalAmount) -
+                    parseFloat(invoice.paidAmount) -
+                    parseFloat(invoice.downPayment)
+                  );
+                  // A customer who rounds up a cash payment (e.g. paying
+                  // $1001 on a $1000.70 invoice) overpays by design -- shown
+                  // as a credit owed back rather than a negative "balance
+                  // due", which would read as a data error.
+                  const overpaid = balance < 0;
+                  return (
+                    <div className={`flex justify-between font-semibold ${overpaid ? "text-green-600" : "text-red-600"}`}>
+                      <span>{overpaid ? "Credit (overpaid)" : "Balance Due"}</span>
+                      <span>{formatCurrency(Math.abs(balance).toFixed(2))}</span>
+                    </div>
+                  );
+                })()}
               </div>
             </div>
 
+            {/* Payments section */}
             <div className="card">
               <div className="flex items-center justify-between mb-4">
                 <h2 className="font-semibold text-gray-800">Payments</h2>
@@ -757,6 +809,7 @@ export default function CustomerInvoiceDetailPage() {
                 )}
               </div>
 
+              {/* New payment form */}
               {showPaymentForm && (
                 <form onSubmit={handleRecordPayment} className="mb-4 p-4 bg-blue-50 rounded-lg border border-blue-100">
                   <p className="text-xs font-semibold text-blue-700 uppercase tracking-wide mb-3">New payment</p>
@@ -799,11 +852,13 @@ export default function CustomerInvoiceDetailPage() {
                 </form>
               )}
 
+              {/* Payment list */}
               {invoice.payments.length > 0 ? (
                 <div className="divide-y divide-gray-100">
                   {invoice.payments.map((p) => (
                     <div key={p.id}>
                       {editingPaymentId === p.id ? (
+                        /* Inline edit form */
                         <form onSubmit={handleEditPayment} className="py-3 px-4 bg-amber-50 rounded-lg border border-amber-100 my-2">
                           <p className="text-xs font-semibold text-amber-700 uppercase tracking-wide mb-3">Edit payment</p>
                           <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
@@ -844,6 +899,7 @@ export default function CustomerInvoiceDetailPage() {
                           </div>
                         </form>
                       ) : (
+                        /* Display row */
                         <div className="py-3 flex items-start justify-between gap-4">
                           <div className="text-sm">
                             <span className="font-semibold text-green-700">{formatCurrency(p.amount)}</span>
@@ -899,6 +955,19 @@ export default function CustomerInvoiceDetailPage() {
           </>
         )}
       </div>
+
+      <CustomerCreateModal
+        open={customerModalOpen}
+        customer={invoice.customer}
+        onClose={() => setCustomerModalOpen(false)}
+        onSaved={(c) => {
+          setInvoice((prev) => (prev ? { ...prev, customer: { ...prev.customer, ...c } } : prev));
+          // Keep the in-progress "Edit Invoice" form's address field (if
+          // open) in sync too, so it doesn't silently overwrite this change
+          // with a stale value on save.
+          if (editing) setValue("customerAddress", c.address ?? "");
+        }}
+      />
     </>
   );
 }

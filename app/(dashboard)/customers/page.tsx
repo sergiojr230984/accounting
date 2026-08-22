@@ -1,17 +1,20 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { useForm } from "react-hook-form";
+import { Fragment, useEffect, useState } from "react";
+import { useForm, Controller } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import { Plus, Users, Loader2, Search, Pencil, Trash2, X, Check } from "lucide-react";
 import Link from "next/link";
+import AddressAutocomplete from "@/components/AddressAutocomplete";
 
 const schema = z.object({
   name: z.string().min(1, "Name is required"),
   email: z.string().email("Must be a valid email").optional().or(z.literal("")),
   phone: z.string().optional(),
   address: z.string().optional(),
+  emergencyContactName: z.string().optional(),
+  emergencyContactPhone: z.string().optional(),
 });
 type FormData = z.infer<typeof schema>;
 
@@ -21,6 +24,8 @@ interface Customer {
   email: string | null;
   phone: string | null;
   address: string | null;
+  emergencyContactName: string | null;
+  emergencyContactPhone: string | null;
   _count: { invoices: number };
 }
 
@@ -41,6 +46,7 @@ function CustomerForm({
   const {
     register,
     handleSubmit,
+    control,
     formState: { errors },
   } = useForm<FormData>({
     resolver: zodResolver(schema),
@@ -78,7 +84,21 @@ function CustomerForm({
         </div>
         <div>
           <label className="label">Address</label>
-          <input className="input" placeholder="123 Main St, City, State" {...register("address")} />
+          <Controller
+            control={control}
+            name="address"
+            render={({ field }) => (
+              <AddressAutocomplete value={field.value ?? ""} onChange={field.onChange} />
+            )}
+          />
+        </div>
+        <div>
+          <label className="label">Emergency contact name</label>
+          <input className="input" placeholder="Spouse, family member, etc." {...register("emergencyContactName")} />
+        </div>
+        <div>
+          <label className="label">Emergency contact phone</label>
+          <input className="input" placeholder="+1-555-0199" {...register("emergencyContactPhone")} />
         </div>
       </div>
 
@@ -184,7 +204,9 @@ export default function CustomersPage() {
     (c) =>
       c.name.toLowerCase().includes(search.toLowerCase()) ||
       (c.email ?? "").toLowerCase().includes(search.toLowerCase()) ||
-      (c.phone ?? "").includes(search)
+      (c.phone ?? "").includes(search) ||
+      (c.emergencyContactName ?? "").toLowerCase().includes(search.toLowerCase()) ||
+      (c.emergencyContactPhone ?? "").includes(search)
   );
 
   return (
@@ -260,8 +282,8 @@ export default function CustomersPage() {
               </tr>
             ) : (
               filtered.map((c) => (
-                <>
-                  <tr key={c.id} className="hover:bg-gray-50 transition-colors">
+                <Fragment key={c.id}>
+                  <tr className="hover:bg-gray-50 transition-colors">
                     <td className="px-5 py-3 font-medium text-gray-900">{c.name}</td>
                     <td className="px-5 py-3 text-gray-500">{c.email ?? "—"}</td>
                     <td className="px-5 py-3 text-gray-500">{c.phone ?? "—"}</td>
@@ -310,6 +332,8 @@ export default function CustomersPage() {
                             email: c.email ?? "",
                             phone: c.phone ?? "",
                             address: c.address ?? "",
+                            emergencyContactName: c.emergencyContactName ?? "",
+                            emergencyContactPhone: c.emergencyContactPhone ?? "",
                           }}
                           submitLabel="Save Changes"
                           onSave={(data) => handleEdit(c.id, data)}
@@ -327,7 +351,7 @@ export default function CustomersPage() {
                       </td>
                     </tr>
                   )}
-                </>
+                </Fragment>
               ))
             )}
           </tbody>

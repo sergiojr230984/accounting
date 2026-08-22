@@ -1,17 +1,30 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { Fragment, useEffect, useState } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import { Plus, Truck, Loader2, Search, Pencil, Trash2, X, Check } from "lucide-react";
 import Link from "next/link";
 
+const CATEGORIES = ["COGS", "SERVICES_EXPENSE", "OPERATING_EXPENSE", "OTHER"] as const;
+
 const schema = z.object({
   name: z.string().min(1, "Name is required"),
   email: z.string().email("Must be a valid email").optional().or(z.literal("")),
   phone: z.string().optional(),
   address: z.string().optional(),
+  paymentTermsDays: z.coerce.number().int().min(0).max(365).default(30),
+  defaultCategory: z.enum(CATEGORIES).optional().or(z.literal("")),
+  bankName: z.string().optional(),
+  bankAccountNumber: z.string().optional(),
+  bankRouting: z.string().optional(),
+  zelle: z.string().optional(),
+  paymentInstructions: z.string().optional(),
+  // Admin-only -- see the matching gate on app/api/suppliers/route.ts.
+  code: z.string().optional(),
+  active: z.boolean().optional(),
+  isHouse: z.boolean().optional(),
 });
 type FormData = z.infer<typeof schema>;
 
@@ -21,6 +34,16 @@ interface Supplier {
   email: string | null;
   phone: string | null;
   address: string | null;
+  paymentTermsDays: number;
+  defaultCategory: string | null;
+  bankName: string | null;
+  bankAccountNumber: string | null;
+  bankRouting: string | null;
+  zelle: string | null;
+  paymentInstructions: string | null;
+  code: string | null;
+  active: boolean;
+  isHouse: boolean;
   _count: { invoices: number };
 }
 
@@ -29,11 +52,13 @@ function SupplierForm({
   onSave,
   onCancel,
   submitLabel,
+  canManageCode,
 }: {
   defaultValues?: Partial<FormData>;
   onSave: (data: FormData) => Promise<string | null>;
   onCancel: () => void;
   submitLabel: string;
+  canManageCode: boolean;
 }) {
   const [submitting, setSubmitting] = useState(false);
   const [serverError, setServerError] = useState("");
@@ -44,7 +69,13 @@ function SupplierForm({
     formState: { errors },
   } = useForm<FormData>({
     resolver: zodResolver(schema),
-    defaultValues: defaultValues ?? {},
+    // code/active/isHouse deliberately excluded from the base defaults here
+    // -- they're only ever registered (via the `{canManageCode && ...}`
+    // block below) and passed in `defaultValues` when canManageCode is
+    // true. A MANAGER submitting this form must never send those fields at
+    // all (not even unchanged), or the API's admin-only guard on them
+    // (app/api/suppliers/route.ts) would 403 an ordinary contact-info edit.
+    defaultValues: { paymentTermsDays: 30, defaultCategory: "", ...(defaultValues ?? {}) } as FormData,
   });
 
   async function onSubmit(data: FormData) {
@@ -80,6 +111,86 @@ function SupplierForm({
           <label className="label">Address</label>
           <input className="input" placeholder="123 Main St, City, State" {...register("address")} />
         </div>
+        <div>
+          <label className="label">Payment terms (days)</label>
+          <input type="number" className="input" placeholder="30" {...register("paymentTermsDays")} />
+          <p className="text-xs text-gray-400 mt-1">e.g. 30 = Net 30. Auto-calculates due date on their invoices.</p>
+        </div>
+        <div>
+          <label className="label">Default expense category</label>
+          <select className="input" {...register("defaultCategory")}>
+            <option value="">— None —</option>
+            <option value="COGS">Cost of Goods Sold</option>
+            <option value="SERVICES_EXPENSE">Services Expense</option>
+            <option value="OPERATING_EXPENSE">Operating Expense</option>
+            <option value="OTHER">Other</option>
+          </select>
+        </div>
+      </div>
+
+      {canManageCode && (
+        <div className="mt-5 pt-4 border-t">
+          <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3">
+            Purchasing (admin only)
+          </p>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div>
+              <label className="label">Supplier code</label>
+              <input
+                className="input uppercase"
+                placeholder="TO"
+                maxLength={4}
+                {...register("code")}
+              />
+              <p className="text-xs text-gray-400 mt-1">
+                2 letters (e.g. &quot;TO&quot;) -- used to build invoice line item codes
+                (&quot;TO/PARTNUMBER&quot;). Never derived from the name -- must be unique.
+              </p>
+              {errors.code && <p className="text-red-500 text-xs mt-1">{errors.code.message}</p>}
+            </div>
+            <div className="flex flex-col justify-center gap-2 pt-5">
+              <label className="flex items-center gap-2 text-sm text-gray-700">
+                <input type="checkbox" className="rounded" {...register("active")} />
+                Active (selectable on new invoice lines)
+              </label>
+              <label className="flex items-center gap-2 text-sm text-gray-700">
+                <input type="checkbox" className="rounded" {...register("isHouse")} />
+                This is the House / in-stock entry (no external purchasing)
+              </label>
+            </div>
+          </div>
+        </div>
+      )}
+
+      <div className="mt-5 pt-4 border-t">
+        <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3">Payment details</p>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <div>
+            <label className="label">Bank name</label>
+            <input className="input" placeholder="First National Bank" {...register("bankName")} />
+          </div>
+          <div>
+            <label className="label">Account number</label>
+            <input className="input" placeholder="••••1234" {...register("bankAccountNumber")} />
+          </div>
+          <div>
+            <label className="label">Routing / ABA</label>
+            <input className="input" {...register("bankRouting")} />
+          </div>
+          <div className="sm:col-span-2">
+            <label className="label">Zelle</label>
+            <input className="input" placeholder="email or phone" {...register("zelle")} />
+          </div>
+          <div className="sm:col-span-2">
+            <label className="label">Payment instructions</label>
+            <textarea
+              className="input"
+              rows={2}
+              placeholder="Pay via Zelle to ops@acme.com, reference invoice #"
+              {...register("paymentInstructions")}
+            />
+          </div>
+        </div>
       </div>
 
       {serverError && (
@@ -110,18 +221,30 @@ export default function SuppliersPage() {
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [deleteError, setDeleteError] = useState<Record<string, string>>({});
   const [search, setSearch] = useState("");
+  const [userRole, setUserRole] = useState<string | null>(null);
+  const canManageCode = userRole === "ADMIN";
 
   async function load() {
     setLoading(true);
     try {
       const res = await fetch("/api/suppliers");
-      setSuppliers(await res.json());
+      // A non-ok response (e.g. 403 for a role that can't see supplier bank
+      // details) still has a JSON body, but it's an error object, not an
+      // array -- setting it directly used to crash the whole page the
+      // moment `suppliers.filter(...)` ran below.
+      setSuppliers(res.ok ? await res.json() : []);
     } finally {
       setLoading(false);
     }
   }
 
-  useEffect(() => { load(); }, []);
+  useEffect(() => {
+    load();
+    fetch("/api/me")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d: { viewer?: { role?: string } } | null) => setUserRole(d?.viewer?.role ?? null))
+      .catch(() => {});
+  }, []);
 
   async function parseError(res: Response, fallback: string): Promise<string> {
     try {
@@ -130,6 +253,7 @@ export default function SuppliersPage() {
         const d = JSON.parse(text);
         const msg =
           d.error?.fieldErrors?.name?.[0] ??
+          d.error?.fieldErrors?.code?.[0] ??
           (typeof d.error === "string" ? d.error : null) ??
           d.message ??
           null;
@@ -209,9 +333,11 @@ export default function SuppliersPage() {
         <div className="card border-brand-200 border-2">
           <h2 className="font-semibold text-gray-800 mb-4">New Supplier</h2>
           <SupplierForm
+            defaultValues={canManageCode ? { active: true, isHouse: false } : undefined}
             submitLabel="Add Supplier"
             onSave={handleAdd}
             onCancel={() => setShowAddForm(false)}
+            canManageCode={canManageCode}
           />
         </div>
       )}
@@ -232,10 +358,12 @@ export default function SuppliersPage() {
         <table className="w-full text-sm">
           <thead className="bg-gray-50 border-b border-gray-100">
             <tr>
+              <th className="text-left px-5 py-3 text-xs font-semibold text-gray-500 uppercase">Code</th>
               <th className="text-left px-5 py-3 text-xs font-semibold text-gray-500 uppercase">Name</th>
               <th className="text-left px-5 py-3 text-xs font-semibold text-gray-500 uppercase">Email</th>
               <th className="text-left px-5 py-3 text-xs font-semibold text-gray-500 uppercase">Phone</th>
               <th className="text-left px-5 py-3 text-xs font-semibold text-gray-500 uppercase">Address</th>
+              <th className="text-left px-5 py-3 text-xs font-semibold text-gray-500 uppercase">Zelle</th>
               <th className="text-center px-5 py-3 text-xs font-semibold text-gray-500 uppercase">Invoices</th>
               <th className="px-5 py-3" />
             </tr>
@@ -244,7 +372,7 @@ export default function SuppliersPage() {
             {loading ? (
               Array.from({ length: 4 }).map((_, i) => (
                 <tr key={i}>
-                  {Array.from({ length: 6 }).map((_, j) => (
+                  {Array.from({ length: 8 }).map((_, j) => (
                     <td key={j} className="px-5 py-3">
                       <div className="h-4 bg-gray-100 rounded animate-pulse" />
                     </td>
@@ -253,19 +381,30 @@ export default function SuppliersPage() {
               ))
             ) : filtered.length === 0 ? (
               <tr>
-                <td colSpan={6} className="px-5 py-12 text-center text-gray-400">
+                <td colSpan={8} className="px-5 py-12 text-center text-gray-400">
                   <Truck className="w-8 h-8 mx-auto mb-2 opacity-40" />
                   {search ? "No suppliers match your search" : "No suppliers yet — add your first one above"}
                 </td>
               </tr>
             ) : (
               filtered.map((s) => (
-                <>
-                  <tr key={s.id} className="hover:bg-gray-50 transition-colors">
+                <Fragment key={s.id}>
+                  <tr className={`hover:bg-gray-50 transition-colors ${!s.active ? "opacity-50" : ""}`}>
+                    <td className="px-5 py-3">
+                      {s.code ? (
+                        <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold ${s.isHouse ? "bg-amber-100 text-amber-800" : "bg-gray-100 text-gray-700"}`}>
+                          {s.code}
+                        </span>
+                      ) : (
+                        <span className="text-gray-300">—</span>
+                      )}
+                      {!s.active && <span className="ml-1.5 text-xs text-gray-400">Inactive</span>}
+                    </td>
                     <td className="px-5 py-3 font-medium text-gray-900">{s.name}</td>
                     <td className="px-5 py-3 text-gray-500">{s.email ?? "—"}</td>
                     <td className="px-5 py-3 text-gray-500">{s.phone ?? "—"}</td>
                     <td className="px-5 py-3 text-gray-500 max-w-xs truncate">{s.address ?? "—"}</td>
+                    <td className="px-5 py-3 text-gray-500">{s.zelle ?? "—"}</td>
                     <td className="px-5 py-3 text-center">
                       <Link
                         href={`/invoices/supplier?supplierId=${s.id}`}
@@ -300,7 +439,7 @@ export default function SuppliersPage() {
                   {/* Inline edit form */}
                   {editingId === s.id && (
                     <tr key={`edit-${s.id}`}>
-                      <td colSpan={6} className="px-5 py-4 bg-blue-50 border-b border-blue-100">
+                      <td colSpan={8} className="px-5 py-4 bg-blue-50 border-b border-blue-100">
                         <p className="text-xs font-semibold text-brand-700 mb-3 uppercase tracking-wide">
                           Editing: {s.name}
                         </p>
@@ -310,10 +449,19 @@ export default function SuppliersPage() {
                             email: s.email ?? "",
                             phone: s.phone ?? "",
                             address: s.address ?? "",
+                            paymentTermsDays: s.paymentTermsDays ?? 30,
+                            defaultCategory: (s.defaultCategory as FormData["defaultCategory"]) ?? "",
+                            bankName: s.bankName ?? "",
+                            bankAccountNumber: s.bankAccountNumber ?? "",
+                            bankRouting: s.bankRouting ?? "",
+                            zelle: s.zelle ?? "",
+                            paymentInstructions: s.paymentInstructions ?? "",
+                            ...(canManageCode ? { code: s.code ?? "", active: s.active, isHouse: s.isHouse } : {}),
                           }}
                           submitLabel="Save Changes"
                           onSave={(data) => handleEdit(s.id, data)}
                           onCancel={() => setEditingId(null)}
+                          canManageCode={canManageCode}
                         />
                       </td>
                     </tr>
@@ -322,12 +470,12 @@ export default function SuppliersPage() {
                   {/* Delete error */}
                   {deleteError[s.id] && (
                     <tr key={`err-${s.id}`}>
-                      <td colSpan={6} className="px-5 py-2 bg-red-50">
+                      <td colSpan={8} className="px-5 py-2 bg-red-50">
                         <p className="text-red-600 text-xs">{deleteError[s.id]}</p>
                       </td>
                     </tr>
                   )}
-                </>
+                </Fragment>
               ))
             )}
           </tbody>

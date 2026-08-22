@@ -10,6 +10,19 @@ const ALLOWED_MIME_TYPES = [
   "application/vnd.ms-excel",
 ];
 
+// Stored extension must come from this table, never from the client-supplied
+// filename -- otherwise a file with an allowed MIME type and a crafted
+// filename (e.g. "innocuous.html" sent as application/pdf) gets served back
+// with an attacker-chosen extension, and Next.js's static file server infers
+// Content-Type from that extension rather than what was validated at upload.
+const EXTENSION_BY_MIME_TYPE: Record<string, string> = {
+  "application/pdf": ".pdf",
+  "image/jpeg": ".jpg",
+  "image/png": ".png",
+  "text/csv": ".csv",
+  "application/vnd.ms-excel": ".xls",
+};
+
 const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB
 
 export function getUploadDir(): string {
@@ -36,7 +49,7 @@ export async function saveFile(
   file: File
 ): Promise<{ storedName: string; filePath: string }> {
   const dir = await ensureUploadDir();
-  const ext = path.extname(file.name);
+  const ext = EXTENSION_BY_MIME_TYPE[file.type] ?? "";
   const storedName = `${randomUUID()}${ext}`;
   const filePath = path.join(dir, storedName);
 

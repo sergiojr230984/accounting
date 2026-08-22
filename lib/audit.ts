@@ -4,17 +4,8 @@ export type AuditAction =
   | "CREATE"
   | "UPDATE"
   | "DELETE"
-  | "VOID"
-  | "LOGIN"
-  | "LOGIN_FAILED"
-  | "LOGOUT"
-  | "EXPORT"
-  | "SETTING_CHANGE"
   | "ROLE_CHANGE"
-  | "BACKUP_RUN"
-  | "BACKUP_RESTORE"
-  | "ACCESS_DENIED"
-  | "TIN_VIEW";
+  | "ACCESS_DENIED";
 
 interface AuditEntry {
   actorId?: string | null;
@@ -29,6 +20,10 @@ interface AuditEntry {
   userAgent?: string;
 }
 
+/**
+ * Best-effort write to the admin-only ledger. Never throws -- a logging
+ * failure must not take down the request it's describing.
+ */
 export async function writeAuditLog(entry: AuditEntry): Promise<void> {
   try {
     await prisma.auditLog.create({
@@ -40,13 +35,12 @@ export async function writeAuditLog(entry: AuditEntry): Promise<void> {
         entityType: entry.entityType,
         entityId: entry.entityId ?? null,
         entityLabel: entry.entityLabel,
-        changes: entry.changes ?? undefined,
+        changes: (entry.changes as object | undefined) ?? undefined,
         ipAddress: entry.ipAddress ?? "unknown",
         userAgent: entry.userAgent ?? "unknown",
       },
     });
   } catch (err) {
-    // Never let an audit failure break the main request
     console.error("[audit] Failed to write log:", err);
   }
 }
@@ -54,8 +48,8 @@ export async function writeAuditLog(entry: AuditEntry): Promise<void> {
 export function extractMeta(request: Request) {
   return {
     ipAddress:
-      request.headers.get("x-forwarded-for") ??
-      request.headers.get("x-real-ip") ??
+      request.headers.get("x-forwarded-for")?.split(",")[0].trim() ||
+      request.headers.get("x-real-ip") ||
       "unknown",
     userAgent: request.headers.get("user-agent") ?? "unknown",
   };
@@ -76,12 +70,15 @@ export function diffChanges(
   return changes;
 }
 
-export function actorFromSession(session: {
-  user?: { id?: string; name?: string | null; role?: string };
-} | null) {
+/** Accepts both a NextAuth Session and lib/api.ts's AuthedSession/guard shape. */
+export function actorFromSession(
+  session: {
+    user?: { id?: string; name?: string | null; email?: string | null; role?: string };
+  } | null
+) {
   return {
     actorId: session?.user?.id ?? null,
-    actorName: session?.user?.name ?? "unknown",
+    actorName: session?.user?.name ?? session?.user?.email ?? "unknown",
     actorRole: session?.user?.role ?? "unknown",
   };
 }

@@ -1,11 +1,14 @@
 import { NextResponse } from "next/server";
-import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { validateFile, saveFile } from "@/lib/upload";
+import { requireAuth, checkRateLimit } from "@/lib/api";
 
 export async function POST(request: Request) {
-  const session = await auth();
-  if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  const guard = await requireAuth();
+  if (guard instanceof NextResponse) return guard;
+  // Cap uploads to 30 per minute per IP.
+  const limited = checkRateLimit(request, "upload", { windowMs: 60_000, max: 30 });
+  if (limited) return limited;
 
   const formData = await request.formData();
   const file = formData.get("file") as File | null;

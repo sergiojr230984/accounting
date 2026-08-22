@@ -26,6 +26,19 @@ enum SupplierCategory {
   OTHER
 }
 
+enum EstimateStatus {
+  DRAFT
+  SENT
+  ACCEPTED
+  DECLINED
+  EXPIRED
+}
+
+enum PurchaseRequestStatus {
+  PENDING
+  FULFILLED
+}
+
 model User {
   id        String    @id @default(cuid())
   name      String
@@ -49,68 +62,140 @@ model Customer {
   createdAt             DateTime          @default(now())
   updatedAt             DateTime          @updatedAt
   invoices              CustomerInvoice[]
+  estimates             Estimate[]
 }
 
 model Supplier {
-  id                  String            @id @default(cuid())
+  id                  String                @id @default(cuid())
   name                String
   email               String?
   phone               String?
   address             String?
-  paymentTermsDays    Int               @default(30)
+  paymentTermsDays    Int                   @default(30)
   defaultCategory     SupplierCategory?
   bankName            String?
   bankAccountNumber   String?
   bankRouting         String?
   zelle               String?
   paymentInstructions String?
-  createdAt           DateTime          @default(now())
-  updatedAt           DateTime          @updatedAt
+  // Short code used to build an invoice line's printed item code
+  // (`XX/PARTNUMBER`) -- admin-assigned, not derived from the name (two
+  // suppliers can share a first-two-letters collision, e.g. "Belliza" and
+  // "Bellcraft"). Exactly 2 uppercase letters for a real supplier; the
+  // special HOUSE entry (isHouse: true) is allowed a longer code -- see the
+  // API-layer validation in app/api/suppliers/route.ts, which enforces the
+  // tighter real-supplier rule than this column's own bounds do.
+  code                String?               @unique
+  active              Boolean               @default(true)
+  // The in-stock/house-inventory entry: invoice lines coded to this
+  // supplier need nothing purchased from an external supplier, so they
+  // never generate a purchase_request (see lib/purchase-requests.ts).
+  // Exactly one such row is expected, but this isn't DB-enforced (an admin
+  // mistake here is a data-entry problem, not a constraint violation).
+  isHouse             Boolean               @default(false)
+  createdAt           DateTime              @default(now())
+  updatedAt           DateTime              @updatedAt
   invoices            SupplierInvoice[]
+  purchaseRequests    PurchaseRequest[]
+  invoiceLineItems    CustomerInvoiceItem[]
 }
 
 model CustomerInvoice {
-  id             String                @id @default(cuid())
-  invoiceNumber  String
-  customerId     String
-  customer       Customer              @relation(fields: [customerId], references: [id])
-  invoiceDate    DateTime
-  dueDate        DateTime
-  subtotal       Decimal               @db.Decimal(15, 2)
-  taxAmount      Decimal               @db.Decimal(15, 2) @default(0)
-  totalAmount    Decimal               @db.Decimal(15, 2)
-  paidAmount     Decimal               @db.Decimal(15, 2) @default(0)
-  downPayment    Decimal               @db.Decimal(15, 2) @default(0)
-  creditCardFee  Decimal               @db.Decimal(15, 2) @default(0)
-  appliedFees    Json                  @default("[]")
-  paymentStatus  PaymentStatus         @default(UNPAID)
-  notes          String?
-  viewToken      String?               @unique
-  sentAt         DateTime?
-  employeeId     String?
-  employee       Employee?             @relation(fields: [employeeId], references: [id])
-  commissionRate Decimal               @db.Decimal(5, 4) @default(0)
-  createdAt      DateTime              @default(now())
-  updatedAt      DateTime              @updatedAt
-  items          CustomerInvoiceItem[]
-  payments       Payment[]
-  files          UploadedFile[]
+  id               String                @id @default(cuid())
+  invoiceNumber    String
+  customerId       String
+  customer         Customer              @relation(fields: [customerId], references: [id])
+  invoiceDate      DateTime
+  dueDate          DateTime
+  subtotal         Decimal               @db.Decimal(15, 2)
+  taxAmount        Decimal               @default(0) @db.Decimal(15, 2)
+  totalAmount      Decimal               @db.Decimal(15, 2)
+  paidAmount       Decimal               @default(0) @db.Decimal(15, 2)
+  downPayment      Decimal               @default(0) @db.Decimal(15, 2)
+  creditCardFee    Decimal               @default(0) @db.Decimal(15, 2)
+  appliedFees      Json                  @default("[]")
+  paymentStatus    PaymentStatus         @default(UNPAID)
+  notes            String?
+  viewToken        String?               @unique
+  sentAt           DateTime?
+  employeeId       String?
+  employee         Employee?             @relation(fields: [employeeId], references: [id])
+  commissionRate   Decimal               @default(0) @db.Decimal(5, 4)
+  createdAt        DateTime              @default(now())
+  updatedAt        DateTime              @updatedAt
+  items            CustomerInvoiceItem[]
+  payments         Payment[]
+  files            UploadedFile[]
+  purchaseRequests PurchaseRequest[]
 
   @@unique([invoiceNumber, customerId])
 }
 
 model CustomerInvoiceItem {
-  id              String          @id @default(cuid())
+  id              String           @id @default(cuid())
   invoiceId       String
-  invoice         CustomerInvoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  invoice         CustomerInvoice  @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  // Combined product description + color, single free-typed field by
+  // design -- do not split color out separately.
   description     String
   itemDescription String?
-  quantity        Decimal         @db.Decimal(15, 4)
-  unitPrice       Decimal         @db.Decimal(15, 2)
-  taxRate         Decimal         @db.Decimal(5, 4) @default(0)
-  lineTotal       Decimal         @db.Decimal(15, 2)
-  createdAt       DateTime        @default(now())
-  updatedAt       DateTime        @updatedAt
+  quantity        Decimal          @db.Decimal(15, 4)
+  unitPrice       Decimal          @db.Decimal(15, 2)
+  taxRate         Decimal          @default(0) @db.Decimal(5, 4)
+  lineTotal       Decimal          @db.Decimal(15, 2)
+  // Item code (`XX/PARTNUMBER`) split into its two real fields -- supplierId
+  // is chosen from the supplier dropdown (never free-typed), partNumber is
+  // free-typed by the sales rep. Nullable only so existing rows predating
+  // this feature don't need a backfill; new rows always set both (or route
+  // to the HOUSE supplier) -- see app/api/invoices/customer/route.ts.
+  supplierId      String?
+  supplier        Supplier?        @relation(fields: [supplierId], references: [id])
+  partNumber      String?
+  // Written back from the closed bill's cost once purchasing fulfills the
+  // purchase_request for this line (lib/purchase-requests.ts /
+  // app/api/invoices/supplier/route.ts). Never set or shown anywhere in the
+  // sales-facing invoice entry UI -- sales never sees cost.
+  actualCost      Decimal?         @db.Decimal(15, 2)
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+  purchaseRequest PurchaseRequest?
+}
+
+model Estimate {
+  id                 String         @id @default(cuid())
+  estimateNumber     String
+  customerId         String
+  customer           Customer       @relation(fields: [customerId], references: [id])
+  estimateDate       DateTime
+  expiryDate         DateTime?
+  subtotal           Decimal        @db.Decimal(15, 2)
+  taxAmount          Decimal        @default(0) @db.Decimal(15, 2)
+  totalAmount        Decimal        @db.Decimal(15, 2)
+  appliedFees        Json           @default("[]")
+  status             EstimateStatus @default(DRAFT)
+  notes              String?
+  viewToken          String?        @unique
+  sentAt             DateTime?
+  convertedInvoiceId String?        @unique
+  createdAt          DateTime       @default(now())
+  updatedAt          DateTime       @updatedAt
+  items              EstimateItem[]
+
+  @@unique([estimateNumber, customerId])
+}
+
+model EstimateItem {
+  id              String   @id @default(cuid())
+  estimateId      String
+  estimate        Estimate @relation(fields: [estimateId], references: [id], onDelete: Cascade)
+  description     String
+  itemDescription String?
+  quantity        Decimal  @db.Decimal(15, 4)
+  unitPrice       Decimal  @db.Decimal(15, 2)
+  taxRate         Decimal  @default(0) @db.Decimal(5, 4)
+  lineTotal       Decimal  @db.Decimal(15, 2)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
 }
 
 model SupplierInvoice {
@@ -122,12 +207,19 @@ model SupplierInvoice {
   dueDate            DateTime?
   category           SupplierCategory
   subtotal           Decimal               @db.Decimal(15, 2)
-  taxAmount          Decimal               @db.Decimal(15, 2) @default(0)
+  taxAmount          Decimal               @default(0) @db.Decimal(15, 2)
   totalAmount        Decimal               @db.Decimal(15, 2)
-  paidAmount         Decimal               @db.Decimal(15, 2) @default(0)
+  paidAmount         Decimal               @default(0) @db.Decimal(15, 2)
   paymentStatus      PaymentStatus         @default(UNPAID)
   notes              String?
   customerInvoiceRef String?
+  // Set only when this bill was created to fulfill a specific
+  // purchase_request (the "Create Bill" action from the Items Ordered /
+  // Pending report) -- @unique enforces the strict 1:1 bill<->purchase
+  // request rule at the DB level, not just in application code. Regular
+  // bills unrelated to the purchasing-trigger workflow leave this null.
+  purchaseRequestId  String?               @unique
+  purchaseRequest    PurchaseRequest?      @relation(fields: [purchaseRequestId], references: [id])
   createdAt          DateTime              @default(now())
   updatedAt          DateTime              @updatedAt
   items              SupplierInvoiceItem[]
@@ -145,10 +237,55 @@ model SupplierInvoiceItem {
   itemDescription String?
   quantity        Decimal         @db.Decimal(15, 4)
   unitCost        Decimal         @db.Decimal(15, 2)
-  taxRate         Decimal         @db.Decimal(5, 4) @default(0)
+  taxRate         Decimal         @default(0) @db.Decimal(5, 4)
   lineTotal       Decimal         @db.Decimal(15, 2)
+  // Mirrors the linked purchase_request's part number for display
+  // (`XX/PARTNUMBER`) on a purchasing-triggered bill; null on every other
+  // bill.
+  partNumber      String?
   createdAt       DateTime        @default(now())
   updatedAt       DateTime        @updatedAt
+}
+
+// One purchase_request per paid customer-invoice line (excluding HOUSE-coded
+// lines, which need nothing sourced externally) -- created automatically the
+// moment an invoice's first payment (partial or full) is recorded, never
+// created manually. See lib/purchase-requests.ts for the fire-once,
+// idempotent creation logic, and app/api/invoices/supplier/route.ts for how
+// a bill closes one out.
+model PurchaseRequest {
+  id                    String                @id @default(cuid())
+  customerInvoiceId     String
+  customerInvoice       CustomerInvoice       @relation(fields: [customerInvoiceId], references: [id])
+  // @unique is the actual fire-once/idempotency guarantee -- a second
+  // attempt to create a request for the same line (double-click, retry,
+  // the invoice reaching PAID after already being PARTIALLY_PAID) fails the
+  // insert instead of creating a duplicate. See ensurePurchaseRequestsForInvoice.
+  customerInvoiceItemId String                @unique
+  customerInvoiceItem   CustomerInvoiceItem   @relation(fields: [customerInvoiceItemId], references: [id])
+  supplierId            String
+  supplier              Supplier              @relation(fields: [supplierId], references: [id])
+  // Snapshotted from the invoice line at creation time rather than read
+  // live -- harmless duplication, since a line with a recorded payment
+  // against its invoice is already immutable (see the post-payment item
+  // lock in app/api/invoices/customer/[id]/route.ts), but it keeps this
+  // report's query flat instead of joining back through the invoice item
+  // every time.
+  partNumber            String
+  description           String
+  quantity              Decimal               @db.Decimal(15, 4)
+  status                PurchaseRequestStatus @default(PENDING)
+  // Written at the same moment the bill that fulfills this request is
+  // created (see app/api/invoices/supplier/route.ts) -- the total cost for
+  // this line's quantity, i.e. the bill item's lineTotal, not a per-unit
+  // cost. Mirrors CustomerInvoiceItem.actualCost.
+  cost                  Decimal?              @db.Decimal(15, 2)
+  createdAt             DateTime              @default(now())
+  fulfilledAt           DateTime?
+  supplierInvoice       SupplierInvoice?
+
+  @@index([status])
+  @@index([supplierId])
 }
 
 model Payment {
@@ -171,13 +308,14 @@ model CompanyProfile {
   address                String?
   email                  String?
   phone                  String?
-  creditCardFeeRate      Decimal  @db.Decimal(5, 4) @default(0)
+  creditCardFeeRate      Decimal  @default(0) @db.Decimal(5, 4)
   creditCardFeeLabel     String   @default("Credit card processing fee")
   customFees             Json     @default("[]")
   customerInvoicePrefix  String   @default("INV-2026-")
   customerInvoiceNextSeq Int      @default(1001)
   supplierInvoicePrefix  String   @default("PO-2026-")
   supplierInvoiceNextSeq Int      @default(1001)
+  estimateNextSeq        Int      @default(1001)
   createdAt              DateTime @default(now())
   updatedAt              DateTime @updatedAt
 }
@@ -195,8 +333,8 @@ model Product {
   id            String   @id @default(cuid())
   name          String
   description   String?
-  price         Decimal  @db.Decimal(15, 2) @default(0)
-  taxRate       Decimal  @db.Decimal(5, 4) @default(0)
+  price         Decimal  @default(0) @db.Decimal(15, 2)
+  taxRate       Decimal  @default(0) @db.Decimal(5, 4)
   incomeAccount String?
   active        Boolean  @default(true)
   createdAt     DateTime @default(now())
@@ -208,7 +346,7 @@ model Employee {
   name           String
   email          String?           @unique
   phone          String?
-  commissionRate Decimal           @db.Decimal(5, 4) @default(0)
+  commissionRate Decimal           @default(0) @db.Decimal(5, 4)
   active         Boolean           @default(true)
   createdAt      DateTime          @default(now())
   updatedAt      DateTime          @updatedAt
@@ -227,4 +365,51 @@ model UploadedFile {
   supplierInvoiceId String?
   supplierInvoice   SupplierInvoice? @relation(fields: [supplierInvoiceId], references: [id])
   createdAt         DateTime         @default(now())
+}
+
+// Admin-only ledger of who did what (invoice/customer/supplier/product/user
+// create-update-delete, access-denied attempts). Written best-effort from
+// API routes via lib/audit.ts — never allowed to fail the request it logs.
+model AuditLog {
+  id          String   @id @default(cuid())
+  timestamp   DateTime @default(now())
+  actorUserId String?
+  actorName   String
+  actorRole   String
+  action      String
+  entityType  String
+  entityId    String?
+  entityLabel String
+  changes     Json?
+  ipAddress   String
+  userAgent   String
+
+  @@index([timestamp])
+  @@index([actorUserId])
+  @@index([entityType])
+  @@index([action])
+}
+
+// Read-only credentials for external apps/dashboards. Only the SHA-256 hash
+// of the key is ever stored -- the full key is generated once, shown to the
+// caller exactly once, and cannot be retrieved again. keyPrefix is the
+// non-secret leading portion, kept only so the key can be identified in the
+// UI without ever re-displaying the secret.
+model ApiKey {
+  id            String    @id @default(cuid())
+  label         String
+  keyHash       String    @unique
+  keyPrefix     String
+  // Which categories of read-only data this key can reach -- see
+  // lib/api.ts's ApiScope/API_KEY_SCOPES. A key with no scopes can
+  // authenticate but every requireReadAccess() call will 403 it, so a
+  // freshly-created key is deny-by-default, not open-by-default.
+  scopes        Json      @default("[]")
+  active        Boolean   @default(true)
+  createdById   String?
+  createdByName String
+  lastUsedAt    DateTime?
+  createdAt     DateTime  @default(now())
+
+  @@index([active])
 }

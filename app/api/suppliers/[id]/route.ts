@@ -1,8 +1,9 @@
 import { NextResponse } from "next/server";
-import { auth } from "@/lib/auth";
+import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
-import { requirePermission } from "@/lib/permissions";
+import { requireRole } from "@/lib/api";
 import { writeAuditLog, extractMeta, actorFromSession, diffChanges } from "@/lib/audit";
+import { validateSupplierCode } from "@/lib/supplier-code";
 import { z } from "zod";
 
 const updateSchema = z.object({
@@ -10,66 +11,33 @@ const updateSchema = z.object({
   email: z.string().email("Invalid email").optional().or(z.literal("")).or(z.null()),
   phone: z.string().optional().or(z.null()),
   address: z.string().optional().or(z.null()),
-  // 1099 contractor fields
-  is1099Contractor: z.boolean().optional(),
-  taxIdType: z.enum(["SSN", "EIN"]).optional().nullable(),
-  legalName: z.string().optional().nullable(),
-  businessAddress: z.string().optional().nullable(),
-  w9OnFile: z.boolean().optional(),
-  default1099Box: z.string().optional().nullable(),
-});
-
-const tinUpdateSchema = z.object({
-  taxId: z.string().min(1),
+  paymentTermsDays: z.number().int().min(0).max(365).optional(),
+  defaultCategory: z
+    .enum(["COGS", "SERVICES_EXPENSE", "OPERATING_EXPENSE", "OTHER"])
+    .or(z.literal(""))
+    .optional()
+    .nullable()
+    .transform((v) => (v === "" ? null : v ?? null)),
+  bankName: z.string().optional().or(z.null()),
+  bankAccountNumber: z.string().optional().or(z.null()),
+  bankRouting: z.string().optional().or(z.null()),
+  zelle: z.string().optional().or(z.null()),
+  paymentInstructions: z.string().optional().or(z.null()),
+  // Admin-only -- see the POST route's matching comment.
+  code: z.string().optional().nullable(),
+  active: z.boolean().optional(),
+  isHouse: z.boolean().optional(),
 });
 
 export async function PATCH(
   request: Request,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  const session = await auth();
-  if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-
-  const { allowed } = requirePermission(session, "supplier", "update");
-  if (!allowed) {
-    await writeAuditLog({ ...actorFromSession(session), action: "ACCESS_DENIED", entityType: "supplier", entityLabel: "Update Supplier", ...extractMeta(request) });
-    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
-  }
+  const guard = await requireRole("ADMIN", "MANAGER");
+  if (guard instanceof NextResponse) return guard;
 
   const { id } = await params;
   const body = await request.json();
-
-  // TIN updates are Admin-only
-  if ("taxId" in body) {
-    const { allowed: tinAllowed } = requirePermission(session, "contractor_tin", "update");
-    if (!tinAllowed) {
-      await writeAuditLog({ ...actorFromSession(session), action: "ACCESS_DENIED", entityType: "contractor_tin", entityLabel: `Supplier ${id} TIN`, ...extractMeta(request) });
-      return NextResponse.json({ error: "Forbidden: TIN access is Admin-only" }, { status: 403 });
-    }
-
-    const tinParsed = tinUpdateSchema.safeParse({ taxId: body.taxId });
-    if (!tinParsed.success) return NextResponse.json({ error: "Invalid TIN" }, { status: 400 });
-
-    const { encryptTin } = await import("@/lib/tin-crypto");
-    const encryptedTin = encryptTin(tinParsed.data.taxId);
-
-    const updated = await prisma.supplier.update({
-      where: { id },
-      data: { taxId: encryptedTin },
-    });
-
-    await writeAuditLog({
-      ...actorFromSession(session),
-      action: "UPDATE",
-      entityType: "contractor_tin",
-      entityId: id,
-      entityLabel: `${updated.name} TIN`,
-      ...extractMeta(request),
-    });
-
-    return NextResponse.json({ ok: true });
-  }
-
   const parsed = updateSchema.safeParse(body);
   if (!parsed.success) {
     return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
@@ -78,43 +46,72 @@ export async function PATCH(
   const existing = await prisma.supplier.findUnique({ where: { id } });
   if (!existing) return NextResponse.json({ error: "Not found" }, { status: 404 });
 
-  const beforeSnapshot = {
-    name: existing.name,
-    email: existing.email,
-    phone: existing.phone,
-    address: existing.address,
-    is1099Contractor: existing.is1099Contractor,
-  };
+  // code/active/isHouse are admin-only -- see the create route's matching
+  // comment.
+  if (
+    (parsed.data.code !== undefined || parsed.data.active !== undefined || parsed.data.isHouse !== undefined) &&
+    guard.user.role !== "ADMIN"
+  ) {
+    return NextResponse.json(
+      { error: "Only an admin can change a supplier code, active flag, or House designation." },
+      { status: 403 }
+    );
+  }
 
-  const supplier = await prisma.supplier.update({
-    where: { id },
-    data: {
-      name: parsed.data.name,
-      email: parsed.data.email || null,
-      phone: parsed.data.phone || null,
-      address: parsed.data.address || null,
-      ...(parsed.data.is1099Contractor !== undefined && { is1099Contractor: parsed.data.is1099Contractor }),
-      ...(parsed.data.taxIdType !== undefined && { taxIdType: parsed.data.taxIdType }),
-      ...(parsed.data.legalName !== undefined && { legalName: parsed.data.legalName }),
-      ...(parsed.data.businessAddress !== undefined && { businessAddress: parsed.data.businessAddress }),
-      ...(parsed.data.w9OnFile !== undefined && { w9OnFile: parsed.data.w9OnFile }),
-      ...(parsed.data.default1099Box !== undefined && { default1099Box: parsed.data.default1099Box }),
-    },
-  });
+  const data: Record<string, unknown> = {
+    name: parsed.data.name,
+    email: parsed.data.email || null,
+    phone: parsed.data.phone || null,
+    address: parsed.data.address || null,
+  };
+  if (parsed.data.paymentTermsDays !== undefined) data.paymentTermsDays = parsed.data.paymentTermsDays;
+  if (parsed.data.defaultCategory !== undefined) data.defaultCategory = parsed.data.defaultCategory ?? null;
+  if (parsed.data.bankName !== undefined) data.bankName = parsed.data.bankName || null;
+  if (parsed.data.bankAccountNumber !== undefined) data.bankAccountNumber = parsed.data.bankAccountNumber || null;
+  if (parsed.data.bankRouting !== undefined) data.bankRouting = parsed.data.bankRouting || null;
+  if (parsed.data.zelle !== undefined) data.zelle = parsed.data.zelle || null;
+  if (parsed.data.paymentInstructions !== undefined) data.paymentInstructions = parsed.data.paymentInstructions || null;
+  if (parsed.data.active !== undefined) data.active = parsed.data.active;
+  if (parsed.data.isHouse !== undefined) data.isHouse = parsed.data.isHouse;
+
+  let codeResult: { code: string | null } | null = null;
+  if (parsed.data.code !== undefined) {
+    // isHouse might not be part of *this* PATCH -- fall back to the
+    // existing row's value so an admin editing just the code on an
+    // already-HOUSE supplier still gets the 2-4 letter rule, not the
+    // stricter 2-letter one.
+    const effectiveIsHouse = parsed.data.isHouse ?? existing.isHouse;
+    const result = validateSupplierCode(parsed.data.code, effectiveIsHouse);
+    if ("error" in result) {
+      return NextResponse.json({ error: result.error }, { status: 400 });
+    }
+    codeResult = result;
+    data.code = result.code;
+  }
+
+  let supplier;
+  try {
+    supplier = await prisma.supplier.update({ where: { id }, data });
+  } catch (err) {
+    if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002") {
+      return NextResponse.json(
+        { error: `Code "${codeResult?.code}" is already in use by another supplier.` },
+        { status: 409 }
+      );
+    }
+    throw err;
+  }
 
   await writeAuditLog({
-    ...actorFromSession(session),
+    ...actorFromSession(guard),
     action: "UPDATE",
     entityType: "supplier",
     entityId: id,
     entityLabel: supplier.name,
-    changes: diffChanges(beforeSnapshot, {
-      name: supplier.name,
-      email: supplier.email,
-      phone: supplier.phone,
-      address: supplier.address,
-      is1099Contractor: supplier.is1099Contractor,
-    }),
+    changes: diffChanges(
+      { name: existing.name, email: existing.email, phone: existing.phone, address: existing.address, code: existing.code, active: existing.active, isHouse: existing.isHouse },
+      { name: supplier.name, email: supplier.email, phone: supplier.phone, address: supplier.address, code: supplier.code, active: supplier.active, isHouse: supplier.isHouse }
+    ),
     ...extractMeta(request),
   });
 
@@ -125,14 +122,8 @@ export async function DELETE(
   request: Request,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  const session = await auth();
-  if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-
-  const { allowed } = requirePermission(session, "supplier", "delete");
-  if (!allowed) {
-    await writeAuditLog({ ...actorFromSession(session), action: "ACCESS_DENIED", entityType: "supplier", entityLabel: "Delete Supplier", ...extractMeta(request) });
-    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
-  }
+  const guard = await requireRole("ADMIN", "MANAGER");
+  if (guard instanceof NextResponse) return guard;
 
   const { id } = await params;
 
@@ -150,7 +141,7 @@ export async function DELETE(
   await prisma.supplier.delete({ where: { id } });
 
   await writeAuditLog({
-    ...actorFromSession(session),
+    ...actorFromSession(guard),
     action: "DELETE",
     entityType: "supplier",
     entityId: id,

@@ -1,21 +1,17 @@
 import { NextResponse } from "next/server";
-import { auth } from "@/lib/auth";
+import { requireAuth } from "@/lib/api";
 import { prisma } from "@/lib/prisma";
+import { formatSequenceNumber } from "@/lib/next-number";
 
 export async function GET() {
-  const session = await auth();
-  if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  const guard = await requireAuth();
+  if (guard instanceof NextResponse) return guard;
 
-  const year = new Date().getFullYear();
+  const profile = await prisma.companyProfile.findUnique({ where: { id: "default" } });
+  // `||`, not `??` -- an empty string (a blanked-out Settings field, saved
+  // as "" rather than left unset) must fall back to the default too.
+  const prefix = profile?.customerInvoicePrefix || "INV-2026-";
+  const nextSeq = profile?.customerInvoiceNextSeq ?? 1001;
 
-  const result = await prisma.$queryRaw<{ max_seq: number | null }[]>`
-    SELECT MAX(
-      CAST(SPLIT_PART("invoiceNumber", '-', 3) AS INTEGER)
-    ) AS max_seq
-    FROM "CustomerInvoice"
-    WHERE "invoiceNumber" ~ '^INV-[0-9]{4}-[0-9]+$'
-  `;
-
-  const maxSeq = Number(result[0]?.max_seq ?? 0);
-  return NextResponse.json({ nextNumber: `INV-${year}-${maxSeq + 1}` });
+  return NextResponse.json({ nextNumber: formatSequenceNumber(nextSeq, prefix), prefix, nextSeq });
 }

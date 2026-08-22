@@ -1,0 +1,55 @@
+name: CI
+
+# Runs on every push and every pull request against any branch, so a change
+# that breaks an already-working, tested behavior shows up as a red X on
+# that commit/PR instead of silently reaching main (and from there, Railway
+# auto-deploys main straight to production -- nothing else currently gates
+# that). This does not stop anyone from merging a red PR by itself; pair it
+# with a branch-protection rule on `main` that requires this check to pass
+# (Settings -> Branches -> Branch protection rules -> require status checks
+# to pass before merging) to make it a hard block, not just a warning.
+
+"on":
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: accounting_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/accounting_ci
+      AUTH_SECRET: ci-test-secret-not-used-in-production-min-32-chars
+      UPLOAD_DIR: ./public/uploads
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Type check
+        run: npx tsc --noEmit
+
+      - name: Run test suite
+        run: npm test

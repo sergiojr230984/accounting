@@ -1,6 +1,12 @@
 .next/
 node_modules/
 .env
+.env.local
+.env*.local
 public/uploads/*
 !public/uploads/.gitkeep
 *.tsbuildinfo
+
+# Sentry build artifacts — should never be committed.
+.sentryclirc
+sentry.properties

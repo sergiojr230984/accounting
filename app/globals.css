@@ -8,18 +8,18 @@
   }
 }
 
-@layer utilities {
+@layer components {
   .card {
-    @apply bg-white rounded-xl shadow-sm border border-gray-100 p-6;
+    @apply bg-white rounded-xl shadow-sm border border-gray-100 p-4 md:p-6;
   }
   .btn-primary {
-    @apply inline-flex items-center gap-2 px-4 py-2 bg-brand-600 text-white rounded-lg font-medium hover:bg-brand-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed;
+    @apply inline-flex items-center justify-center gap-2 px-4 py-2 bg-brand-600 text-white rounded-lg font-medium hover:bg-brand-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed text-sm sm:text-base;
   }
   .btn-secondary {
-    @apply inline-flex items-center gap-2 px-4 py-2 bg-white text-gray-700 border border-gray-300 rounded-lg font-medium hover:bg-gray-50 transition-colors disabled:opacity-50;
+    @apply inline-flex items-center justify-center gap-2 px-4 py-2 bg-white text-gray-700 border border-gray-300 rounded-lg font-medium hover:bg-gray-50 transition-colors disabled:opacity-50 text-sm sm:text-base;
   }
   .btn-danger {
-    @apply inline-flex items-center gap-2 px-4 py-2 bg-red-600 text-white rounded-lg font-medium hover:bg-red-700 transition-colors;
+    @apply inline-flex items-center justify-center gap-2 px-4 py-2 bg-red-600 text-white rounded-lg font-medium hover:bg-red-700 transition-colors text-sm sm:text-base;
   }
   .input {
     @apply w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-transparent;
@@ -35,5 +35,23 @@
   }
   .badge-unpaid {
     @apply inline-flex px-2 py-0.5 text-xs font-medium rounded-full bg-red-100 text-red-800;
+  }
+  /* Wraps a wide table so it scrolls horizontally on narrow screens
+     instead of overflowing the layout. Apply on the parent of <table>. */
+  .table-scroll {
+    @apply overflow-x-auto -mx-4 md:mx-0 px-4 md:px-0;
+  }
+}
+
+/* Mobile: make any container that holds a full-width table scroll
+   horizontally so wide tables (invoices, customers, etc.) don't break
+   the layout. Uses :has() — supported in all current evergreen browsers. */
+@media (max-width: 767px) {
+  div:has(> table.w-full) {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+  table.w-full {
+    min-width: 640px;
   }
 }

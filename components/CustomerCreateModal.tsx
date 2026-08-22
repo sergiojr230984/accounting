@@ -1,144 +1,133 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { X, Loader2, UserPlus } from "lucide-react";
+import { useState, useEffect } from "react";
+import { X, Loader2 } from "lucide-react";
+import AddressAutocomplete from "@/components/AddressAutocomplete";
 
-interface Customer {
+export interface SavedCustomer {
   id: string;
   name: string;
   email: string | null;
   phone?: string | null;
   address?: string | null;
+  emergencyContactName?: string | null;
+  emergencyContactPhone?: string | null;
 }
 
 interface Props {
   open: boolean;
   initialName?: string;
+  // When set, the modal edits this existing customer (PATCH) instead of
+  // creating a new one (POST) -- same form, same modal, just a different
+  // save target and pre-filled fields.
+  customer?: SavedCustomer | null;
   onClose: () => void;
-  onCreated: (customer: Customer) => void;
+  onSaved: (customer: SavedCustomer) => void;
 }
 
-export default function CustomerCreateModal({ open, initialName, onClose, onCreated }: Props) {
-  const [name, setName] = useState("");
+export default function CustomerCreateModal({ open, initialName = "", customer, onClose, onSaved }: Props) {
+  const editing = !!customer;
+  const [name, setName] = useState(initialName);
   const [email, setEmail] = useState("");
   const [phone, setPhone] = useState("");
   const [address, setAddress] = useState("");
+  const [emergencyContactName, setEmergencyContactName] = useState("");
+  const [emergencyContactPhone, setEmergencyContactPhone] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
 
   useEffect(() => {
     if (open) {
-      setName(initialName ?? "");
-      setEmail("");
-      setPhone("");
-      setAddress("");
+      setName(customer?.name ?? initialName);
+      setEmail(customer?.email ?? "");
+      setPhone(customer?.phone ?? "");
+      setAddress(customer?.address ?? "");
+      setEmergencyContactName(customer?.emergencyContactName ?? "");
+      setEmergencyContactPhone(customer?.emergencyContactPhone ?? "");
       setError("");
-      setSaving(false);
     }
-  }, [open, initialName]);
+  }, [open, initialName, customer]);
 
   if (!open) return null;
 
-  async function handleSubmit(e: React.FormEvent) {
-    e.preventDefault();
+  async function save() {
     setError("");
+    if (!name.trim()) {
+      setError("Name is required");
+      return;
+    }
     setSaving(true);
     try {
-      const res = await fetch("/api/customers", {
-        method: "POST",
+      const res = await fetch(editing ? `/api/customers/${customer!.id}` : "/api/customers", {
+        method: editing ? "PATCH" : "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name, email, phone, address }),
+        body: JSON.stringify({
+          name,
+          email: email || undefined,
+          phone: phone || undefined,
+          address: address || undefined,
+          emergencyContactName: emergencyContactName || undefined,
+          emergencyContactPhone: emergencyContactPhone || undefined,
+        }),
       });
       if (!res.ok) {
         const d = await res.json().catch(() => ({}));
-        setError(d.error?.fieldErrors?.name?.[0] ?? d.error?.formErrors?.[0] ?? (typeof d.error === "string" ? d.error : "Failed to create customer"));
+        setError(d.error?.formErrors?.[0] ?? d.error ?? `Failed to ${editing ? "save" : "create"}`);
         return;
       }
-      const customer: Customer = await res.json();
-      onCreated(customer);
+      const c = await res.json();
+      onSaved(c);
       onClose();
-    } catch (err) {
-      setError((err as Error).message);
+    } catch (e) {
+      setError((e as Error).message);
     } finally {
       setSaving(false);
     }
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
-      <div className="bg-white rounded-xl shadow-2xl w-full max-w-md">
-        <div className="flex items-center justify-between px-5 py-4 border-b">
-          <div className="flex items-center gap-2">
-            <UserPlus className="w-5 h-5 text-brand-600" />
-            <h2 className="font-semibold text-gray-900">New customer</h2>
-          </div>
-          <button
-            type="button"
-            onClick={onClose}
-            className="text-gray-400 hover:text-gray-600 transition-colors"
-          >
-            <X className="w-5 h-5" />
-          </button>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+      <div className="bg-white rounded-2xl shadow-xl w-full max-w-md">
+        <div className="flex items-center justify-between p-5 border-b">
+          <h2 className="font-semibold text-gray-800">{editing ? "Edit Customer" : "New Customer"}</h2>
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-600"><X className="w-5 h-5" /></button>
         </div>
-
-        <form onSubmit={handleSubmit} className="px-5 py-4 space-y-4">
+        <div className="p-5 space-y-4">
           <div>
-            <label className="label">Name <span className="text-red-500">*</span></label>
-            <input
-              className="input"
-              required
-              autoFocus
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              placeholder="Customer name"
-            />
+            <label className="label">Name *</label>
+            <input className="input" value={name} onChange={(e) => setName(e.target.value)} autoFocus />
           </div>
           <div>
             <label className="label">Email</label>
-            <input
-              type="email"
-              className="input"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              placeholder="customer@email.com"
-            />
+            <input className="input" type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="customer@example.com" />
           </div>
           <div>
             <label className="label">Phone</label>
-            <input
-              className="input"
-              value={phone}
-              onChange={(e) => setPhone(e.target.value)}
-              placeholder="(555) 000-0000"
-            />
+            <input className="input" value={phone} onChange={(e) => setPhone(e.target.value)} />
           </div>
           <div>
             <label className="label">Address</label>
-            <textarea
-              className="input"
-              rows={2}
-              value={address}
-              onChange={(e) => setAddress(e.target.value)}
-              placeholder="123 Main St, City, State 00000"
-            />
+            <AddressAutocomplete value={address} onChange={setAddress} />
           </div>
-
-          {error && (
-            <div className="bg-red-50 border border-red-200 text-red-700 px-3 py-2 rounded-lg text-sm">
-              {error}
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="label">Emergency contact name</label>
+              <input className="input" value={emergencyContactName} onChange={(e) => setEmergencyContactName(e.target.value)} placeholder="Spouse, family…" />
             </div>
-          )}
-
-          <div className="flex justify-end gap-2 pt-2">
-            <button type="button" onClick={onClose} className="btn-secondary">
-              Cancel
-            </button>
-            <button type="submit" disabled={saving} className="btn-primary">
-              {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <UserPlus className="w-4 h-4" />}
-              Create customer
-            </button>
+            <div>
+              <label className="label">Emergency contact phone</label>
+              <input className="input" value={emergencyContactPhone} onChange={(e) => setEmergencyContactPhone(e.target.value)} />
+            </div>
           </div>
-        </form>
+          {error && <div className="bg-red-50 border border-red-200 text-red-700 px-3 py-2 rounded-lg text-sm">{error}</div>}
+        </div>
+        <div className="flex items-center justify-end gap-2 p-5 border-t bg-gray-50 rounded-b-2xl">
+          <button onClick={onClose} className="btn-secondary">Cancel</button>
+          <button onClick={save} disabled={saving} className="btn-primary">
+            {saving && <Loader2 className="w-4 h-4 animate-spin" />}
+            {editing ? "Save Changes" : "Create"}
+          </button>
+        </div>
       </div>
     </div>
   );

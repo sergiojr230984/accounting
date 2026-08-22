@@ -1,7 +1,17 @@
 import bcrypt from "bcryptjs";
+import { randomBytes } from "crypto";
+import { Prisma } from "@prisma/client";
 import { prisma } from "./prisma";
+import type { SequenceField } from "./next-number";
 
-let initialized = false;
+// Caches the in-flight promise, not just a boolean -- a boolean flag set
+// synchronously before the async work below completes would let a second
+// caller (e.g. a route's own `await initializeDatabase()` racing the
+// fire-and-forget call in instrumentation.ts) see "already started" and
+// return immediately while table creation is still in progress, letting it
+// query a table that doesn't exist yet. Every caller now awaits the same
+// promise, so none can proceed until schema creation has actually finished.
+let initPromise: Promise<void> | null = null;
 
 const SCHEMA_STATEMENTS: string[] = [
   `DO $$ BEGIN CREATE TYPE "Role" AS ENUM ('ADMIN', 'MANAGER'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;`,
@@ -139,11 +149,12 @@ const SCHEMA_STATEMENTS: string[] = [
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updatedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP
   );`,
-  `INSERT INTO "CompanyProfile" ("id") VALUES ('default') ON CONFLICT DO NOTHING;`,
+  `INSERT INTO "CompanyProfile" ("id", "updatedAt") VALUES ('default', CURRENT_TIMESTAMP) ON CONFLICT DO NOTHING;`,
   `ALTER TABLE "CompanyProfile" ADD COLUMN IF NOT EXISTS "customerInvoicePrefix" TEXT NOT NULL DEFAULT 'INV-2026-';`,
   `ALTER TABLE "CompanyProfile" ADD COLUMN IF NOT EXISTS "customerInvoiceNextSeq" INTEGER NOT NULL DEFAULT 1001;`,
   `ALTER TABLE "CompanyProfile" ADD COLUMN IF NOT EXISTS "supplierInvoicePrefix" TEXT NOT NULL DEFAULT 'PO-2026-';`,
   `ALTER TABLE "CompanyProfile" ADD COLUMN IF NOT EXISTS "supplierInvoiceNextSeq" INTEGER NOT NULL DEFAULT 1001;`,
+  `ALTER TABLE "CompanyProfile" ADD COLUMN IF NOT EXISTS "estimateNextSeq" INTEGER NOT NULL DEFAULT 1001;`,
   `ALTER TABLE "CompanyProfile" ADD COLUMN IF NOT EXISTS "customFees" JSONB NOT NULL DEFAULT '[]'::jsonb;`,
   `ALTER TABLE "CustomerInvoice" ADD COLUMN IF NOT EXISTS "appliedFees" JSONB NOT NULL DEFAULT '[]'::jsonb;`,
   `CREATE TABLE IF NOT EXISTS "TaxRate" (
@@ -191,12 +202,130 @@ const SCHEMA_STATEMENTS: string[] = [
   `ALTER TABLE "SupplierInvoice" ADD COLUMN IF NOT EXISTS "customerInvoiceRef" TEXT;`,
   `ALTER TABLE "CustomerInvoiceItem" ADD COLUMN IF NOT EXISTS "itemDescription" TEXT;`,
   `ALTER TABLE "SupplierInvoiceItem" ADD COLUMN IF NOT EXISTS "itemDescription" TEXT;`,
+  // Estimate/EstimateItem were fully implemented (prisma/schema.prisma,
+  // /api/estimates/**, tests/estimates.test.ts) but never added here -- on
+  // a fresh production database (this file is the only schema-provisioning
+  // mechanism; see DEPLOYMENT.md) every /api/estimates call would fail with
+  // "relation does not exist".
+  `DO $$ BEGIN CREATE TYPE "EstimateStatus" AS ENUM ('DRAFT', 'SENT', 'ACCEPTED', 'DECLINED', 'EXPIRED'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;`,
+  `CREATE TABLE IF NOT EXISTS "Estimate" (
+    "id" TEXT NOT NULL PRIMARY KEY,
+    "estimateNumber" TEXT NOT NULL,
+    "customerId" TEXT NOT NULL,
+    "estimateDate" TIMESTAMP(3) NOT NULL,
+    "expiryDate" TIMESTAMP(3),
+    "subtotal" DECIMAL(15,2) NOT NULL,
+    "taxAmount" DECIMAL(15,2) NOT NULL DEFAULT 0,
+    "totalAmount" DECIMAL(15,2) NOT NULL,
+    "status" "EstimateStatus" NOT NULL DEFAULT 'DRAFT',
+    "notes" TEXT,
+    "viewToken" TEXT,
+    "sentAt" TIMESTAMP(3),
+    "convertedInvoiceId" TEXT,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT "Estimate_estimateNumber_customerId_key" UNIQUE ("estimateNumber", "customerId"),
+    CONSTRAINT "Estimate_customerId_fkey" FOREIGN KEY ("customerId") REFERENCES "Customer"("id") ON DELETE RESTRICT ON UPDATE CASCADE
+  );`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS "Estimate_viewToken_key" ON "Estimate"("viewToken");`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS "Estimate_convertedInvoiceId_key" ON "Estimate"("convertedInvoiceId");`,
+  `ALTER TABLE "Estimate" ADD COLUMN IF NOT EXISTS "appliedFees" JSONB NOT NULL DEFAULT '[]'::jsonb;`,
+  `CREATE TABLE IF NOT EXISTS "EstimateItem" (
+    "id" TEXT NOT NULL PRIMARY KEY,
+    "estimateId" TEXT NOT NULL,
+    "description" TEXT NOT NULL,
+    "itemDescription" TEXT,
+    "quantity" DECIMAL(15,4) NOT NULL,
+    "unitPrice" DECIMAL(15,2) NOT NULL,
+    "taxRate" DECIMAL(5,4) NOT NULL DEFAULT 0,
+    "lineTotal" DECIMAL(15,2) NOT NULL,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT "EstimateItem_estimateId_fkey" FOREIGN KEY ("estimateId") REFERENCES "Estimate"("id") ON DELETE CASCADE ON UPDATE CASCADE
+  );`,
+  // Admin-only audit ledger (prisma/schema.prisma, lib/audit.ts,
+  // /api/audit-log) -- same reasoning as Estimate/EstimateItem above: this
+  // file is the only schema-provisioning mechanism, so a fresh production
+  // database needs the table created here or every write to it 500s.
+  `CREATE TABLE IF NOT EXISTS "AuditLog" (
+    "id" TEXT NOT NULL PRIMARY KEY,
+    "timestamp" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "actorUserId" TEXT,
+    "actorName" TEXT NOT NULL,
+    "actorRole" TEXT NOT NULL,
+    "action" TEXT NOT NULL,
+    "entityType" TEXT NOT NULL,
+    "entityId" TEXT,
+    "entityLabel" TEXT NOT NULL,
+    "changes" JSONB,
+    "ipAddress" TEXT NOT NULL,
+    "userAgent" TEXT NOT NULL
+  );`,
+  `CREATE INDEX IF NOT EXISTS "AuditLog_timestamp_idx" ON "AuditLog" ("timestamp");`,
+  `CREATE INDEX IF NOT EXISTS "AuditLog_actorUserId_idx" ON "AuditLog" ("actorUserId");`,
+  `CREATE INDEX IF NOT EXISTS "AuditLog_entityType_idx" ON "AuditLog" ("entityType");`,
+  `CREATE INDEX IF NOT EXISTS "AuditLog_action_idx" ON "AuditLog" ("action");`,
+  `CREATE TABLE IF NOT EXISTS "ApiKey" (
+    "id" TEXT NOT NULL PRIMARY KEY,
+    "label" TEXT NOT NULL,
+    "keyHash" TEXT NOT NULL UNIQUE,
+    "keyPrefix" TEXT NOT NULL,
+    "scopes" JSONB NOT NULL DEFAULT '[]'::jsonb,
+    "active" BOOLEAN NOT NULL DEFAULT true,
+    "createdById" TEXT,
+    "createdByName" TEXT NOT NULL,
+    "lastUsedAt" TIMESTAMP(3),
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP
+  );`,
+  `ALTER TABLE "ApiKey" ADD COLUMN IF NOT EXISTS "scopes" JSONB NOT NULL DEFAULT '[]'::jsonb;`,
+  `CREATE INDEX IF NOT EXISTS "ApiKey_active_idx" ON "ApiKey" ("active");`,
+
+  // Purchasing trigger workflow: a paid customer-invoice line auto-generates
+  // a purchase_request, which purchasing later closes with a bill that
+  // writes real cost back to the line. See lib/purchase-requests.ts.
+  `ALTER TABLE "Supplier" ADD COLUMN IF NOT EXISTS "code" TEXT;`,
+  `ALTER TABLE "Supplier" ADD COLUMN IF NOT EXISTS "active" BOOLEAN NOT NULL DEFAULT true;`,
+  `ALTER TABLE "Supplier" ADD COLUMN IF NOT EXISTS "isHouse" BOOLEAN NOT NULL DEFAULT false;`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS "Supplier_code_key" ON "Supplier"("code");`,
+  `ALTER TABLE "CustomerInvoiceItem" ADD COLUMN IF NOT EXISTS "supplierId" TEXT;`,
+  `ALTER TABLE "CustomerInvoiceItem" ADD COLUMN IF NOT EXISTS "partNumber" TEXT;`,
+  `ALTER TABLE "CustomerInvoiceItem" ADD COLUMN IF NOT EXISTS "actualCost" DECIMAL(15,2);`,
+  `DO $$ BEGIN
+    ALTER TABLE "CustomerInvoiceItem" ADD CONSTRAINT "CustomerInvoiceItem_supplierId_fkey" FOREIGN KEY ("supplierId") REFERENCES "Supplier"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+   EXCEPTION WHEN duplicate_object THEN NULL; END $$;`,
+  `DO $$ BEGIN CREATE TYPE "PurchaseRequestStatus" AS ENUM ('PENDING', 'FULFILLED'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;`,
+  `CREATE TABLE IF NOT EXISTS "PurchaseRequest" (
+    "id" TEXT NOT NULL PRIMARY KEY,
+    "customerInvoiceId" TEXT NOT NULL,
+    "customerInvoiceItemId" TEXT NOT NULL UNIQUE,
+    "supplierId" TEXT NOT NULL,
+    "partNumber" TEXT NOT NULL,
+    "description" TEXT NOT NULL,
+    "quantity" DECIMAL(15,4) NOT NULL,
+    "status" "PurchaseRequestStatus" NOT NULL DEFAULT 'PENDING',
+    "cost" DECIMAL(15,2),
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "fulfilledAt" TIMESTAMP(3),
+    CONSTRAINT "PurchaseRequest_customerInvoiceId_fkey" FOREIGN KEY ("customerInvoiceId") REFERENCES "CustomerInvoice"("id") ON DELETE RESTRICT ON UPDATE CASCADE,
+    CONSTRAINT "PurchaseRequest_customerInvoiceItemId_fkey" FOREIGN KEY ("customerInvoiceItemId") REFERENCES "CustomerInvoiceItem"("id") ON DELETE RESTRICT ON UPDATE CASCADE,
+    CONSTRAINT "PurchaseRequest_supplierId_fkey" FOREIGN KEY ("supplierId") REFERENCES "Supplier"("id") ON DELETE RESTRICT ON UPDATE CASCADE
+  );`,
+  `CREATE INDEX IF NOT EXISTS "PurchaseRequest_status_idx" ON "PurchaseRequest" ("status");`,
+  `CREATE INDEX IF NOT EXISTS "PurchaseRequest_supplierId_idx" ON "PurchaseRequest" ("supplierId");`,
+  `ALTER TABLE "SupplierInvoice" ADD COLUMN IF NOT EXISTS "purchaseRequestId" TEXT;`,
+  `ALTER TABLE "SupplierInvoiceItem" ADD COLUMN IF NOT EXISTS "partNumber" TEXT;`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS "SupplierInvoice_purchaseRequestId_key" ON "SupplierInvoice"("purchaseRequestId");`,
+  `DO $$ BEGIN
+    ALTER TABLE "SupplierInvoice" ADD CONSTRAINT "SupplierInvoice_purchaseRequestId_fkey" FOREIGN KEY ("purchaseRequestId") REFERENCES "PurchaseRequest"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+   EXCEPTION WHEN duplicate_object THEN NULL; END $$;`,
 ];
 
-export async function initializeDatabase() {
-  if (initialized) return;
-  initialized = true;
+export function initializeDatabase(): Promise<void> {
+  if (!initPromise) initPromise = runInitialization();
+  return initPromise;
+}
 
+async function runInitialization(): Promise<void> {
   console.log("[init-db] Creating tables if missing...");
   for (const stmt of SCHEMA_STATEMENTS) {
     try {
@@ -207,30 +336,39 @@ export async function initializeDatabase() {
   }
   console.log("[init-db] Schema ready");
 
-  // Fix any invoices where paymentStatus doesn't match the actual paid/down amounts
+  // Self-heal the document-numbering counters (see lib/next-number.ts) up
+  // to at least "one past whatever's actually in the table" -- runs on
+  // every boot, always via GREATEST so it only ever moves a counter
+  // forward, never back. This exists for two reasons, not just belt-and-
+  // suspenders:
+  //   1. estimateNextSeq is a brand-new column; on an existing production
+  //      database it starts at the schema default (1001) regardless of how
+  //      many real estimates already exist, which would immediately cause
+  //      collisions/reuse without this backfill.
+  //   2. customerInvoiceNextSeq/supplierInvoiceNextSeq were previously
+  //      advanced by a fire-and-forget update with a silently-swallowed
+  //      error -- any historical failure there left the counter drifted
+  //      below the true max, which this corrects.
   try {
-    const fixed = await prisma.$executeRawUnsafe(`
-      UPDATE "CustomerInvoice"
-      SET "paymentStatus" = CASE
-        WHEN "totalAmount" - "paidAmount" - "downPayment" <= 0 THEN 'PAID'::"PaymentStatus"
-        WHEN "paidAmount" > 0 OR "downPayment" > 0             THEN 'PARTIALLY_PAID'::"PaymentStatus"
-        ELSE 'UNPAID'::"PaymentStatus"
-      END
-      WHERE "paymentStatus" IS DISTINCT FROM CASE
-        WHEN "totalAmount" - "paidAmount" - "downPayment" <= 0 THEN 'PAID'::"PaymentStatus"
-        WHEN "paidAmount" > 0 OR "downPayment" > 0             THEN 'PARTIALLY_PAID'::"PaymentStatus"
-        ELSE 'UNPAID'::"PaymentStatus"
-      END
-    `);
-    if (fixed > 0) {
-      console.log(`[init-db] Corrected paymentStatus on ${fixed} invoice(s)`);
-    }
+    const numberingProfile = await prisma.companyProfile.findUnique({ where: { id: "default" } });
+    const customerPrefix = numberingProfile?.customerInvoicePrefix || "INV-2026-";
+    const supplierPrefix = numberingProfile?.supplierInvoicePrefix || "PO-2026-";
+    const estimatePrefix = `EST-${new Date().getFullYear()}-`;
+    await backfillSequenceCounter("CustomerInvoice", "invoiceNumber", customerPrefix, "customerInvoiceNextSeq");
+    await backfillSequenceCounter("SupplierInvoice", "invoiceNumber", supplierPrefix, "supplierInvoiceNextSeq");
+    await backfillSequenceCounter("Estimate", "estimateNumber", estimatePrefix, "estimateNextSeq");
   } catch (e) {
-    console.error("[init-db] paymentStatus backfill failed:", e);
+    console.error("[init-db] sequence counter backfill failed:", e);
   }
 
+  // The owner's one and only sign-in account is permanently pinned to ADMIN
+  // here, regardless of what the Settings UI shows -- this is a deliberate,
+  // owner-approved policy (confirmed 2026-08), not a bug. Do not remove.
+  // admin@lacuevita.com was a leftover placeholder identity from this app's
+  // initial build-out and is not used to sign in, so it is intentionally
+  // not pinned here.
   const HARD_CODED_ADMINS = [
-    "admin@lacuevita.com",
+    "sales@lacuevitafurniture.com",
   ];
   for (const email of HARD_CODED_ADMINS) {
     try {
@@ -247,23 +385,20 @@ export async function initializeDatabase() {
   }
 
   try {
-    const legacyAdmin = await prisma.user.findUnique({ where: { email: "admin@bizledger.com" } });
-    if (legacyAdmin) {
-      await prisma.user.update({
-        where: { id: legacyAdmin.id },
-        data: { email: "admin@lacuevita.com", role: "ADMIN" },
-      });
-      console.log("[init-db] Migrated admin email bizledger -> lacuevita (role=ADMIN)");
-    }
-
-    const lcAdmin = await prisma.user.findUnique({ where: { email: "admin@lacuevita.com" } });
-    if (lcAdmin && lcAdmin.role !== "ADMIN") {
-      await prisma.user.update({ where: { id: lcAdmin.id }, data: { role: "ADMIN" } });
-      console.log("[init-db] Restored admin@lacuevita.com role -> ADMIN");
+    // Self-heal: always make sure the owner's account is ADMIN.
+    // (A one-time migration used to live here renaming an even older
+    // admin@bizledger.com placeholder to admin@lacuevita.com -- both were
+    // leftover identities from this app's initial build-out, are not used
+    // to sign in, and that migration has long since completed, so it was
+    // removed rather than kept running as dead weight on every boot.)
+    const ownerAdmin = await prisma.user.findUnique({ where: { email: "sales@lacuevitafurniture.com" } });
+    if (ownerAdmin && ownerAdmin.role !== "ADMIN") {
+      await prisma.user.update({ where: { id: ownerAdmin.id }, data: { role: "ADMIN" } });
+      console.log("[init-db] Restored sales@lacuevitafurniture.com role -> ADMIN");
     }
 
     const builtInAdmins = [
-      "admin@lacuevita.com",
+      "sales@lacuevitafurniture.com",
     ];
     const envAdmins = (process.env.ADMIN_EMAILS ?? "")
       .split(",")
@@ -282,18 +417,58 @@ export async function initializeDatabase() {
 
     const adminCount = await prisma.user.count({ where: { role: "ADMIN" } });
     if (adminCount === 0) {
-      const hash = await bcrypt.hash("admin123", 12);
+      // Emergency safety net only (every ADMIN account was deleted/demoted).
+      // The password is random and never logged -- recovering access to
+      // this account requires setting a new password directly against the
+      // database, which is the correct floor for a last-resort recovery
+      // path, not something visible in ordinary application logs.
+      const randomPassword = randomBytes(24).toString("base64url");
+      const hash = await bcrypt.hash(randomPassword, 12);
       await prisma.user.create({
         data: {
-          email: "admin@lacuevita.com",
-          name: "Admin",
+          email: "sales@lacuevitafurniture.com",
+          name: "Owner",
           password: hash,
           role: "ADMIN",
         },
       });
-      console.log("[init-db] Default admin seeded: admin@lacuevita.com / admin123");
+      console.log(
+        "[init-db] No ADMIN users existed -- created a fallback sales@lacuevitafurniture.com account with a random password. Set its password directly in the database to recover access."
+      );
     }
   } catch (e) {
     console.error("[init-db] admin seed failed:", e);
   }
+}
+
+/**
+ * Bumps `CompanyProfile[seqField]` up to at least "one past the highest
+ * number this prefix's own series has ever used" in `table`, if it isn't
+ * already there. Scoped to `prefix` (WHERE column LIKE prefix || '%', same
+ * as the pre-counter MAX-scan this whole file replaced) -- an unscoped scan
+ * would let an unrelated legacy/manually-typed number that merely happens
+ * to contain a huge digit run (e.g. an old id like "99999999-legacy")
+ * permanently inflate this prefix's counter to match it, on every single
+ * boot. GREATEST means this only ever moves the counter forward, so it's
+ * safe to run unconditionally every time.
+ */
+async function backfillSequenceCounter(
+  table: string,
+  column: string,
+  prefix: string,
+  seqField: SequenceField
+): Promise<void> {
+  const tableIdent = Prisma.raw(`"${table}"`);
+  const columnIdent = Prisma.raw(`"${column}"`);
+  const rows = await prisma.$queryRaw<{ maxSeq: number | null }[]>(Prisma.sql`
+    SELECT MAX(CAST(substring(substring(${columnIdent} from length(${prefix}) + 1) from '^[0-9]+') AS INTEGER)) AS "maxSeq"
+    FROM ${tableIdent}
+    WHERE ${columnIdent} LIKE ${prefix + "%"}
+  `);
+  const maxSeq = rows[0]?.maxSeq ?? null;
+  if (maxSeq === null) return;
+  const seqColumnIdent = Prisma.raw(`"${seqField}"`);
+  await prisma.$executeRaw`
+    UPDATE "CompanyProfile" SET ${seqColumnIdent} = GREATEST(${seqColumnIdent}, ${maxSeq + 1}) WHERE "id" = 'default'
+  `;
 }

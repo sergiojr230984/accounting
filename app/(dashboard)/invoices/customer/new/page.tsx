@@ -13,12 +13,12 @@ import {
   Search,
   X,
   Printer,
-  Eye,
 } from "lucide-react";
 import Decimal from "decimal.js";
 import CustomerCreateModal from "@/components/CustomerCreateModal";
 import InvoiceExtractor from "@/components/InvoiceExtractor";
 import InvoiceDocumentPreview from "@/components/InvoiceDocumentPreview";
+import ProductAutocomplete, { type ProductOption } from "@/components/ProductAutocomplete";
 import { formatCurrency } from "@/lib/money";
 import { generateInvoicePDF } from "@/lib/invoice-pdf";
 
@@ -32,16 +32,6 @@ interface Customer {
   emergencyContactPhone?: string | null;
 }
 
-interface Product {
-  id: string;
-  name: string;
-  description: string | null;
-  price: string;
-  taxRate: string;
-  incomeAccount: string | null;
-  active: boolean;
-}
-
 interface Employee {
   id: string;
   name: string;
@@ -49,9 +39,23 @@ interface Employee {
   active: boolean;
 }
 
+interface SupplierOption {
+  id: string;
+  name: string;
+  code: string | null;
+  active: boolean;
+  isHouse: boolean;
+}
+
 interface LineItem {
+  // Combined product description + color, single free-typed field by
+  // design -- see the CustomerInvoiceItem.description doc comment.
   description: string;
-  itemDescription: string;
+  // Item code (`XX/PARTNUMBER`) -- supplierId is picked from the supplier
+  // dropdown (never free-typed), partNumber is free-typed. No cost field
+  // anywhere on this page: sales never sees cost.
+  supplierId: string;
+  partNumber: string;
   quantity: string;
   unitPrice: string;
   taxRate: string;
@@ -60,7 +64,8 @@ interface LineItem {
 
 const blankItem = (): LineItem => ({
   description: "",
-  itemDescription: "",
+  supplierId: "",
+  partNumber: "",
   quantity: "1",
   unitPrice: "0",
   taxRate: "0",
@@ -82,8 +87,8 @@ export default function NewCustomerInvoicePage() {
   const [customerQuery, setCustomerQuery] = useState("");
   const [customerOpen, setCustomerOpen] = useState(false);
 
-  const [products, setProducts] = useState<Product[]>([]);
-  const [productFocusIdx, setProductFocusIdx] = useState<number | null>(null);
+  const [products, setProducts] = useState<ProductOption[]>([]);
+  const [suppliers, setSuppliers] = useState<SupplierOption[]>([]);
 
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [employeeId, setEmployeeId] = useState("");
@@ -92,7 +97,6 @@ export default function NewCustomerInvoicePage() {
   const [invoiceNumber, setInvoiceNumber] = useState("");
   const [invoiceDate, setInvoiceDate] = useState(todayISO());
   const [dueDate, setDueDate] = useState(plusDaysISO(30));
-  const [downPayment, setDownPayment] = useState("0");
   const [notes, setNotes] = useState("");
   const [items, setItems] = useState<LineItem[]>([blankItem()]);
   const [taxRates, setTaxRates] = useState<{ id: string; name: string; rate: string; active: boolean }[]>([]);
@@ -115,10 +119,6 @@ export default function NewCustomerInvoicePage() {
   const [saving, setSaving] = useState<"idle" | "save" | "print" | "send">("idle");
   const [error, setError] = useState("");
 
-  const [showPreview, setShowPreview] = useState(false);
-  const [previewUrl, setPreviewUrl] = useState("");
-  const [previewing, setPreviewing] = useState(false);
-
   const [userRole, setUserRole] = useState<string | null>(null);
   const canSeeCommission = userRole === "ADMIN" || userRole === "MANAGER";
 
@@ -132,9 +132,9 @@ export default function NewCustomerInvoicePage() {
 
   useEffect(() => {
     loadCustomers();
-    fetch("/api/auth/session")
+    fetch("/api/me")
       .then((r) => (r.ok ? r.json() : null))
-      .then((s: { user?: { role?: string } } | null) => setUserRole(s?.user?.role ?? null))
+      .then((d: { viewer?: { role?: string } } | null) => setUserRole(d?.viewer?.role ?? null))
       .catch(() => {});
     fetch("/api/employees")
       .then((r) => (r.ok ? r.json() : []))
@@ -148,25 +148,30 @@ export default function NewCustomerInvoicePage() {
       .catch(() => {});
     fetch("/api/products")
       .then((r) => (r.ok ? r.json() : []))
-      .then((list: Product[]) => setProducts(list.filter((p) => p.active)))
+      .then((list: ProductOption[]) => setProducts(list.filter((p) => p.active)))
       .catch(() => {});
-    fetch("/api/settings")
-      .then((r) => (r.ok ? r.json() : null))
-      .then(
-        (p: { creditCardFeeRate: string; customFees?: { id: string; label: string; rate: number }[] } | null) => {
-          if (!p) return;
-          setCcFeeRate(p.creditCardFeeRate);
-          if (Array.isArray(p.customFees) && p.customFees.length > 0) {
-            setCustomFees(p.customFees);
-          }
+    fetch("/api/suppliers")
+      .then((r) => (r.ok ? r.json() : []))
+      .then((list: SupplierOption[]) => setSuppliers(Array.isArray(list) ? list.filter((s) => s.active) : []))
+      .catch(() => {});
+    Promise.all([
+      fetch("/api/settings").then((r) => (r.ok ? r.json() : null)).catch(() => null),
+      fetch("/api/invoices/customer/next-number").then((r) => (r.ok ? r.json() : null)).catch(() => null),
+    ]).then(([settings, nextNum]) => {
+      if (settings) {
+        setCcFeeRate(settings.creditCardFeeRate);
+        if (Array.isArray(settings.customFees) && settings.customFees.length > 0) {
+          setCustomFees(settings.customFees);
         }
-      )
-      .catch(() => {});
-    // Use the real max invoice number from the DB so manually-entered numbers are respected
-    fetch("/api/invoices/customer/next-number")
-      .then((r) => (r.ok ? r.json() : null))
-      .then((d: { nextNumber?: string } | null) => { if (d?.nextNumber) setInvoiceNumber(d.nextNumber); })
-      .catch(() => {});
+      }
+      if (nextNum?.nextNumber) {
+        setInvoiceNumber(nextNum.nextNumber);
+      } else if (settings) {
+        const prefix = settings.customerInvoicePrefix || "INV-2026-";
+        const seq = settings.customerInvoiceNextSeq ?? 1001;
+        setInvoiceNumber(`${prefix}${String(seq).padStart(4, "0")}`);
+      }
+    });
   }, []);
 
   useEffect(() => {
@@ -201,7 +206,10 @@ export default function NewCustomerInvoicePage() {
       } catch {}
       taxAmount = taxAmount.plus(lineTax);
 
-      const base = lineTotal.plus(lineTax);
+      // Card fee (and other configured fees) apply to the pre-tax line
+      // amount only, matching the accounting system of record -- not to
+      // price + tax.
+      const base = lineTotal;
       for (const feeId of item.fees || []) {
         if (!feeId) continue;
         const f = allFees.find((cf) => cf.id === feeId);
@@ -229,15 +237,11 @@ export default function NewCustomerInvoicePage() {
     for (const f of feeAgg.values()) feesSum = feesSum.plus(f.amount);
 
     const total = subtotal.plus(taxAmount).plus(feesSum);
-    const down = (() => {
-      try { return new Decimal(downPayment || "0"); } catch { return new Decimal(0); }
-    })();
-    const balance = Decimal.max(total.minus(down), 0);
     const commission = (() => {
       try { return total.times(new Decimal(commissionRate || "0")); } catch { return new Decimal(0); }
     })();
-    return { subtotal, taxAmount, appliedFees, total, downPayment: down, balance, commission };
-  }, [items, downPayment, commissionRate, allFees]);
+    return { subtotal, taxAmount, appliedFees, total, commission };
+  }, [items, commissionRate, allFees]);
 
   function updateItem(idx: number, field: keyof LineItem, value: string) {
     setItems((prev) => {
@@ -280,13 +284,15 @@ export default function NewCustomerInvoicePage() {
     });
   }
 
-  function applyProduct(idx: number, product: Product) {
+  function applyProduct(idx: number, product: ProductOption) {
     setItems((prev) => {
       const next = [...prev];
       next[idx] = {
         ...next[idx],
-        description: product.name,
-        itemDescription: product.description ?? "",
+        // description is the single combined product-description-and-color
+        // field now (no separate secondary field) -- fold the catalog
+        // item's own description into it rather than silently dropping it.
+        description: product.description ? `${product.name} — ${product.description}` : product.name,
         unitPrice: product.price,
         taxRate: product.taxRate,
       };
@@ -297,7 +303,6 @@ export default function NewCustomerInvoicePage() {
       }
       return next;
     });
-    setProductFocusIdx(null);
   }
 
   async function handleExtracted(data: {
@@ -315,7 +320,10 @@ export default function NewCustomerInvoicePage() {
     if (data.items?.length) {
       const fresh: LineItem[] = data.items.map((i) => ({
         ...i,
-        itemDescription: "",
+        // The extractor has no way to know the supplier/part number split --
+        // sales still has to pick those manually for each extracted line.
+        supplierId: "",
+        partNumber: "",
         taxRate: i.taxRate || "0",
         fees: allFees.length > 0 ? [null] : [],
       }));
@@ -347,7 +355,6 @@ export default function NewCustomerInvoicePage() {
       creditCardFee: "0",
       appliedFees: totals.appliedFees.map((f) => ({ label: f.label, amount: f.amount })),
       paidAmount: "0",
-      downPayment: downPayment || "0",
       notes,
       customer: {
         name: customer?.name ?? "",
@@ -357,45 +364,25 @@ export default function NewCustomerInvoicePage() {
         emergencyContactName: customer?.emergencyContactName ?? null,
         emergencyContactPhone: customer?.emergencyContactPhone ?? null,
       },
-      items: real.map((i) => ({
-        description: i.description,
-        itemDescription: i.itemDescription,
-        quantity: i.quantity,
-        unitPrice: i.unitPrice,
-        taxRate: i.taxRate,
-        lineTotal: new Decimal(i.quantity || "0").times(i.unitPrice || "0").toFixed(2),
-      })),
+      items: real.map((i) => {
+        const supplier = suppliers.find((s) => s.id === i.supplierId);
+        const itemCode =
+          supplier?.code && i.partNumber.trim() ? `${supplier.code}/${i.partNumber.trim()}` : null;
+        return {
+          description: i.description,
+          itemCode,
+          quantity: i.quantity,
+          unitPrice: i.unitPrice,
+          taxRate: i.taxRate,
+          lineTotal: new Decimal(i.quantity || "0").times(i.unitPrice || "0").toFixed(2),
+        };
+      }),
       employee: (() => {
         const emp = employees.find((e) => e.id === employeeId);
         return emp ? { id: emp.id, name: emp.name } : null;
       })(),
       company: company as Parameters<typeof generateInvoicePDF>[0]["company"],
     };
-  }
-
-  async function handlePreview() {
-    if (!customerId) { setError("Please select a customer"); return; }
-    const real = items.filter((i) => i.description.trim() !== "");
-    if (real.length === 0) { setError("Add at least one line item"); return; }
-    setError("");
-    setPreviewing(true);
-    try {
-      const company = await fetch("/api/settings").then((r) => (r.ok ? r.json() : null)).catch(() => null);
-      const doc = generateInvoicePDF(buildPdfData(company));
-      const blob = doc.output("blob");
-      if (previewUrl) URL.revokeObjectURL(previewUrl);
-      const url = URL.createObjectURL(blob);
-      setPreviewUrl(url);
-      setShowPreview(true);
-    } finally {
-      setPreviewing(false);
-    }
-  }
-
-  function closePreview() {
-    setShowPreview(false);
-    if (previewUrl) URL.revokeObjectURL(previewUrl);
-    setPreviewUrl("");
   }
 
   async function save(action: "save" | "print" | "send"): Promise<void> {
@@ -407,6 +394,11 @@ export default function NewCustomerInvoicePage() {
     const real = items.filter((i) => i.description.trim() !== "");
     if (real.length === 0) {
       setError("Add at least one line item");
+      return;
+    }
+    const missingCode = real.find((i) => !i.supplierId || !i.partNumber.trim());
+    if (missingCode) {
+      setError(`"${missingCode.description}" is missing a supplier or part number.`);
       return;
     }
     setSaving(action);
@@ -421,7 +413,6 @@ export default function NewCustomerInvoicePage() {
           dueDate,
           items: real.map(({ fees: _fees, ...rest }) => rest),
           notes,
-          downPayment,
           employeeId: employeeId || null,
           commissionRate: commissionRate || "0",
           paidAmount: "0",
@@ -459,51 +450,8 @@ export default function NewCustomerInvoicePage() {
 
   return (
     <>
-      {showPreview && (
-        <div className="fixed inset-0 z-50 flex flex-col bg-black/70 backdrop-blur-sm">
-          <div className="flex items-center justify-between px-4 py-3 bg-white border-b shadow-sm shrink-0">
-            <div className="flex items-center gap-3">
-              <Eye className="w-5 h-5 text-brand-600" />
-              <h2 className="font-semibold text-gray-800">Invoice Preview</h2>
-              <span className="text-xs text-gray-400 bg-gray-100 px-2 py-0.5 rounded-full">not saved yet</span>
-            </div>
-            <div className="flex items-center gap-2">
-              <button onClick={closePreview} className="btn-secondary">
-                <X className="w-4 h-4" /> Close
-              </button>
-              <button
-                onClick={async () => { closePreview(); await save("save"); }}
-                disabled={saving !== "idle"}
-                className="btn-secondary"
-              >
-                {saving === "save" ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
-                Save draft
-              </button>
-              <button
-                onClick={async () => { closePreview(); await save("send"); }}
-                disabled={saving !== "idle"}
-                className="btn-secondary"
-              >
-                {saving === "send" ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
-                Save &amp; Email
-              </button>
-              <button
-                onClick={async () => { closePreview(); await save("print"); }}
-                disabled={saving !== "idle"}
-                className="btn-primary"
-              >
-                {saving === "print" ? <Loader2 className="w-4 h-4 animate-spin" /> : <Printer className="w-4 h-4" />}
-                Save &amp; Print
-              </button>
-            </div>
-          </div>
-          <div className="flex-1 overflow-hidden">
-            <iframe src={previewUrl} className="w-full h-full border-0" title="Invoice Preview" />
-          </div>
-        </div>
-      )}
-
       <div className="flex flex-col lg:flex-row gap-6 max-w-7xl mx-auto">
+        {/* Main column */}
         <div className="flex-1 min-w-0 space-y-5">
           <div className="flex items-center justify-between gap-3 flex-wrap">
             <div className="flex items-center gap-3">
@@ -511,15 +459,6 @@ export default function NewCustomerInvoicePage() {
               <h1 className="text-3xl font-bold text-gray-900">New invoice</h1>
             </div>
             <div className="flex items-center gap-2">
-              <button
-                onClick={handlePreview}
-                disabled={previewing || saving !== "idle"}
-                className="btn-secondary"
-                title="Preview the invoice without saving"
-              >
-                {previewing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Eye className="w-4 h-4" />}
-                Preview
-              </button>
               <button
                 onClick={() => save("save")}
                 disabled={saving !== "idle"}
@@ -531,6 +470,7 @@ export default function NewCustomerInvoicePage() {
             </div>
           </div>
 
+          {/* Optional AI extractor */}
           <details className="card group">
             <summary className="cursor-pointer flex items-center justify-between list-none">
               <div>
@@ -545,6 +485,7 @@ export default function NewCustomerInvoicePage() {
             </div>
           </details>
 
+          {/* Bill To + Invoice meta */}
           <div className="card space-y-5">
             <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
               <div>
@@ -619,6 +560,7 @@ export default function NewCustomerInvoicePage() {
             </div>
           </div>
 
+          {/* Line items */}
           <div className="card p-0 overflow-hidden">
             <div className="px-5 py-3 border-b bg-gray-50">
               <h2 className="font-semibold text-gray-800 text-sm">Items</h2>
@@ -626,7 +568,7 @@ export default function NewCustomerInvoicePage() {
             <table className="w-full text-sm">
               <thead className="border-b">
                 <tr className="text-left text-gray-500">
-                  <th className="px-3 py-2 text-xs font-medium uppercase">Item / Description</th>
+                  <th className="px-3 py-2 text-xs font-medium uppercase">Description</th>
                   <th className="px-3 py-2 text-xs font-medium uppercase w-20 text-right">Qty</th>
                   <th className="px-3 py-2 text-xs font-medium uppercase w-28 text-right">Unit price</th>
                   <th className="px-3 py-2 text-xs font-medium uppercase w-20 text-right">Tax</th>
@@ -649,52 +591,40 @@ export default function NewCustomerInvoicePage() {
                     <Fragment key={`item-${idx}`}>
                       <tr className="border-b last:border-b-0 hover:bg-gray-50/50">
                         <td className="px-2 py-1 relative">
-                          <input
+                          {/* Item code: XX/PARTNUMBER -- supplier is picked
+                              from a dropdown (never free-typed), part number
+                              is free-typed. */}
+                          <div className="flex gap-1">
+                            <select
+                              className="w-24 shrink-0 px-1.5 py-1 border-0 focus:outline-none focus:bg-brand-50 rounded text-xs text-gray-600 bg-transparent"
+                              value={item.supplierId}
+                              onChange={(e) => updateItem(idx, "supplierId", e.target.value)}
+                            >
+                              <option value="">Supplier…</option>
+                              {suppliers.map((s) => (
+                                <option key={s.id} value={s.id}>{s.code ?? "??"} — {s.name}</option>
+                              ))}
+                            </select>
+                            <input
+                              className="flex-1 min-w-0 px-2 py-1 border-0 focus:outline-none focus:bg-brand-50 rounded text-xs text-gray-600"
+                              placeholder="Part number"
+                              value={item.partNumber}
+                              onChange={(e) => updateItem(idx, "partNumber", e.target.value)}
+                            />
+                          </div>
+                          <ProductAutocomplete
                             className="w-full px-2 py-1.5 border-0 focus:outline-none focus:bg-brand-50 rounded text-sm"
-                            placeholder="Item name"
+                            products={products}
                             value={item.description}
-                            onChange={(e) => updateItem(idx, "description", e.target.value)}
-                            onFocus={() => setProductFocusIdx(idx)}
-                            onBlur={() => setTimeout(() => setProductFocusIdx(null), 150)}
+                            onChange={(v) => updateItem(idx, "description", v)}
+                            onSelect={(product) => applyProduct(idx, product)}
                           />
-                          <input
-                            className="w-full px-2 py-1 border-0 focus:outline-none focus:bg-gray-50 rounded text-xs text-gray-500"
-                            placeholder="Description (optional)"
-                            value={item.itemDescription}
-                            onChange={(e) => updateItem(idx, "itemDescription", e.target.value)}
-                          />
-                          {productFocusIdx === idx && (() => {
-                            const q = item.description.toLowerCase();
-                            const matches = products.filter(
-                              (p) =>
-                                p.name.toLowerCase().includes(q) ||
-                                (p.description ?? "").toLowerCase().includes(q)
-                            ).slice(0, 8);
-                            if (matches.length === 0) return null;
-                            return (
-                              <div className="absolute z-20 left-2 right-2 top-full mt-0.5 bg-white border border-gray-200 rounded-lg shadow-lg overflow-hidden">
-                                {matches.map((p) => (
-                                  <button
-                                    key={p.id}
-                                    type="button"
-                                    onMouseDown={() => applyProduct(idx, p)}
-                                    className="block w-full text-left px-3 py-2 hover:bg-brand-50 text-sm"
-                                  >
-                                    <p className="font-medium text-gray-900">{p.name}</p>
-                                    <p className="text-xs text-gray-500">
-                                      ${parseFloat(p.price).toFixed(2)}
-                                      {parseFloat(p.taxRate) > 0 && ` · Tax ${(parseFloat(p.taxRate) * 100).toFixed(2)}%`}
-                                      {p.description && ` · ${p.description}`}
-                                    </p>
-                                  </button>
-                                ))}
-                              </div>
-                            );
-                          })()}
                         </td>
                         <td className="px-2 py-1">
                           <input
-                            type="number" step="0.01" min="0"
+                            type="number"
+                            step="0.01"
+                            min="0"
                             className="w-full px-2 py-1.5 border-0 focus:outline-none focus:bg-brand-50 rounded text-sm text-right"
                             value={item.quantity}
                             onChange={(e) => updateItem(idx, "quantity", e.target.value)}
@@ -702,7 +632,9 @@ export default function NewCustomerInvoicePage() {
                         </td>
                         <td className="px-2 py-1">
                           <input
-                            type="number" step="0.01" min="0"
+                            type="number"
+                            step="0.01"
+                            min="0"
                             className="w-full px-2 py-1.5 border-0 focus:outline-none focus:bg-brand-50 rounded text-sm text-right"
                             value={item.unitPrice}
                             onChange={(e) => updateItem(idx, "unitPrice", e.target.value)}
@@ -731,7 +663,10 @@ export default function NewCustomerInvoicePage() {
                             </select>
                           ) : (
                             <input
-                              type="number" step="0.0001" min="0" max="1"
+                              type="number"
+                              step="0.0001"
+                              min="0"
+                              max="1"
                               className="w-full px-2 py-1.5 border-0 focus:outline-none focus:bg-brand-50 rounded text-sm text-right"
                               value={item.taxRate}
                               onChange={(e) => updateItem(idx, "taxRate", e.target.value)}
@@ -752,7 +687,7 @@ export default function NewCustomerInvoicePage() {
 
                       {feeSlots.map((feeId, fIdx) => {
                         const f = feeId ? allFees.find((cf) => cf.id === feeId) : null;
-                        const base = line.plus(lineTax);
+                        const base = line;
                         let amt = new Decimal(0);
                         if (f) {
                           try { amt = base.times(new Decimal(f.rate)); } catch {}
@@ -819,6 +754,7 @@ export default function NewCustomerInvoicePage() {
             </button>
           </div>
 
+          {/* Notes */}
           <div className="card space-y-3">
             <label className="label">Notes / Terms</label>
             <textarea
@@ -849,6 +785,7 @@ export default function NewCustomerInvoicePage() {
                 price: item.unitPrice,
                 taxRate: item.taxRate,
               }))}
+            fees={totals.appliedFees}
             notes={notes}
             paymentStatus="UNPAID"
             paidAmount="0"
@@ -859,6 +796,7 @@ export default function NewCustomerInvoicePage() {
           )}
         </div>
 
+        {/* Sticky totals panel */}
         <aside className="lg:w-80 lg:shrink-0 w-full">
           <div className="lg:sticky lg:top-6 space-y-4">
             <div className="card space-y-3">
@@ -891,76 +829,59 @@ export default function NewCustomerInvoicePage() {
             </div>
 
             <div className="card space-y-3">
-              <h3 className="font-semibold text-gray-800 text-sm uppercase tracking-wide">Financing</h3>
+              <h3 className="font-semibold text-gray-800 text-sm uppercase tracking-wide">Sales rep</h3>
               <div>
-                <label className="label">Down payment ($)</label>
-                <input
-                  type="number" step="0.01" min="0" className="input"
-                  value={downPayment}
-                  onChange={(e) => setDownPayment(e.target.value)}
-                />
+                <label className="label">Employee</label>
+                <select
+                  className="input"
+                  value={employeeId}
+                  onChange={(e) => {
+                    const id = e.target.value;
+                    setEmployeeId(id);
+                    const match = employees.find((emp) => emp.id === id);
+                    if (match) setCommissionRate(match.commissionRate);
+                    if (!id) setCommissionRate("0");
+                  }}
+                >
+                  <option value="">— None —</option>
+                  {employees.map((emp) => (
+                    <option key={emp.id} value={emp.id}>
+                      {emp.name}
+                      {canSeeCommission ? ` (${(parseFloat(emp.commissionRate) * 100).toFixed(1)}%)` : ""}
+                    </option>
+                  ))}
+                </select>
               </div>
-              <div className="flex justify-between text-sm pt-1 border-t">
-                <span className="text-gray-500">Remaining balance</span>
-                <span className="font-bold text-brand-700">{formatCurrency(totals.balance.toFixed(2))}</span>
-              </div>
-            </div>
-
-            {canSeeCommission && (
-              <div className="card space-y-3">
-                <h3 className="font-semibold text-gray-800 text-sm uppercase tracking-wide">Sales rep</h3>
-                <div>
-                  <label className="label">Employee</label>
-                  <select
-                    className="input"
-                    value={employeeId}
-                    onChange={(e) => {
-                      const id = e.target.value;
-                      setEmployeeId(id);
-                      const match = employees.find((emp) => emp.id === id);
-                      if (match) setCommissionRate(match.commissionRate);
-                      if (!id) setCommissionRate("0");
-                    }}
-                  >
-                    <option value="">— None —</option>
-                    {employees.map((emp) => (
-                      <option key={emp.id} value={emp.id}>
-                        {emp.name} ({(parseFloat(emp.commissionRate) * 100).toFixed(1)}%)
-                      </option>
-                    ))}
-                  </select>
-                </div>
-                <div>
-                  <label className="label">Commission rate (decimal)</label>
-                  <input
-                    type="number" step="0.0001" min="0" max="1" className="input"
-                    value={commissionRate}
-                    onChange={(e) => setCommissionRate(e.target.value)}
-                    disabled={!employeeId}
-                  />
-                </div>
-                {employeeId && (
-                  <div className="flex justify-between text-sm pt-1 border-t">
-                    <span className="text-gray-500">Commission earned</span>
-                    <span className="font-bold text-green-700">{formatCurrency(totals.commission.toFixed(2))}</span>
+              {canSeeCommission && (
+                <>
+                  <div>
+                    <label className="label">Commission rate (decimal)</label>
+                    <input
+                      type="number"
+                      step="0.0001"
+                      min="0"
+                      max="1"
+                      className="input"
+                      value={commissionRate}
+                      onChange={(e) => setCommissionRate(e.target.value)}
+                      disabled={!employeeId}
+                    />
                   </div>
-                )}
-              </div>
-            )}
+                  {employeeId && (
+                    <div className="flex justify-between text-sm pt-1 border-t">
+                      <span className="text-gray-500">Commission earned</span>
+                      <span className="font-bold text-green-700">{formatCurrency(totals.commission.toFixed(2))}</span>
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
 
             <div className="space-y-2">
               <button
-                onClick={handlePreview}
-                disabled={previewing || saving !== "idle"}
-                className="btn-primary w-full justify-center"
-              >
-                {previewing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Eye className="w-4 h-4" />}
-                Preview invoice
-              </button>
-              <button
                 onClick={() => save("print")}
                 disabled={saving !== "idle"}
-                className="btn-secondary w-full justify-center"
+                className="btn-primary w-full justify-center"
               >
                 {saving === "print" ? <Loader2 className="w-4 h-4 animate-spin" /> : <Printer className="w-4 h-4" />}
                 Save &amp; Print PDF
@@ -990,7 +911,7 @@ export default function NewCustomerInvoicePage() {
           open={modalOpen}
           initialName={modalSeedName}
           onClose={() => setModalOpen(false)}
-          onCreated={(c) => {
+          onSaved={(c) => {
             setCustomers((prev) => [...prev, c as Customer]);
             setCustomerId(c.id);
             setCustomerQuery("");

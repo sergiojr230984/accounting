@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
+import { requireRole } from "@/lib/api";
+import { writeAuditLog, extractMeta, actorFromSession, diffChanges } from "@/lib/audit";
 import { z } from "zod";
 
 const updateSchema = z.object({
@@ -8,6 +10,8 @@ const updateSchema = z.object({
   email: z.string().email("Invalid email").optional().or(z.literal("")).or(z.null()),
   phone: z.string().optional().or(z.null()),
   address: z.string().optional().or(z.null()),
+  emergencyContactName: z.string().optional().or(z.null()),
+  emergencyContactPhone: z.string().optional().or(z.null()),
 });
 
 export async function PATCH(
@@ -24,6 +28,9 @@ export async function PATCH(
     return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
   }
 
+  const existing = await prisma.customer.findUnique({ where: { id } });
+  if (!existing) return NextResponse.json({ error: "Not found" }, { status: 404 });
+
   const customer = await prisma.customer.update({
     where: { id },
     data: {
@@ -31,17 +38,36 @@ export async function PATCH(
       email: parsed.data.email || null,
       phone: parsed.data.phone || null,
       address: parsed.data.address || null,
+      emergencyContactName: parsed.data.emergencyContactName || null,
+      emergencyContactPhone: parsed.data.emergencyContactPhone || null,
     },
   });
+
+  await writeAuditLog({
+    ...actorFromSession(session),
+    action: "UPDATE",
+    entityType: "customer",
+    entityId: id,
+    entityLabel: customer.name,
+    changes: diffChanges(
+      { name: existing.name, email: existing.email, phone: existing.phone, address: existing.address },
+      { name: customer.name, email: customer.email, phone: customer.phone, address: customer.address }
+    ),
+    ...extractMeta(request),
+  });
+
   return NextResponse.json(customer);
 }
 
 export async function DELETE(
-  _request: Request,
+  request: Request,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  const session = await auth();
-  if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  // Editing a customer's contact info is a routine sales task (PATCH above
+  // stays open to any authenticated role), but deleting the record entirely
+  // is not.
+  const guard = await requireRole("ADMIN", "MANAGER");
+  if (guard instanceof NextResponse) return guard;
 
   const { id } = await params;
 
@@ -53,6 +79,19 @@ export async function DELETE(
     );
   }
 
+  const existing = await prisma.customer.findUnique({ where: { id } });
+  if (!existing) return NextResponse.json({ error: "Not found" }, { status: 404 });
+
   await prisma.customer.delete({ where: { id } });
+
+  await writeAuditLog({
+    ...actorFromSession(guard),
+    action: "DELETE",
+    entityType: "customer",
+    entityId: id,
+    entityLabel: existing.name,
+    ...extractMeta(request),
+  });
+
   return NextResponse.json({ ok: true });
 }

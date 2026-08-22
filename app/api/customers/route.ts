@@ -1,7 +1,9 @@
 import { NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
+import { requireReadAccess } from "@/lib/api";
 import { prisma } from "@/lib/prisma";
 import { initializeDatabase } from "@/lib/init-db";
+import { writeAuditLog, extractMeta, actorFromSession } from "@/lib/audit";
 import { z } from "zod";
 
 const schema = z.object({
@@ -9,11 +11,13 @@ const schema = z.object({
   email: z.string().email().optional().or(z.literal("")),
   phone: z.string().optional(),
   address: z.string().optional(),
+  emergencyContactName: z.string().optional(),
+  emergencyContactPhone: z.string().optional(),
 });
 
-export async function GET() {
-  const session = await auth();
-  if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+export async function GET(request: Request) {
+  const access = await requireReadAccess(request, "customers");
+  if (access instanceof NextResponse) return access;
 
   await initializeDatabase();
   try {
@@ -54,8 +58,20 @@ export async function POST(request: Request) {
         email: parsed.data.email || null,
         phone: parsed.data.phone || null,
         address: parsed.data.address || null,
+        emergencyContactName: parsed.data.emergencyContactName || null,
+        emergencyContactPhone: parsed.data.emergencyContactPhone || null,
       },
     });
+
+    await writeAuditLog({
+      ...actorFromSession(session),
+      action: "CREATE",
+      entityType: "customer",
+      entityId: customer.id,
+      entityLabel: customer.name,
+      ...extractMeta(request),
+    });
+
     return NextResponse.json(customer, { status: 201 });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
