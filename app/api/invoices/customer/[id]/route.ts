@@ -147,6 +147,7 @@ export async function PATCH(
     paidAmount: existing.paidAmount.toString(),
     totalAmount: existing.totalAmount.toString(),
     notes: existing.notes,
+    customerAddress: existing.customerAddress,
   };
 
   // Once any payment has been recorded, existing line items (and the totals
@@ -198,6 +199,12 @@ export async function PATCH(
   if (data.dueDate) updateData.dueDate = new Date(data.dueDate);
   if (data.notes !== undefined) updateData.notes = data.notes;
   if (data.paymentStatus) updateData.paymentStatus = data.paymentStatus;
+  // Stored on the invoice itself, NOT written back to the shared Customer
+  // record -- see the doc comment on CustomerInvoice.customerAddress in
+  // prisma/schema.prisma for why. (This used to be a fire-and-forget
+  // prisma.customer.update() call; that's gone entirely now, not just moved
+  // into the transaction below.)
+  if (data.customerAddress !== undefined) updateData.customerAddress = data.customerAddress;
 
   if (data.paidAmount !== undefined) updateData.paidAmount = data.paidAmount;
   if (data.downPayment !== undefined) updateData.downPayment = data.downPayment;
@@ -414,19 +421,6 @@ export async function PATCH(
   // a manual bump-up during an edit wouldn't protect that number from ever
   // being suggested/reused later. See lib/next-number.ts's claimSequenceNumber.
   const updated = await prisma.$transaction(async (tx) => {
-    // Runs in the same transaction as the invoice update below so the two
-    // can never split: previously this was a fire-and-forget call made
-    // before any validation, with failures swallowed by a bare .catch() --
-    // a bad write (e.g. a dropped connection) silently left the typed
-    // address out of the customer record while the rest of the save
-    // appeared to succeed, so staff would see it saved in the app but
-    // missing from the printed PDF.
-    if (data.customerAddress !== undefined) {
-      await tx.customer.update({
-        where: { id: existing.customerId },
-        data: { address: data.customerAddress },
-      });
-    }
     const result = await tx.customerInvoice.update({
       where: { id },
       data: updateData,
@@ -466,6 +460,7 @@ export async function PATCH(
       paidAmount: updated.paidAmount.toString(),
       totalAmount: updated.totalAmount.toString(),
       notes: updated.notes,
+      customerAddress: updated.customerAddress,
     }),
     ...extractMeta(request),
   });

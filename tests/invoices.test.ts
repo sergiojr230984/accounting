@@ -658,3 +658,89 @@ describe("invalid foreign keys are rejected cleanly, not a raw DB-constraint 500
     expect(body.error).toContain("supplier");
   });
 });
+
+// Regression coverage for the "printed address doesn't match what was typed"
+// bug: the invoice edit screen's "Customer Address" field used to write
+// straight to the shared Customer.address record (see the removed
+// prisma.customer.update() call this replaces), so correcting the address
+// on one invoice silently changed what every *other* invoice/estimate for
+// that same customer would show -- whichever invoice was edited last "won",
+// and everyone else's printed PDF picked up that value instead of what was
+// entered for their own document. Fixed by giving CustomerInvoice its own
+// customerAddress column that the invoice edit route now writes to instead.
+describe("customer address — per-invoice override, not a shared write to Customer", () => {
+  it("editing one invoice's address does not change the customer's master record or a sibling invoice", async () => {
+    const customer = await admin.postJson<{ id: string; address: string | null }>("/api/customers", {
+      name: `Address Test Customer ${Date.now()}`,
+      address: "1 Original Rd, Miami, FL 33101",
+    });
+    const addrCustomerId = customer.body.id;
+
+    const invoiceA = await admin.postJson<{ id: string }>("/api/invoices/customer", {
+      customerId: addrCustomerId,
+      invoiceNumber: `ADDR-A-${Date.now()}`,
+      invoiceDate: "2026-01-01",
+      dueDate: "2026-01-31",
+      items: [{ description: "x", quantity: "1", unitPrice: "1" }],
+    });
+    const invoiceB = await admin.postJson<{ id: string }>("/api/invoices/customer", {
+      customerId: addrCustomerId,
+      invoiceNumber: `ADDR-B-${Date.now()}`,
+      invoiceDate: "2026-01-01",
+      dueDate: "2026-01-31",
+      items: [{ description: "x", quantity: "1", unitPrice: "1" }],
+    });
+
+    // Correct the delivery address on invoice A only.
+    const patched = await admin.postJson<{ customerAddress: string | null }>(
+      `/api/invoices/customer/${invoiceA.body.id}`,
+      { customerAddress: "2 Delivery Site Blvd, Doral, FL 33178" },
+      "PATCH"
+    );
+    expect(patched.status).toBe(200);
+    expect(patched.body.customerAddress).toBe("2 Delivery Site Blvd, Doral, FL 33178");
+
+    // Invoice A itself reflects the override.
+    const reloadedA = await admin.getJson<{ customerAddress: string | null }>(
+      `/api/invoices/customer/${invoiceA.body.id}`
+    );
+    expect(reloadedA.body.customerAddress).toBe("2 Delivery Site Blvd, Doral, FL 33178");
+
+    // Invoice B for the SAME customer must still show no override (falls
+    // back to the customer's original address) -- this is the exact
+    // cross-invoice leak the bug used to cause.
+    const reloadedB = await admin.getJson<{ customerAddress: string | null; customer: { address: string | null } }>(
+      `/api/invoices/customer/${invoiceB.body.id}`
+    );
+    expect(reloadedB.body.customerAddress).toBeNull();
+    expect(reloadedB.body.customer.address).toBe("1 Original Rd, Miami, FL 33101");
+
+    // The shared Customer record itself must be untouched.
+    const customerList = await admin.getJson<{ id: string; address: string | null }[]>("/api/customers");
+    const stillOriginal = customerList.body.find((c) => c.id === addrCustomerId);
+    expect(stillOriginal?.address).toBe("1 Original Rd, Miami, FL 33101");
+  });
+
+  it("clearing a per-invoice address override falls back to the customer's address again", async () => {
+    const customer = await admin.postJson<{ id: string }>("/api/customers", {
+      name: `Address Clear Test Customer ${Date.now()}`,
+      address: "9 Fallback Ave, Hialeah, FL 33012",
+    });
+    const invoice = await admin.postJson<{ id: string }>("/api/invoices/customer", {
+      customerId: customer.body.id,
+      invoiceNumber: `ADDR-CLEAR-${Date.now()}`,
+      invoiceDate: "2026-01-01",
+      dueDate: "2026-01-31",
+      items: [{ description: "x", quantity: "1", unitPrice: "1" }],
+    });
+
+    await admin.postJson(`/api/invoices/customer/${invoice.body.id}`, { customerAddress: "Temp override" }, "PATCH");
+    const cleared = await admin.postJson<{ customerAddress: string | null }>(
+      `/api/invoices/customer/${invoice.body.id}`,
+      { customerAddress: null },
+      "PATCH"
+    );
+    expect(cleared.status).toBe(200);
+    expect(cleared.body.customerAddress).toBeNull();
+  });
+});

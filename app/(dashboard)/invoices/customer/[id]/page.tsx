@@ -67,6 +67,9 @@ interface InvoiceDetail {
   commissionRate: string;
   employee: { id: string; name: string } | null;
   appliedFees: { id?: string; label: string; rate?: number; amount: string }[];
+  // Per-invoice override -- null means "use customer.address below". See the
+  // doc comment on CustomerInvoice.customerAddress in prisma/schema.prisma.
+  customerAddress: string | null;
   customer: { id: string; name: string; email: string | null; phone: string | null; address: string | null; emergencyContactName: string | null; emergencyContactPhone: string | null };
   items: {
     id: string;
@@ -162,7 +165,7 @@ export default function CustomerInvoiceDetailPage() {
       employeeId: data.employeeId ?? "",
       commissionRate: data.commissionRate ?? "0",
       notes: data.notes ?? "",
-      customerAddress: data.customer.address ?? "",
+      customerAddress: data.customerAddress ?? data.customer.address ?? "",
       items: data.items.map((item: InvoiceDetail["items"][0]) => ({
         id: item.id,
         description: item.description,
@@ -378,6 +381,12 @@ export default function CustomerInvoiceDetailPage() {
     return {
       ...invoice,
       company: company as Parameters<typeof generateInvoicePDF>[0]["company"],
+      // `...invoice` above brings in invoice.customer wholesale, so a plain
+      // spread would print the shared Customer.address even when this
+      // invoice has its own override -- same shape of bug as the item
+      // code/part number fix above (a raw spread silently drops a value
+      // that needs to be resolved from elsewhere first).
+      customer: { ...invoice.customer, address: invoice.customerAddress ?? invoice.customer.address },
       items: invoice.items.map((i) => ({
         ...i,
         itemCode: i.supplier?.code && i.partNumber ? `${i.supplier.code}/${i.partNumber}` : null,
@@ -681,7 +690,9 @@ export default function CustomerInvoiceDetailPage() {
                   <p className="font-medium">{invoice.customer.name}</p>
                   {invoice.customer.email && <p className="text-gray-500">{invoice.customer.email}</p>}
                   {invoice.customer.phone && <p className="text-gray-500">{invoice.customer.phone}</p>}
-                  {invoice.customer.address && <p className="text-gray-500">{invoice.customer.address}</p>}
+                  {(invoice.customerAddress ?? invoice.customer.address) && (
+                    <p className="text-gray-500">{invoice.customerAddress ?? invoice.customer.address}</p>
+                  )}
                   {(invoice.customer.emergencyContactName || invoice.customer.emergencyContactPhone) && (
                     <div className="pt-2 border-t border-gray-100">
                       <p className="text-[10px] font-semibold uppercase text-gray-400 tracking-wide">Emergency contact</p>

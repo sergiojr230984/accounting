@@ -116,6 +116,19 @@ model CustomerInvoice {
   appliedFees      Json                  @default("[]")
   paymentStatus    PaymentStatus         @default(UNPAID)
   notes            String?
+  // Per-invoice address override. Null (the common case) means "use the
+  // customer's current Customer.address" -- the printed PDF and every
+  // on-screen preview fall back to that. Once set, this invoice keeps its
+  // own copy so editing it (e.g. correcting a delivery address for one
+  // order) can never silently change what any *other* invoice/estimate for
+  // the same customer shows. Previously this field didn't exist and the
+  // edit form's "Customer Address" input wrote straight to Customer.address
+  // instead -- a shared record touched by every invoice/estimate for that
+  // customer -- so an address typed for one order would silently overwrite
+  // (or later get overwritten by) whatever was typed for a different order,
+  // and the printed PDF would show that stale/foreign value instead of what
+  // was entered for the invoice in hand.
+  customerAddress  String?
   viewToken        String?               @unique
   sentAt           DateTime?
   employeeId       String?
