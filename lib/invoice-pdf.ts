@@ -322,7 +322,19 @@ export function generateInvoicePDF(invoice: InvoicePDFData): jsPDF {
           // Increase minimum cell height to fit the name + code + description
           // stack, and blank autoTable's own (vertically-centered) text so it
           // doesn't get drawn on top of the name we render in didDrawCell.
-          data.cell.styles.minCellHeight = 24 + (code ? 13 : 0) + (desc ? 14 : 0);
+          // Column 0 is the only "auto" column -- the others are fixed pt
+          // widths -- so its rendered width is known ahead of layout. A long
+          // item name wraps onto multiple lines here just like it does in
+          // didDrawCell below; without accounting for that the row was left
+          // too short and the code/description lines drawn under a wrapped
+          // name collided with the row's bottom border.
+          const name = invoice.items[data.row.index]?.description ?? "";
+          const colWidth = pageWidth - margin * 2 - 70 - 90 - 90 - 18;
+          doc.setFont("helvetica", "bold");
+          doc.setFontSize(10);
+          const nameLines = Math.max(1, doc.splitTextToSize(name, colWidth).length);
+          data.cell.styles.minCellHeight =
+            24 + (nameLines - 1) * 11 + (code ? 13 : 0) + (desc ? 14 : 0);
           data.cell.text = [];
         }
       }
