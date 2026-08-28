@@ -4,6 +4,38 @@ All notable changes to La Cuevita Accounting are recorded here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and the project adheres to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased] — Address suggestion accuracy (2026-08-28)
+
+Four related complaints about the address-suggestion dropdown (customer
+records, and the invoice edit screen's Customer Address field), all
+tracing back to the same root cause.
+
+### Fixed
+- **Picking a suggestion could save (and later print on the PDF) a vague,
+  wrong address instead of the actual street being typed.** Nominatim
+  (the free geocoder behind the suggestion dropdown) readily returns
+  locality- or postcode-level matches — e.g. plain "Miami, FL 33101" —
+  for a short or incomplete query, with no house number or street at
+  all. These were shown in the dropdown like any real address; picking
+  one silently saved that vague place as the customer's address, which
+  then printed on the invoice/estimate PDF as a "totally different,
+  generic address." A suggestion is now only ever offered if it's a real
+  street-level match (has both a house number and a road).
+- **Suggestions outside Florida could still appear, even for a query that
+  had a real Florida match.** The Florida bias was a soft ranking nudge,
+  not a hard filter — a same-numbered street in another state could
+  still outrank, or simply be the only result for, a short or ambiguous
+  query. Out-of-Florida results are now excluded outright, not just
+  ranked lower.
+- **Incomplete addresses often returned no suggestions at all**,
+  particularly for Hialeah, Miami Beach, and Broward-area streets. The
+  outgoing search now includes a Florida hint by default, which
+  meaningfully improves match quality for a partial query — this doesn't
+  turn Nominatim into a true autocomplete engine, but it's the practical
+  lever available with a free, keyless geocoding service. See
+  `README.md`'s Known Limitations for the Google Places alternative this
+  project considered but never wired up.
+
 ## [Unreleased] — Invoice save failures (2026-08-28)
 
 Two separate bugs, found back-to-back while investigating one report of
