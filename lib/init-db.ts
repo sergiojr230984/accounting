@@ -318,6 +318,13 @@ const SCHEMA_STATEMENTS: string[] = [
   `DO $$ BEGIN
     ALTER TABLE "SupplierInvoice" ADD CONSTRAINT "SupplierInvoice_purchaseRequestId_fkey" FOREIGN KEY ("purchaseRequestId") REFERENCES "PurchaseRequest"("id") ON DELETE SET NULL ON UPDATE CASCADE;
    EXCEPTION WHEN duplicate_object THEN NULL; END $$;`,
+
+  // Per-invoice address override -- see the doc comment on
+  // CustomerInvoice.customerAddress in prisma/schema.prisma. Null means
+  // "fall back to Customer.address"; existing rows all start out null,
+  // which reproduces today's behavior exactly until someone edits an
+  // invoice's address for the first time.
+  `ALTER TABLE "CustomerInvoice" ADD COLUMN IF NOT EXISTS "customerAddress" TEXT;`,
 ];
 
 export function initializeDatabase(): Promise<void> {
