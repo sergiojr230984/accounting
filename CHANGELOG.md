@@ -4,6 +4,41 @@ All notable changes to La Cuevita Accounting are recorded here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and the project adheres to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased] — Invoice save failures (2026-08-28)
+
+Two separate bugs, found back-to-back while investigating one report of
+"clicking Save on an invoice does nothing." Fixing the first (which hid
+all errors) is what made the second (which was throwing one) visible at
+all — see the commit messages on this range for the full root-cause
+writeups (Railway deploy logs were what cracked the second one).
+
+### Fixed
+- **A failed Save could show no error at all.** The customer-invoice,
+  supplier-bill, and estimate **edit** pages assumed a failed save always
+  comes back as JSON (`{ error: "..." }`) and parsed it with plain
+  `res.json()`. That's true for a normal validation failure, but not for
+  an unhandled server exception, a proxy timeout, or a gateway error —
+  those come back as an HTML/plain-text body instead, `res.json()` throws,
+  and nothing caught it. The "Saving…" spinner still cleared, but no
+  message ever reached the screen — indistinguishable from the Save
+  button simply doing nothing. The three "new" (create) pages already
+  guarded this correctly; the fix brings the three edit pages in line
+  with them.
+- **Adding a new line to an invoice could 500 if a purchase request had
+  already been generated against one of its existing items.** Recording a
+  payment on a customer invoice auto-creates a "purchase request" for its
+  line item (so purchasing knows what to go buy); that record is never
+  removed if the payment is later corrected back down to $0, even though
+  the invoice's payment status correctly reverts to `UNPAID`. Editing the
+  invoice at that point used to assume `UNPAID` meant every line item was
+  safe to delete and recreate from scratch — but Postgres rejects deleting
+  a row a purchase request still points to, and that rejection surfaced
+  as a raw, uncaught 500. The invoice now also checks for an existing
+  purchase request on each item, not just current payment status, and
+  falls back to "add new lines only, leave existing ones alone" whenever
+  one exists — the same safe path already used for an invoice with a
+  live payment.
+
 ## [Unreleased] — Production remediation pass
 
 A phased audit-and-fix pass: each item below was its own commit with a
