@@ -67,6 +67,38 @@ vice versa), because nothing forced the second file to be touched.
   `tests/invoices.test.ts`'s "supplier bills still reject an overpayment"
   test for the pattern).
 
+## A failed Save must never be silent (fixed 2026-08-28, don't reintroduce)
+
+Every edit page's `onSave` (customer invoice, supplier bill, estimate) does
+roughly this on a non-2xx PATCH response:
+
+```ts
+const d = await res.json();
+setError(d.error ?? "Save failed");
+```
+
+That only works if the failure response is actually JSON. Every route does
+return `{ error: "..." }` JSON for a *handled* failure (bad fee, missing
+customer, etc.) — but an *unhandled* one (an exception that escapes a
+route's own try/catch, a proxy timeout, a gateway error) can come back as
+an HTML error page or an empty body instead. `res.json()` throws on that,
+and with nothing catching it the exception skipped straight past
+`setError` — the "Saving…" spinner still cleared (a `finally` block ran
+regardless), but no message ever reached the screen. From the user's side,
+clicking Save did nothing and explained nothing, which looked exactly like
+a data/validation bug in the line items even though it wasn't.
+
+The three "new" (create) pages already guarded this same call with
+`res.json().catch(() => ({}))`; the three "edit" pages — customer invoice,
+supplier bill, estimate — didn't, until this was fixed. **Any new code that
+parses an error body from `fetch` must use that same
+`.catch(() => ({}))` guard** — never assume a failed request's body is
+JSON just because the happy path's is. And if someone reports "Save
+does nothing, no error" on any page in this app, check for exactly this
+shape of bug (a swallowed non-JSON error response) before assuming it's a
+business-logic problem with whatever they were editing — the two look
+identical from the outside.
+
 ## API keys (`lib/api-scopes.ts`, `lib/api-key.ts`, `lib/api.ts`'s `requireReadAccess`/`requireReadAccessRole`)
 
 External apps/dashboards authenticate with a bearer key instead of a session
