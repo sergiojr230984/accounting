@@ -146,7 +146,14 @@ export default function EstimateDetailPage() {
         body: JSON.stringify({ ...data, appliedFees: computedAppliedFees }),
       });
       if (!res.ok) {
-        const d = await res.json();
+        // A failed request doesn't always come back as the JSON
+        // { error: "..." } shape every route normally returns -- an
+        // unhandled exception, a proxy timeout, or a gateway error can hand
+        // back a plain HTML/text error page instead. res.json() throws on
+        // that; uncaught, the exception used to propagate straight past
+        // this function silently, so Save just looked like it did nothing.
+        // See the matching fix in the customer-invoice edit page.
+        const d = await res.json().catch(() => ({}));
         setError(d.error ?? "Save failed");
         return;
       }

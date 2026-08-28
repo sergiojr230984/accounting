@@ -239,7 +239,15 @@ export default function CustomerInvoiceDetailPage() {
         body: JSON.stringify({ ...data, appliedFees: computedAppliedFees }),
       });
       if (!res.ok) {
-        const d = await res.json();
+        // A failed request doesn't always come back as the JSON
+        // { error: "..." } shape every route normally returns -- an
+        // unhandled exception, a proxy timeout, or a gateway error can hand
+        // back a plain HTML/text error page instead. res.json() throws on
+        // that, and since nothing here used to catch it, the exception
+        // propagated straight past this function silently: the "saving"
+        // spinner cleared (the finally block below still ran), but no error
+        // ever reached the screen -- Save looked like it just did nothing.
+        const d = await res.json().catch(() => ({}));
         setError(d.error ?? "Save failed");
         return;
       }
