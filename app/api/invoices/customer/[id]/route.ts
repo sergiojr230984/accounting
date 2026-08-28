@@ -137,7 +137,7 @@ export async function PATCH(
 
   const existing = await prisma.customerInvoice.findUnique({
     where: { id },
-    include: { items: true },
+    include: { items: { include: { purchaseRequest: { select: { id: true } } } } },
   });
   if (!existing) return NextResponse.json({ error: "Not found" }, { status: 404 });
 
@@ -149,15 +149,35 @@ export async function PATCH(
     notes: existing.notes,
   };
 
-  // Once any payment has been recorded, existing line items (and the totals
-  // derived from them) are financial history -- rewriting or removing them
-  // after money has changed hands should go through a correction/void flow,
-  // not a silent overwrite. A customer coming back to add a NEW item (e.g. a
-  // second product bought on a later visit) is not rewriting history though,
-  // so that's still allowed: every incoming item that carries an id must
-  // match an existing item byte-for-byte, and every existing item's id must
-  // still be present -- only genuinely new lines (no id) may differ.
-  if (parsed.data.items !== undefined && existing.paymentStatus !== "UNPAID") {
+  // An item is locked -- can't be deleted or have its identity changed --
+  // once EITHER of two things is true:
+  //   1. The invoice has a recorded payment (paymentStatus !== UNPAID): the
+  //      items are financial history at that point.
+  //   2. A purchase_request already exists for one of its items
+  //      (lib/purchase-requests.ts's ensurePurchaseRequestsForInvoice, fired
+  //      the moment paidAmount first moved off zero). That row references
+  //      CustomerInvoiceItem.id with ON DELETE RESTRICT, so it survives even
+  //      if the triggering payment is later edited/corrected back down to
+  //      $0 -- nothing in this codebase deletes a purchase_request just
+  //      because the payment that created it changed. paymentStatus can
+  //      legitimately read UNPAID again at that point while the item is
+  //      still permanently pinned in the database.
+  // Checking only paymentStatus (as this used to) missed case 2 entirely:
+  // the "UNPAID -> freely rewrite via deleteMany({})" branch further below
+  // would try to delete that still-referenced row, which Postgres rejects
+  // with a restrict-violation -- an uncaught, non-JSON 500 that looked to
+  // the user like Save silently doing nothing.
+  const itemsLocked = existing.paymentStatus !== "UNPAID" || existing.items.some((it) => it.purchaseRequest);
+
+  // Once locked, existing line items (and the totals derived from them) are
+  // financial history -- rewriting or removing them should go through a
+  // correction/void flow, not a silent overwrite. A customer coming back to
+  // add a NEW item (e.g. a second product bought on a later visit) is not
+  // rewriting history though, so that's still allowed: every incoming item
+  // that carries an id must match an existing item byte-for-byte, and every
+  // existing item's id must still be present -- only genuinely new lines
+  // (no id) may differ.
+  if (parsed.data.items !== undefined && itemsLocked) {
     const existingById = new Map(existing.items.map((it) => [it.id, it]));
     const seenIds = new Set<string>();
     for (const item of parsed.data.items) {
@@ -316,9 +336,9 @@ export async function PATCH(
     updateData.taxAmount = taxAmount.toFixed(2);
     updateData.totalAmount = subtotal.plus(taxAmount).plus(feesSum).toFixed(2);
 
-    if (existing.paymentStatus === "UNPAID") {
-      // No money has changed hands yet, so the whole line-item set is still
-      // a draft and can be freely rewritten.
+    if (!itemsLocked) {
+      // Nothing pins any existing item in place, so the whole line-item set
+      // is still a draft and can be freely rewritten.
       //
       // The delete and the create used to be two separate statements (an
       // eager deleteMany() here, then a create nested in the update() call
@@ -343,11 +363,13 @@ export async function PATCH(
         })),
       };
     } else {
-      // A payment already exists: the guard above already proved every
-      // incoming item either matches an existing row untouched or has no
-      // id at all. Only create rows for the latter -- existing rows (and
-      // their original createdAt) are left completely alone rather than
-      // being deleted and recreated.
+      // itemsLocked: the guard above already proved every incoming item
+      // either matches an existing row untouched or has no id at all. Only
+      // create rows for the latter -- existing rows (and their original
+      // createdAt) are left completely alone rather than being deleted and
+      // recreated, which is required, not just cautious, whenever any of
+      // them already has a purchase_request (see itemsLocked above): that
+      // row's ON DELETE RESTRICT FK would reject the delete outright.
       const existingIds = new Set(existing.items.map((it) => it.id));
       const newItems = data.items
         .map((item, idx) => ({ id: item.id, computed: computedItems[idx] }))

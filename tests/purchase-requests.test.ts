@@ -244,6 +244,98 @@ describe("purchase_request creation trigger", () => {
   });
 });
 
+describe("editing an invoice whose payment (and purchase_request) was later reverted", () => {
+  it("does not 500 when adding a new line to an UNPAID invoice whose existing item already has a purchase_request", async () => {
+    // Reproduces a real production failure: a payment gets recorded (auto-
+    // creating a purchase_request for the line, via ensurePurchaseRequestsForInvoice),
+    // then that payment is corrected/edited back down to $0 -- paymentStatus
+    // reverts to UNPAID, but the purchase_request it already created is
+    // never cleaned up (nothing in this codebase deletes one). The PATCH
+    // route's "paymentStatus === UNPAID -> freely rewrite via deleteMany({})"
+    // branch doesn't know that: it tries to delete the old item row, which
+    // Postgres rejects (PurchaseRequest.customerInvoiceItemId is ON DELETE
+    // RESTRICT), raising an uncaught ConnectorError/PrismaClientUnknownRequestError
+    // that isn't JSON -- exactly the "Save failed, no detail" a real user hit.
+    const inv = await createInvoiceWithLines({ includeHouseLine: false });
+
+    const pay = await admin.postJson<{ payments: { id: string }[] }>(`/api/invoices/customer/${inv.id}/payments`, {
+      amount: "500",
+      paymentDate: "2026-01-05",
+    });
+    expect(pay.status).toBe(201);
+    const paymentId = pay.body.payments[0].id;
+
+    const afterPayment = await admin.getJson<{
+      paymentStatus: string;
+      items: {
+        id: string;
+        description: string;
+        quantity: string;
+        unitPrice: string;
+        taxRate: string;
+        supplierId: string | null;
+        partNumber: string | null;
+        purchaseRequest: { status: string } | null;
+      }[];
+    }>(`/api/invoices/customer/${inv.id}`);
+    expect(afterPayment.body.paymentStatus).toBe("PAID");
+    const originalItem = afterPayment.body.items[0];
+    expect(originalItem.purchaseRequest).not.toBeNull();
+
+    // Correct the payment back down to $0 -- e.g. it was entered in error.
+    const editPayment = await admin.postJson(
+      `/api/invoices/customer/${inv.id}/payments/${paymentId}`,
+      { amount: "0", paymentDate: "2026-01-05" },
+      "PATCH"
+    );
+    expect(editPayment.status).toBe(200);
+
+    const backToUnpaid = await admin.getJson<{ paymentStatus: string }>(`/api/invoices/customer/${inv.id}`);
+    expect(backToUnpaid.body.paymentStatus).toBe("UNPAID");
+
+    // Now edit the invoice the way the UI does: the existing line
+    // unchanged, plus one brand-new line -- the exact "add a delivery line"
+    // flow that failed in production.
+    const patch = await admin.postJson<{ error?: unknown; items?: { description: string }[] }>(
+      `/api/invoices/customer/${inv.id}`,
+      {
+        items: [
+          {
+            id: originalItem.id,
+            description: originalItem.description,
+            quantity: originalItem.quantity,
+            unitPrice: originalItem.unitPrice,
+            taxRate: originalItem.taxRate,
+            supplierId: originalItem.supplierId ?? undefined,
+            partNumber: originalItem.partNumber ?? undefined,
+          },
+          {
+            description: "Delivery",
+            quantity: "1",
+            unitPrice: "40",
+            taxRate: "0",
+          },
+        ],
+      },
+      "PATCH"
+    );
+
+    expect(patch.status).toBe(200);
+    expect(patch.body.items?.length).toBe(2);
+
+    // The original item must still be the exact same row (same id) -- not
+    // deleted and recreated -- since the purchase_request still points at
+    // it by that id.
+    const afterEdit = await admin.getJson<{
+      items: { id: string; description: string; purchaseRequest: { status: string } | null }[];
+    }>(`/api/invoices/customer/${inv.id}`);
+    const stillThere = afterEdit.body.items.find((i) => i.id === originalItem.id);
+    expect(stillThere).toBeDefined();
+    expect(stillThere?.purchaseRequest).not.toBeNull();
+    expect(afterEdit.body.items.some((i) => i.description === "Delivery")).toBe(true);
+  });
+});
+
 describe("bill creation closes out a purchase_request", () => {
   async function paidInvoiceWithOnePendingRequest() {
     const inv = await createInvoiceWithLines({ includeHouseLine: false });
