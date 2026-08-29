@@ -58,7 +58,7 @@ export async function GET(request: Request) {
         customer: { select: { id: true, name: true } },
         items: true,
       },
-      orderBy: { estimateDate: "desc" },
+      orderBy: { estimateNumber: "desc" },
       skip: (page - 1) * limit,
       take: limit,
     }),

@@ -86,7 +86,7 @@ export async function GET(request: Request) {
         items: true,
         files: { select: { id: true, originalName: true, mimeType: true } },
       },
-      orderBy: { invoiceDate: "desc" },
+      orderBy: { invoiceNumber: "desc" },
       skip: (page - 1) * limit,
       take: limit,
     }),
