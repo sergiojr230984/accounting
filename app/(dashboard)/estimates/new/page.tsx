@@ -137,7 +137,12 @@ export default function NewEstimatePage() {
 
             <div>
               <label className="label">Estimate Number *</label>
-              <input className="input" placeholder="EST-2026-1001" {...register("estimateNumber")} />
+              {/* Locked, not free-typed -- same fix as the customer-invoice
+                  number field: a manually-edited number breaks the "All
+                  invoices"/"All estimates" list, which sorts by creation
+                  order but is easy to mistrust when the number itself looks
+                  out of sequence. Always the system-assigned next number. */}
+              <input className="input bg-gray-50 text-gray-500 cursor-not-allowed" readOnly {...register("estimateNumber")} />
               {errors.estimateNumber && <p className="text-red-500 text-xs mt-1">{errors.estimateNumber.message}</p>}
             </div>
 

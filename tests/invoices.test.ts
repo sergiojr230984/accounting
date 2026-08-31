@@ -70,16 +70,25 @@ describe("invoice creation — server-side totals", () => {
   });
 });
 
-// Fixed: the invoiceNumber input on invoices/customer/new is free-typed --
-// nothing stops a sales rep from clearing the auto-filled "Inv 1320" prefix
-// and submitting a bare "1320". The invoices list used to sort by
-// invoiceNumber (a string) descending, so a bare-digit number like "1320"
-// sorts *below* any "Inv "-prefixed number ('1' < 'I' in ASCII) regardless
-// of when it was actually created -- a just-created invoice could vanish
-// off the first page of "All invoices" while older, differently-formatted
-// invoices sat above it. Sorting by createdAt instead makes list order
-// track actual creation order no matter what was typed into the number
-// field.
+// Fixed: the invoiceNumber input on invoices/customer/new used to be
+// free-typed -- nothing stopped a sales rep from clearing the auto-filled
+// "Inv 1320" prefix and submitting a bare "1320". The invoices list used to
+// sort by invoiceNumber (a string) descending, so a bare-digit number like
+// "1320" sorts *below* any "Inv "-prefixed number ('1' < 'I' in ASCII)
+// regardless of when it was actually created -- a just-created invoice
+// could vanish off the first page of "All invoices" while older,
+// differently-formatted invoices sat above it. Sorting by createdAt
+// instead makes list order track actual creation order no matter what's in
+// the number field.
+//
+// The create/edit forms now lock this field to the system-assigned number
+// (see invoices/customer/new and .../[id]) so a sales rep can no longer
+// type over it -- but the API itself still has to accept whatever number a
+// caller sends: the AI PDF/image extractor (handleExtracted in
+// invoices/customer/new) still fills this field from a scanned document's
+// own printed number, which is never going to match the "Inv ####"
+// sequence. This test keeps the list itself honest regardless of where an
+// oddly-formatted number came from.
 describe("invoice list order survives an inconsistently-formatted invoice number", () => {
   it("a just-created invoice with a bare number still sorts first", async () => {
     const prefixed = await admin.postJson<{ id: string }>("/api/invoices/customer", {
