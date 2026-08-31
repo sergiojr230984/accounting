@@ -70,6 +70,46 @@ describe("invoice creation — server-side totals", () => {
   });
 });
 
+// Fixed: the invoiceNumber input on invoices/customer/new is free-typed --
+// nothing stops a sales rep from clearing the auto-filled "Inv 1320" prefix
+// and submitting a bare "1320". The invoices list used to sort by
+// invoiceNumber (a string) descending, so a bare-digit number like "1320"
+// sorts *below* any "Inv "-prefixed number ('1' < 'I' in ASCII) regardless
+// of when it was actually created -- a just-created invoice could vanish
+// off the first page of "All invoices" while older, differently-formatted
+// invoices sat above it. Sorting by createdAt instead makes list order
+// track actual creation order no matter what was typed into the number
+// field.
+describe("invoice list order survives an inconsistently-formatted invoice number", () => {
+  it("a just-created invoice with a bare number still sorts first", async () => {
+    const prefixed = await admin.postJson<{ id: string }>("/api/invoices/customer", {
+      customerId,
+      invoiceNumber: `Inv SORT-${Date.now()}`,
+      invoiceDate: "2026-01-01",
+      dueDate: "2026-01-31",
+      items: [{ description: "x", quantity: "1", unitPrice: "1" }],
+    });
+    expect(prefixed.status).toBe(201);
+
+    // Created after the one above, but with a bare number lacking the "Inv "
+    // prefix -- under the old invoiceNumber-string sort this would land
+    // *after* "Inv SORT-..." even though it's the newer invoice.
+    const bare = await admin.postJson<{ id: string }>("/api/invoices/customer", {
+      customerId,
+      invoiceNumber: `${Date.now()}`,
+      invoiceDate: "2026-01-01",
+      dueDate: "2026-01-31",
+      items: [{ description: "x", quantity: "1", unitPrice: "1" }],
+    });
+    expect(bare.status).toBe(201);
+
+    const { body } = await admin.getJson<{ invoices: { id: string }[] }>(
+      `/api/invoices/customer?customerId=${customerId}&limit=5`
+    );
+    expect(body.invoices[0].id).toBe(bare.body.id);
+  });
+});
+
 describe("paid-invoice protection", () => {
   async function createAndFullyPayInvoice(): Promise<string> {
     const created = await admin.postJson<{ id: string }>("/api/invoices/customer", {

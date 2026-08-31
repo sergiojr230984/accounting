@@ -52,6 +52,33 @@ describe("estimate creation", () => {
     expect(Number(body.subtotal)).toBe(10.02);
   });
 
+  // Same bug/fix as customer invoices (see tests/invoices.test.ts): the
+  // estimateNumber input is free-typed, so sorting the list by
+  // estimateNumber (a string) descending let a bare-digit number sort below
+  // any "EST-..."-prefixed one regardless of actual creation order.
+  it("a just-created estimate with a differently-formatted number still sorts first", async () => {
+    const prefixed = await admin.postJson<{ id: string }>("/api/estimates", {
+      customerId,
+      estimateNumber: `EST-SORT-${Date.now()}`,
+      estimateDate: "2026-01-01",
+      items: [{ description: "x", quantity: "1", unitPrice: "1" }],
+    });
+    expect(prefixed.status).toBe(201);
+
+    const bare = await admin.postJson<{ id: string }>("/api/estimates", {
+      customerId,
+      estimateNumber: `${Date.now()}`,
+      estimateDate: "2026-01-01",
+      items: [{ description: "x", quantity: "1", unitPrice: "1" }],
+    });
+    expect(bare.status).toBe(201);
+
+    const { body } = await admin.getJson<{ estimates: { id: string }[] }>(
+      `/api/estimates?customerId=${customerId}&limit=5`
+    );
+    expect(body.estimates[0].id).toBe(bare.body.id);
+  });
+
   it("an estimate does not count as revenue until converted", async () => {
     const before = await admin.getJson<{ total: string }>("/api/reports?type=income");
     await admin.postJson("/api/estimates", {

@@ -65,7 +65,13 @@ export async function GET(request: Request) {
         items: true,
         files: { select: { id: true, originalName: true, mimeType: true } },
       },
-      orderBy: { invoiceDate: "desc" },
+      // Unlike customer invoices/estimates, invoiceNumber here is the
+      // *supplier's own* free-text invoice number (see schema.prisma),
+      // not one we generate sequentially -- sorting by it alphabetically
+      // wouldn't produce numerical/chronological order and could jumble
+      // things worse than dates do. createdAt (the order bills were
+      // entered into this system) is the closest we have to "chronological".
+      orderBy: { createdAt: "desc" },
       skip: (page - 1) * limit,
       take: limit,
     }),

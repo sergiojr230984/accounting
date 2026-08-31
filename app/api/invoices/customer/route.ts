@@ -86,7 +86,18 @@ export async function GET(request: Request) {
         items: true,
         files: { select: { id: true, originalName: true, mimeType: true } },
       },
-      orderBy: { invoiceDate: "desc" },
+      // invoiceNumber is a free-typed text field (see invoices/customer/new's
+      // input), not a guaranteed-consistent zero-padded sequence, so sorting
+      // on it lexicographically is unreliable: an invoice number typed
+      // without the usual prefix (e.g. "1320" instead of "Inv 1320") sorts
+      // far away from its chronological neighbors under a plain string
+      // ORDER BY, making it look like it "vanished" from the top of the
+      // list even though it's still in the results a page or more away.
+      // createdAt reflects actual creation order regardless of what the
+      // user typed into the number field -- supplier bills already sort
+      // this way (see .../supplier/route.ts), this brings customer
+      // invoices in line with that.
+      orderBy: { createdAt: "desc" },
       skip: (page - 1) * limit,
       take: limit,
     }),

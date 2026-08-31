@@ -58,7 +58,16 @@ export async function GET(request: Request) {
         customer: { select: { id: true, name: true } },
         items: true,
       },
-      orderBy: { estimateDate: "desc" },
+      // estimateNumber is free-typed (see estimates/new's input), not a
+      // guaranteed-consistent zero-padded sequence -- sorting on it
+      // lexicographically means an estimate numbered without the usual
+      // prefix sorts far from its chronological neighbors and can look like
+      // it's missing from the top of the list. createdAt reflects actual
+      // creation order regardless of what was typed into the number field;
+      // see app/api/invoices/customer/route.ts for the same fix applied to
+      // customer invoices (and .../supplier/route.ts, which already sorted
+      // this way).
+      orderBy: { createdAt: "desc" },
       skip: (page - 1) * limit,
       take: limit,
     }),
