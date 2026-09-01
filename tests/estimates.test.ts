@@ -53,9 +53,12 @@ describe("estimate creation", () => {
   });
 
   // Same bug/fix as customer invoices (see tests/invoices.test.ts): the
-  // estimateNumber input is free-typed, so sorting the list by
+  // estimateNumber input used to be free-typed, so sorting the list by
   // estimateNumber (a string) descending let a bare-digit number sort below
-  // any "EST-..."-prefixed one regardless of actual creation order.
+  // any "EST-..."-prefixed one regardless of actual creation order. The
+  // create/edit forms now lock this field to the system-assigned number, but
+  // the API still accepts whatever a caller sends -- this keeps the list
+  // itself correct regardless.
   it("a just-created estimate with a differently-formatted number still sorts first", async () => {
     const prefixed = await admin.postJson<{ id: string }>("/api/estimates", {
       customerId,

@@ -545,7 +545,14 @@ export default function NewCustomerInvoicePage() {
 
               <div>
                 <label className="label">Invoice number</label>
-                <input className="input" value={invoiceNumber} onChange={(e) => setInvoiceNumber(e.target.value)} />
+                {/* Locked, not free-typed: a manually-edited number here (e.g.
+                    dropping the "Inv " prefix) is what made invoice #1320
+                    disappear from "All invoices" -- the list sorts by
+                    creation order, but a sales rep once relied on being able
+                    to eyeball the number for that, and an inconsistent one
+                    broke that expectation. Always the system-assigned next
+                    number now; see /api/invoices/customer/next-number. */}
+                <input className="input bg-gray-50 text-gray-500 cursor-not-allowed" value={invoiceNumber} readOnly />
               </div>
 
               <div>

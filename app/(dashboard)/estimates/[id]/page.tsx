@@ -367,7 +367,9 @@ export default function EstimateDetailPage() {
             <div className="grid grid-cols-2 gap-4">
               <div>
                 <label className="label">Estimate Number</label>
-                <input className="input" {...register("estimateNumber")} />
+                {/* Locked, not free-typed -- an estimate's number is fixed
+                    once issued (see the new-estimate page's field for why). */}
+                <input className="input bg-gray-50 text-gray-500 cursor-not-allowed" readOnly {...register("estimateNumber")} />
                 {errors.estimateNumber && <p className="text-red-500 text-xs mt-1">{errors.estimateNumber.message}</p>}
               </div>
               <div>

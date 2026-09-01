@@ -43,6 +43,33 @@ created, so it silently dropped out of the page the user was looking at.
   followed by one with a bare/differently-formatted number and assert the
   newer one still sorts first.
 
+### Also closed the hole that let it happen (2026-08-31)
+The `createdAt` fix stops a badly-formatted number from breaking the list,
+but the actual cause of invoice #1320's number was a sales rep editing the
+auto-suggested value on the create form — the field was plain editable
+text with nothing telling anyone that was a bad idea.
+- The invoice-number field (`invoices/customer/new`, `invoices/customer/[id]`)
+  and estimate-number field (`estimates/new`, `estimates/[id]`) are now
+  locked to the system-assigned number — displayed read-only, no longer
+  something a sales rep can type over. Once issued, a document's number is
+  fixed.
+- Left as-is on purpose: the AI PDF/image extractor
+  (`handleExtracted` in `invoices/customer/new`) can still fill this field
+  from a scanned document's own printed number when importing an existing
+  invoice — that's a real, differently-formatted number by nature, not a
+  typo, so the list still has to tolerate it (which is exactly what the
+  `createdAt` sort above guarantees regardless of the field being locked).
+- Left as-is on purpose: the API itself (`POST`/`PATCH` on both routes)
+  still accepts whatever `invoiceNumber`/`estimateNumber` a caller sends —
+  this is a UI-level lock, not a schema change. Widening it to reject
+  client-submitted numbers outright would also block the extractor above
+  and any future admin/import tooling, and touches a much larger surface
+  (the whole "next number" contract and every test that creates a fixture
+  invoice by number) than the reported bug warranted.
+- Supplier bills' `invoiceNumber` field is intentionally **not** locked —
+  it's the supplier's own invoice number, not one this system assigns, so
+  it was never a candidate for this in the first place.
+
 ## [Unreleased] — Address suggestion accuracy (2026-08-28)
 
 Four related complaints about the address-suggestion dropdown (customer

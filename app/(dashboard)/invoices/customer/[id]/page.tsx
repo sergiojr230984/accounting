@@ -533,7 +533,9 @@ export default function CustomerInvoiceDetailPage() {
               <div className="grid grid-cols-2 gap-4">
                 <div>
                   <label className="label">Invoice Number</label>
-                  <input className="input" {...register("invoiceNumber")} />
+                  {/* Locked, not free-typed -- an invoice's number is fixed
+                      once issued (see the new-invoice page's field for why). */}
+                  <input className="input bg-gray-50 text-gray-500 cursor-not-allowed" readOnly {...register("invoiceNumber")} />
                   {errors.invoiceNumber && <p className="text-red-500 text-xs mt-1">{errors.invoiceNumber.message}</p>}
                 </div>
                 <div>
