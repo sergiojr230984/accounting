@@ -503,18 +503,97 @@ export async function DELETE(
   if (guard instanceof NextResponse) return guard;
 
   const { id } = await params;
+  const force = new URL(request.url).searchParams.get("force") === "true";
 
-  const existing = await prisma.customerInvoice.findUnique({ where: { id } });
+  const existing = await prisma.customerInvoice.findUnique({
+    where: { id },
+    include: {
+      items: {
+        include: { purchaseRequest: { include: { supplierInvoice: { select: { id: true } } } } },
+      },
+    },
+  });
   if (!existing) return NextResponse.json({ error: "Not found" }, { status: 404 });
 
   // An invoice with a recorded payment is a financial record, not a draft
   // -- deleting it destroys the only evidence money was collected against
-  // it. Same reasoning as the PATCH guard above.
+  // it. Same reasoning as the PATCH guard above. Unlike the purchase-request
+  // case below, this is never forceable: paymentStatus can only be non-UNPAID
+  // while it's actually true right now (unlike a purchase_request, nothing
+  // here survives a later correction back to $0), so there's no safe override.
   if (existing.paymentStatus !== "UNPAID") {
     return NextResponse.json(
       { error: "This invoice has a recorded payment and can no longer be deleted." },
       { status: 409 }
     );
+  }
+
+  const purchaseRequests = existing.items
+    .map((it) => it.purchaseRequest)
+    .filter((pr): pr is NonNullable<typeof pr> => pr !== null);
+
+  // A purchase_request can outlive the payment that created it (see the
+  // itemsLocked comment on the PATCH handler above): paidAmount can be
+  // corrected back to $0 -- reading paymentStatus === UNPAID here -- while
+  // the purchase_request row it triggered is still sitting in the database,
+  // its ON DELETE RESTRICT FK still pointing at this invoice's items. Without
+  // this check, the delete below would reach Postgres, get rejected by that
+  // FK, and throw an uncaught exception the client can't parse as JSON --
+  // exactly the silent-failure shape documented in CLAUDE.md, just from a
+  // DELETE instead of a PATCH.
+  if (purchaseRequests.length > 0) {
+    // A purchase_request with a linked supplier bill means real money has
+    // already been tracked against it (see SupplierInvoice.purchaseRequestId
+    // in prisma/schema.prisma) -- that's actual financial history, not just
+    // a dangling request, and force can't touch it. Untangling this needs a
+    // deliberate look at the bill itself, not a bulk override here.
+    const hasLinkedBill = purchaseRequests.some((pr) => pr.supplierInvoice);
+    if (hasLinkedBill) {
+      return NextResponse.json(
+        {
+          error:
+            "This invoice has a supplier bill linked to one of its purchase requests (real cost already tracked) and can't be deleted. Unlink or delete that bill first.",
+        },
+        { status: 409 }
+      );
+    }
+
+    if (!force) {
+      return NextResponse.json(
+        {
+          error: `This invoice has ${purchaseRequests.length} pending purchase request${purchaseRequests.length !== 1 ? "s" : ""} attached (no cost entered yet, left over from a payment that was later corrected back to $0). An admin can force-delete it, discarding those pending requests.`,
+          forceable: true,
+        },
+        { status: 409 }
+      );
+    }
+
+    if (guard.user.role !== "ADMIN") {
+      return NextResponse.json(
+        { error: `Forbidden — only an admin can force-delete an invoice with pending purchase requests attached.` },
+        { status: 403 }
+      );
+    }
+
+    await prisma.$transaction([
+      prisma.purchaseRequest.deleteMany({ where: { id: { in: purchaseRequests.map((pr) => pr.id) } } }),
+      prisma.customerInvoice.delete({ where: { id } }),
+    ]);
+
+    await writeAuditLog({
+      ...actorFromSession(guard),
+      action: "DELETE",
+      entityType: "customer_invoice",
+      entityId: id,
+      entityLabel: `Invoice #${existing.invoiceNumber}`,
+      changes: {
+        forced: { old: false, new: true },
+        discardedPurchaseRequestIds: { old: null, new: purchaseRequests.map((pr) => pr.id) },
+      },
+      ...extractMeta(request),
+    });
+
+    return NextResponse.json({ ok: true });
   }
 
   await prisma.customerInvoice.delete({ where: { id } });
