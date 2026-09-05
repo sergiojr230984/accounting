@@ -98,6 +98,8 @@ export default function CustomerInvoiceDetailPage() {
   const [error, setError] = useState("");
   const [deleting, setDeleting] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [deleteError, setDeleteError] = useState("");
+  const [deleteForceable, setDeleteForceable] = useState(false);
   const [sending, setSending] = useState(false);
   const [sendMessage, setSendMessage] = useState<{ kind: "success" | "error"; text: string } | null>(null);
   const [linkCopied, setLinkCopied] = useState(false);
@@ -258,10 +260,25 @@ export default function CustomerInvoiceDetailPage() {
     }
   }
 
-  async function handleDelete() {
+  async function handleDelete(force = false) {
     setDeleting(true);
-    await fetch(`/api/invoices/customer/${id}`, { method: "DELETE" });
-    router.push("/invoices/customer");
+    setDeleteError("");
+    try {
+      const res = await fetch(`/api/invoices/customer/${id}${force ? "?force=true" : ""}`, { method: "DELETE" });
+      if (!res.ok) {
+        // Same guard as onSave above -- a failed response isn't guaranteed
+        // to be JSON (an uncaught exception, timeout, or gateway error can
+        // come back as HTML/empty instead), so res.json() must not be
+        // trusted bare.
+        const d = await res.json().catch(() => ({}));
+        setDeleteError(d.error ?? "Delete failed");
+        setDeleteForceable(Boolean(d.forceable));
+        return;
+      }
+      router.push("/invoices/customer");
+    } finally {
+      setDeleting(false);
+    }
   }
 
   async function handleSend() {
@@ -456,17 +473,41 @@ export default function CustomerInvoiceDetailPage() {
                   Edit
                 </button>
                 {!confirmDelete ? (
-                  <button onClick={() => setConfirmDelete(true)} className="btn-danger">
+                  <button
+                    onClick={() => { setConfirmDelete(true); setDeleteError(""); setDeleteForceable(false); }}
+                    className="btn-danger"
+                  >
                     <Trash2 className="w-4 h-4" />
                     Delete
                   </button>
                 ) : (
-                  <div className="flex items-center gap-2 bg-red-50 border border-red-200 rounded-lg px-3 py-1.5">
-                    <span className="text-sm text-red-700">Confirm delete?</span>
-                    <button onClick={handleDelete} disabled={deleting} className="text-red-700 font-medium text-sm hover:underline">
-                      {deleting ? "…" : "Yes"}
-                    </button>
-                    <button onClick={() => setConfirmDelete(false)} className="text-gray-500 text-sm hover:underline">No</button>
+                  <div className="flex flex-col items-end gap-1.5">
+                    <div className="flex items-center gap-2 bg-red-50 border border-red-200 rounded-lg px-3 py-1.5">
+                      <span className="text-sm text-red-700">Confirm delete?</span>
+                      <button onClick={() => handleDelete(false)} disabled={deleting} className="text-red-700 font-medium text-sm hover:underline">
+                        {deleting ? "…" : "Yes"}
+                      </button>
+                      <button
+                        onClick={() => { setConfirmDelete(false); setDeleteError(""); setDeleteForceable(false); }}
+                        className="text-gray-500 text-sm hover:underline"
+                      >
+                        No
+                      </button>
+                    </div>
+                    {deleteError && (
+                      <div className="max-w-xs text-right text-xs text-red-700">
+                        {deleteError}
+                        {deleteForceable && userRole === "ADMIN" && (
+                          <button
+                            onClick={() => handleDelete(true)}
+                            disabled={deleting}
+                            className="block ml-auto mt-1 font-semibold underline hover:no-underline"
+                          >
+                            {deleting ? "…" : "Force delete anyway (discards those pending purchase requests)"}
+                          </button>
+                        )}
+                      </div>
+                    )}
                   </div>
                 )}
               </>
