@@ -744,3 +744,94 @@ describe("customer address — per-invoice override, not a shared write to Custo
     expect(cleared.body.customerAddress).toBeNull();
   });
 });
+
+// Regression coverage for "the search box can't find an invoice that was
+// created on the system": the invoices list page's search input only ever
+// filtered the ~20 rows already fetched for the current page/tab -- it
+// never told the server what to search for. So an invoice sitting on page
+// 2+ (or outside the default "Unpaid" tab) was invisible to search no
+// matter how exactly its number was typed. Fixed by having GET
+// /api/invoices/{customer,supplier} accept a `search` param and filter the
+// whole dataset server-side before pagination is applied.
+describe("invoice list search — matches across the whole dataset, not just the currently loaded page", () => {
+  it("finds a customer invoice whose number would otherwise be buried past page 1", async () => {
+    const customer = await admin.postJson<{ id: string }>("/api/customers", {
+      name: `Search Test Customer ${Date.now()}`,
+    });
+    const searchCustomerId = customer.body.id;
+
+    // The target invoice gets the oldest date so plain, most-recent-first
+    // pagination pushes it off page 1.
+    const targetNumber = `SEARCH-TARGET-${Date.now()}`;
+    await admin.postJson("/api/invoices/customer", {
+      customerId: searchCustomerId,
+      invoiceNumber: targetNumber,
+      invoiceDate: "2020-01-01",
+      dueDate: "2020-01-31",
+      items: [{ description: "x", quantity: "1", unitPrice: "1" }],
+    });
+
+    // 20 newer invoices for the same customer so the target is guaranteed
+    // to fall past the default page size.
+    for (let i = 0; i < 20; i++) {
+      await admin.postJson("/api/invoices/customer", {
+        customerId: searchCustomerId,
+        invoiceNumber: `SEARCH-FILLER-${Date.now()}-${i}`,
+        invoiceDate: "2026-06-01",
+        dueDate: "2026-06-30",
+        items: [{ description: "x", quantity: "1", unitPrice: "1" }],
+      });
+    }
+
+    // Confirm it's really buried: unfiltered page 1 for this customer does
+    // not include it.
+    const page1 = await admin.getJson<{ invoices: { invoiceNumber: string }[] }>(
+      `/api/invoices/customer?customerId=${searchCustomerId}&page=1&limit=20`
+    );
+    expect(page1.body.invoices.some((i) => i.invoiceNumber === targetNumber)).toBe(false);
+
+    // Searching for its number finds it regardless of pagination.
+    const searched = await admin.getJson<{ invoices: { invoiceNumber: string }[]; total: number }>(
+      `/api/invoices/customer?search=${encodeURIComponent(targetNumber)}`
+    );
+    expect(searched.body.total).toBe(1);
+    expect(searched.body.invoices[0]?.invoiceNumber).toBe(targetNumber);
+  });
+
+  it("also matches by customer name, case-insensitively", async () => {
+    const uniqueName = `Zzz Search By Name ${Date.now()}`;
+    const customer = await admin.postJson<{ id: string }>("/api/customers", { name: uniqueName });
+    await admin.postJson("/api/invoices/customer", {
+      customerId: customer.body.id,
+      invoiceNumber: `NAME-SEARCH-${Date.now()}`,
+      invoiceDate: "2026-01-01",
+      dueDate: "2026-01-31",
+      items: [{ description: "x", quantity: "1", unitPrice: "1" }],
+    });
+    const searched = await admin.getJson<{ total: number }>(
+      `/api/invoices/customer?search=${encodeURIComponent(uniqueName.toLowerCase())}`
+    );
+    expect(searched.body.total).toBe(1);
+  });
+
+  // Same fix, applied to the supplier-bills sibling per the "fix applied
+  // once, needed everywhere" pattern.
+  it("supplier bills: search matches invoice number too", async () => {
+    const supplier = await admin.postJson<{ id: string }>("/api/suppliers", {
+      name: `Search Supplier ${Date.now()}`,
+    });
+    const targetNumber = `BILL-SEARCH-TARGET-${Date.now()}`;
+    await admin.postJson("/api/invoices/supplier", {
+      supplierId: supplier.body.id,
+      invoiceNumber: targetNumber,
+      invoiceDate: "2020-01-01",
+      category: "OTHER",
+      items: [{ description: "x", quantity: "1", unitCost: "1" }],
+    });
+    const searched = await admin.getJson<{ total: number; invoices: { invoiceNumber: string }[] }>(
+      `/api/invoices/supplier?search=${encodeURIComponent(targetNumber)}`
+    );
+    expect(searched.body.total).toBe(1);
+    expect(searched.body.invoices[0]?.invoiceNumber).toBe(targetNumber);
+  });
+});

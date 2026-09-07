@@ -31,6 +31,17 @@ export default function SupplierInvoicesPage() {
   const [page, setPage] = useState(1);
   const limit = 20;
 
+  // Debounced so every keystroke doesn't fire a request, and so the search
+  // term is sent to the server instead of only filtering whatever page of
+  // results happened to already be loaded (see the identical comment on
+  // app/(dashboard)/invoices/customer/page.tsx).
+  const [debouncedSearch, setDebouncedSearch] = useState("");
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedSearch(search.trim()), 300);
+    return () => clearTimeout(t);
+  }, [search]);
+  useEffect(() => { setPage(1); }, [debouncedSearch]);
+
   const load = useCallback(async () => {
     setLoading(true);
     try {
@@ -39,6 +50,7 @@ export default function SupplierInvoicesPage() {
       if (category) params.set("category", category);
       if (from) params.set("from", from);
       if (to) params.set("to", to);
+      if (debouncedSearch) params.set("search", debouncedSearch);
       const res = await fetch(`/api/invoices/supplier?${params}`);
       const data = await res.json();
       setInvoices(data.invoices);
@@ -46,15 +58,11 @@ export default function SupplierInvoicesPage() {
     } finally {
       setLoading(false);
     }
-  }, [page, status, category, from, to]);
+  }, [page, status, category, from, to, debouncedSearch]);
 
   useEffect(() => { load(); }, [load]);
 
-  const filtered = invoices.filter(
-    (inv) =>
-      inv.invoiceNumber.toLowerCase().includes(search.toLowerCase()) ||
-      inv.supplier.name.toLowerCase().includes(search.toLowerCase())
-  );
+  const filtered = invoices;
 
   return (
     <div className="space-y-5">

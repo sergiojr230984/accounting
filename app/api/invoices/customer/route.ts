@@ -63,6 +63,7 @@ export async function GET(request: Request) {
   const status = searchParams.get("status");
   const from = searchParams.get("from");
   const to = searchParams.get("to");
+  const search = searchParams.get("search")?.trim();
   const page = parseInt(searchParams.get("page") ?? "1");
   const limit = parseInt(searchParams.get("limit") ?? "20");
 
@@ -74,6 +75,17 @@ export async function GET(request: Request) {
       ...(from ? { gte: new Date(from) } : {}),
       ...(to ? { lte: new Date(to) } : {}),
     };
+  }
+  // Matches invoice # or customer name across the whole dataset, not just
+  // the current page -- the previous client-only search only filtered the
+  // 20 rows already fetched for the active tab/page, so an invoice sitting
+  // on page 2+ (or in a different status tab) was invisible to search no
+  // matter how exact the query was.
+  if (search) {
+    where.OR = [
+      { invoiceNumber: { contains: search, mode: "insensitive" } },
+      { customer: { name: { contains: search, mode: "insensitive" } } },
+    ];
   }
   // Company-wide accounting system — every employee sees every invoice,
   // regardless of who it's attributed to.

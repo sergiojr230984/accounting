@@ -43,6 +43,7 @@ export async function GET(request: Request) {
   const status = searchParams.get("status");
   const from = searchParams.get("from");
   const to = searchParams.get("to");
+  const search = searchParams.get("search")?.trim();
   const page = parseInt(searchParams.get("page") ?? "1");
   const limit = parseInt(searchParams.get("limit") ?? "20");
 
@@ -55,6 +56,15 @@ export async function GET(request: Request) {
       ...(from ? { gte: new Date(from) } : {}),
       ...(to ? { lte: new Date(to) } : {}),
     };
+  }
+  // See app/api/invoices/customer/route.ts for why this has to happen
+  // server-side across the whole dataset rather than in the page's
+  // client-only filter.
+  if (search) {
+    where.OR = [
+      { invoiceNumber: { contains: search, mode: "insensitive" } },
+      { supplier: { name: { contains: search, mode: "insensitive" } } },
+    ];
   }
 
   const [invoices, total] = await Promise.all([
