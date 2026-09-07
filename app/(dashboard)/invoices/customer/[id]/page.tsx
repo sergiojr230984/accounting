@@ -796,7 +796,17 @@ export default function CustomerInvoiceDetailPage() {
                       </td>
                       <td className="py-2 text-right">{item.quantity}</td>
                       <td className="py-2 text-right">{formatCurrency(item.unitPrice)}</td>
-                      <td className="py-2 text-right">{(parseFloat(item.taxRate) * 100).toFixed(0)}%</td>
+                      <td className="py-2 text-right">
+                        {(parseFloat(item.taxRate) * 100).toFixed(0)}%
+                        {parseFloat(item.taxRate) > 0 && (
+                          <span className="text-gray-400">
+                            {" "}
+                            ({formatCurrency(
+                              (parseFloat(item.quantity) * parseFloat(item.unitPrice) * parseFloat(item.taxRate)).toFixed(2)
+                            )})
+                          </span>
+                        )}
+                      </td>
                       <td className="py-2 text-right font-medium">{formatCurrency(item.lineTotal)}</td>
                       {canSeeCommission && (
                         <td className="py-2 text-right">
@@ -824,6 +834,19 @@ export default function CustomerInvoiceDetailPage() {
                   <span className="text-gray-500">Tax</span>
                   <span>{formatCurrency(invoice.taxAmount)}</span>
                 </div>
+                {/* Fees (credit card fee, custom fees from Settings) applied
+                    to this invoice -- these were being silently included in
+                    Total with no line explaining where the extra amount came
+                    from. The estimate detail page already listed these the
+                    same way; this brings the customer-invoice view in line
+                    with it (see CLAUDE.md's "fix applied once, needed
+                    everywhere" pattern). */}
+                {invoice.appliedFees.map((f, i) => (
+                  <div key={f.id ?? i} className="flex justify-between">
+                    <span className="text-gray-500">{f.label}</span>
+                    <span>{formatCurrency(f.amount)}</span>
+                  </div>
+                ))}
                 <div className="flex justify-between font-bold text-base border-t pt-2">
                   <span>Total</span>
                   <span>{formatCurrency(invoice.totalAmount)}</span>

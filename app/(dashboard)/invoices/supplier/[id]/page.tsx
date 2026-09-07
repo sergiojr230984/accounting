@@ -449,7 +449,17 @@ export default function SupplierInvoiceDetailPage() {
                     </td>
                     <td className="py-2 text-right">{item.quantity}</td>
                     <td className="py-2 text-right">{formatCurrency(item.unitCost)}</td>
-                    <td className="py-2 text-right">{(parseFloat(item.taxRate) * 100).toFixed(0)}%</td>
+                    <td className="py-2 text-right">
+                      {(parseFloat(item.taxRate) * 100).toFixed(0)}%
+                      {parseFloat(item.taxRate) > 0 && (
+                        <span className="text-gray-400">
+                          {" "}
+                          ({formatCurrency(
+                            (parseFloat(item.quantity) * parseFloat(item.unitCost) * parseFloat(item.taxRate)).toFixed(2)
+                          )})
+                        </span>
+                      )}
+                    </td>
                     <td className="py-2 text-right font-medium">{formatCurrency(item.lineTotal)}</td>
                   </tr>
                 ))}
