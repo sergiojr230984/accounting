@@ -149,19 +149,23 @@ export default function InvoiceItemsEditor<T extends FieldValues = any>({
   // recomputed guess -- see the effect below for why this matters.
   const [feesTouched, setFeesTouched] = useState(false);
 
-  // Seed previously-applied fees onto the first line the first time fee
-  // options are available (fees aren't tracked per-line in the database).
-  // This only drives which option shows pre-selected in the per-line
-  // dropdown below -- it does NOT feed the dollar amount reported by
-  // onFeesChange (see feesTouched above).
+  // Seed previously-applied fees onto EVERY existing line the first time fee
+  // options are available (fees aren't tracked per-line in the database, so
+  // this is a display-only reconstruction -- the actual saved amount comes
+  // from initialAppliedFees regardless of this selection, see feesTouched
+  // above). Seeding only the first line used to make every other line look
+  // like it had no fee at all when re-opening an invoice for edit, even
+  // though the fee legitimately applied across all of them when the
+  // invoice was created (the normal way to make a rate-based fee like a
+  // card fee apply to the whole invoice, given fees aren't tracked
+  // invoice-wide either, is to select it on every line) -- editing then
+  // looked like the fee had silently vanished from every line but the
+  // first.
   useEffect(() => {
     if (feesSeeded || feeOptions.length === 0 || fields.length === 0) return;
     if (initialAppliedFees.length > 0) {
-      setItemFeeSlots((prev) => {
-        const next = fields.map((_, i) => prev[i] ?? []);
-        next[0] = [...initialAppliedFees.map((f) => f.id), null];
-        return next;
-      });
+      const ids = [...initialAppliedFees.map((f) => f.id), null];
+      setItemFeeSlots((prev) => fields.map((_, i) => prev[i] ?? ids));
     }
     setFeesSeeded(true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
