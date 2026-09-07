@@ -76,6 +76,9 @@ export default function SupplierInvoiceDetailPage() {
   const [error, setError] = useState("");
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState("");
+  const [deleteForceable, setDeleteForceable] = useState(false);
+  const [userRole, setUserRole] = useState<string | null>(null);
 
   const { register, handleSubmit, control, reset, watch, formState: { errors } } = useForm<EditForm>({
     resolver: zodResolver(editSchema),
@@ -116,6 +119,13 @@ export default function SupplierInvoiceDetailPage() {
 
   useEffect(() => { load(); }, [load]);
 
+  useEffect(() => {
+    fetch("/api/me")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d: { viewer?: { role?: string } } | null) => setUserRole(d?.viewer?.role ?? null))
+      .catch(() => {});
+  }, []);
+
   async function onSave(data: EditForm) {
     setSaving(true);
     setError("");
@@ -144,14 +154,17 @@ export default function SupplierInvoiceDetailPage() {
     }
   }
 
-  async function handleDelete() {
+  async function handleDelete(force = false) {
     setDeleting(true);
+    setDeleteError("");
     try {
-      const res = await fetch(`/api/invoices/supplier/${id}`, { method: "DELETE" });
+      const res = await fetch(`/api/invoices/supplier/${id}${force ? "?force=true" : ""}`, { method: "DELETE" });
       if (!res.ok) {
+        // Same guard as onSave above -- a failed response isn't guaranteed
+        // to be JSON.
         const d = await res.json().catch(() => ({}));
-        setError(d.error ?? "Failed to delete");
-        setConfirmDelete(false);
+        setDeleteError(d.error ?? "Failed to delete");
+        setDeleteForceable(Boolean(d.forceable));
         return;
       }
       router.push("/invoices/supplier");
@@ -252,16 +265,40 @@ export default function SupplierInvoiceDetailPage() {
                 <Edit2 className="w-4 h-4" /> Edit
               </button>
               {!confirmDelete ? (
-                <button onClick={() => setConfirmDelete(true)} className="btn-danger">
+                <button
+                  onClick={() => { setConfirmDelete(true); setDeleteError(""); setDeleteForceable(false); }}
+                  className="btn-danger"
+                >
                   <Trash2 className="w-4 h-4" /> Delete
                 </button>
               ) : (
-                <div className="flex items-center gap-2 bg-red-50 border border-red-200 rounded-lg px-3 py-1.5">
-                  <span className="text-sm text-red-700">Confirm delete?</span>
-                  <button onClick={handleDelete} disabled={deleting} className="text-red-700 font-medium text-sm hover:underline">
-                    {deleting ? "…" : "Yes"}
-                  </button>
-                  <button onClick={() => setConfirmDelete(false)} className="text-gray-500 text-sm hover:underline">No</button>
+                <div className="flex flex-col items-end gap-1.5">
+                  <div className="flex items-center gap-2 bg-red-50 border border-red-200 rounded-lg px-3 py-1.5">
+                    <span className="text-sm text-red-700">Confirm delete?</span>
+                    <button onClick={() => handleDelete(false)} disabled={deleting} className="text-red-700 font-medium text-sm hover:underline">
+                      {deleting ? "…" : "Yes"}
+                    </button>
+                    <button
+                      onClick={() => { setConfirmDelete(false); setDeleteError(""); setDeleteForceable(false); }}
+                      className="text-gray-500 text-sm hover:underline"
+                    >
+                      No
+                    </button>
+                  </div>
+                  {deleteError && (
+                    <div className="max-w-xs text-right text-xs text-red-700">
+                      {deleteError}
+                      {deleteForceable && userRole === "ADMIN" && (
+                        <button
+                          onClick={() => handleDelete(true)}
+                          disabled={deleting}
+                          className="block ml-auto mt-1 font-semibold underline hover:no-underline"
+                        >
+                          {deleting ? "…" : "Force delete anyway (reopens the linked purchase request as pending)"}
+                        </button>
+                      )}
+                    </div>
+                  )}
                 </div>
               )}
             </>
