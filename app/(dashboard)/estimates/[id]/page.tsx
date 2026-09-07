@@ -404,7 +404,10 @@ export default function EstimateDetailPage() {
               type="customer"
               setValue={setValue}
               feeOptions={feeOptions}
-              initialAppliedFeeIds={estimate.appliedFees.map((f) => f.id).filter((fid): fid is string => !!fid)}
+              initialAppliedFees={estimate.appliedFees.filter(
+                (f): f is { id: string; label: string; rate: number; amount: string } =>
+                  !!f.id && f.rate !== undefined
+              )}
               onFeesChange={setComputedAppliedFees}
             />
           </div>

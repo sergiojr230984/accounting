@@ -656,7 +656,10 @@ export default function CustomerInvoiceDetailPage() {
                 type="customer"
                 setValue={setValue}
                 feeOptions={feeOptions}
-                initialAppliedFeeIds={invoice.appliedFees.map((f) => f.id).filter((fid): fid is string => !!fid)}
+                initialAppliedFees={invoice.appliedFees.filter(
+                  (f): f is { id: string; label: string; rate: number; amount: string } =>
+                    !!f.id && f.rate !== undefined
+                )}
                 onFeesChange={setComputedAppliedFees}
                 lockedCount={invoice.paymentStatus !== "UNPAID" ? invoice.items.length : 0}
                 showItemCode
