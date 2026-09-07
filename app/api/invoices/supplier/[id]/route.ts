@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
+import { requireRole } from "@/lib/api";
 import { prisma } from "@/lib/prisma";
 import { writeAuditLog, extractMeta, actorFromSession, diffChanges } from "@/lib/audit";
 import { computeLineTotals } from "@/lib/money";
@@ -315,8 +316,12 @@ export async function DELETE(
   if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   const { id } = await params;
+  const force = new URL(request.url).searchParams.get("force") === "true";
 
-  const existing = await prisma.supplierInvoice.findUnique({ where: { id } });
+  const existing = await prisma.supplierInvoice.findUnique({
+    where: { id },
+    include: { purchaseRequest: { select: { id: true, customerInvoiceItemId: true } } },
+  });
   if (!existing) return NextResponse.json({ error: "Not found" }, { status: 404 });
 
   if (existing.paymentStatus !== "UNPAID") {
@@ -326,16 +331,59 @@ export async function DELETE(
     );
   }
 
-  // Deleting a bill that closed out a purchase_request would leave the
-  // linked invoice line's actualCost and the purchase_request's FULFILLED
-  // status/cost as orphaned, unrecoverable history -- there's no "reopen"
-  // flow to put it back to PENDING. Same reasoning as the payment guard
-  // above, just for the purchasing-trigger side of this bill's data.
-  if (existing.purchaseRequestId) {
-    return NextResponse.json(
-      { error: "This bill fulfills a purchase request and can no longer be deleted." },
-      { status: 409 }
-    );
+  // A bill that closed out a purchase_request left the linked customer
+  // invoice line's actualCost set and the purchase_request marked
+  // FULFILLED -- deleting the bill outright would leave both of those
+  // pointing at a bill that no longer exists. Unlike the payment guard
+  // above, this IS forceable: unlike a recorded payment, there's a clean
+  // "undo" available -- put the purchase_request back to PENDING (no cost)
+  // and clear the invoice line's actualCost, i.e. exactly the state before
+  // this bill was ever created. This is also the deliberate resolution the
+  // customer-invoice DELETE route's own error message points at when IT
+  // can't force past a purchase_request with a linked bill ("Unlink or
+  // delete that bill first") -- this is that "delete the bill" step.
+  if (existing.purchaseRequestId && existing.purchaseRequest) {
+    if (!force) {
+      return NextResponse.json(
+        {
+          error:
+            "This bill fulfills a purchase request. Deleting it will reopen that request as pending (no cost entered) instead of leaving it stuck marked fulfilled with no bill behind it. An admin can force-delete it.",
+          forceable: true,
+        },
+        { status: 409 }
+      );
+    }
+
+    const roleGuard = await requireRole("ADMIN");
+    if (roleGuard instanceof NextResponse) return roleGuard;
+
+    const purchaseRequestId = existing.purchaseRequest.id;
+    await prisma.$transaction([
+      prisma.customerInvoiceItem.update({
+        where: { id: existing.purchaseRequest.customerInvoiceItemId },
+        data: { actualCost: null },
+      }),
+      prisma.purchaseRequest.update({
+        where: { id: purchaseRequestId },
+        data: { status: "PENDING", cost: null, fulfilledAt: null },
+      }),
+      prisma.supplierInvoice.delete({ where: { id } }),
+    ]);
+
+    await writeAuditLog({
+      ...actorFromSession(session),
+      action: "DELETE",
+      entityType: "supplier_invoice",
+      entityId: id,
+      entityLabel: `Bill #${existing.invoiceNumber}`,
+      changes: {
+        forced: { old: false, new: true },
+        reopenedPurchaseRequestId: { old: null, new: purchaseRequestId },
+      },
+      ...extractMeta(request),
+    });
+
+    return NextResponse.json({ ok: true });
   }
 
   await prisma.supplierInvoice.delete({ where: { id } });

@@ -435,6 +435,92 @@ describe("deleting an invoice whose payment (and purchase_request) was later rev
   });
 });
 
+// Mirrors the customer-invoice describe block above, but for the other side
+// of the same relationship: the customer-invoice DELETE route's own error
+// message, when it can't force past a purchase_request with a linked bill,
+// says "Unlink or delete that bill first" -- this is that "delete the bill"
+// step actually existing. Previously the bill's own DELETE route refused
+// unconditionally with no force option at all, so there was no way to
+// action that message.
+describe("deleting a bill that fulfilled a purchase request", () => {
+  async function billFulfillingAPurchaseRequest() {
+    const inv = await createInvoiceWithLines({ includeHouseLine: false });
+    await admin.postJson(`/api/invoices/customer/${inv.id}/payments`, {
+      amount: "500",
+      paymentDate: "2026-01-05",
+    });
+    const full = await admin.getJson<{ invoiceNumber: string }>(`/api/invoices/customer/${inv.id}`);
+    const report = await admin.getJson<{ rows: { id: string; invoiceNumber: string; quantity: string }[] }>(
+      `/api/reports?type=items-ordered&status=PENDING`
+    );
+    const row = report.body.rows.find((r) => r.invoiceNumber === full.body.invoiceNumber);
+    if (!row) throw new Error("expected a pending purchase request row");
+
+    const bill = await admin.postJson<{ id: string }>("/api/invoices/supplier", {
+      supplierId: realSupplierId,
+      invoiceNumber: `BILL-SELFDEL-${Date.now()}`,
+      invoiceDate: "2026-01-06",
+      category: "COGS",
+      items: [{ description: "Sofa, brown leather", quantity: row.quantity, unitCost: "300", taxRate: "0" }],
+      purchaseRequestId: row.id,
+    });
+    expect(bill.status).toBe(201);
+
+    return { billId: bill.body.id, invoiceId: inv.id, purchaseRequestId: row.id };
+  }
+
+  it("a plain DELETE is rejected with a forceable JSON error", async () => {
+    const { billId } = await billFulfillingAPurchaseRequest();
+    const { status, body } = await admin.postJson<{ error?: string; forceable?: boolean }>(
+      `/api/invoices/supplier/${billId}`,
+      {},
+      "DELETE"
+    );
+    expect(status).toBe(409);
+    expect(body.forceable).toBe(true);
+
+    const stillThere = await admin.getJson(`/api/invoices/supplier/${billId}`);
+    expect(stillThere.status).toBe(200);
+  });
+
+  it("force=true is forbidden for a non-admin", async () => {
+    const { billId } = await billFulfillingAPurchaseRequest();
+    const { status } = await manager.postJson(`/api/invoices/supplier/${billId}?force=true`, {}, "DELETE");
+    expect(status).toBe(403);
+
+    const stillThere = await admin.getJson(`/api/invoices/supplier/${billId}`);
+    expect(stillThere.status).toBe(200);
+  });
+
+  it("force=true as an admin deletes the bill and reopens the purchase request as pending", async () => {
+    const { billId, invoiceId } = await billFulfillingAPurchaseRequest();
+
+    const { status } = await admin.postJson(`/api/invoices/supplier/${billId}?force=true`, {}, "DELETE");
+    expect(status).toBe(200);
+
+    const afterBill = await admin.getJson(`/api/invoices/supplier/${billId}`);
+    expect(afterBill.status).toBe(404);
+
+    // The linked customer-invoice line's actualCost is cleared and its
+    // purchase_request is back to PENDING -- exactly the state before this
+    // bill ever existed, ready for a new bill to fulfill it.
+    const invoice = await admin.getJson<{
+      items: { description: string; actualCost: string | null; purchaseRequest: { status: string } | null }[];
+    }>(`/api/invoices/customer/${invoiceId}`);
+    const line = invoice.body.items.find((i) => i.description === "Sofa, brown leather");
+    expect(line?.actualCost).toBeNull();
+    expect(line?.purchaseRequest?.status).toBe("PENDING");
+
+    // Also back on the "Items Ordered / Pending" report, ready to be
+    // fulfilled by a new bill.
+    const report = await admin.getJson<{ rows: { invoiceNumber: string }[] }>(
+      `/api/reports?type=items-ordered&status=PENDING`
+    );
+    const full = await admin.getJson<{ invoiceNumber: string }>(`/api/invoices/customer/${invoiceId}`);
+    expect(report.body.rows.some((r) => r.invoiceNumber === full.body.invoiceNumber)).toBe(true);
+  });
+});
+
 describe("bill creation closes out a purchase_request", () => {
   async function paidInvoiceWithOnePendingRequest() {
     const inv = await createInvoiceWithLines({ includeHouseLine: false });
