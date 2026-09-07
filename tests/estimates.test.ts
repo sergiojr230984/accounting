@@ -26,6 +26,22 @@ describe("estimate creation", () => {
     expect(Number(body.totalAmount)).toBe(300);
   });
 
+  // Same fix as customer/supplier invoices (tests/invoices.test.ts) applied
+  // here too: a converted estimate hands its items straight to the
+  // customer invoice it becomes, so an untrimmed description would carry a
+  // latent whitespace mismatch forward into that invoice's own
+  // itemsLocked guard.
+  it("trims leading/trailing whitespace from a line item's description on create", async () => {
+    const { status, body } = await admin.postJson<{ items: { description: string }[] }>("/api/estimates", {
+      customerId,
+      estimateNumber: `EST-TRIM-${Date.now()}`,
+      estimateDate: "2026-01-01",
+      items: [{ description: "  Consulting  ", quantity: "1", unitPrice: "1" }],
+    });
+    expect(status).toBe(201);
+    expect(body.items[0].description).toBe("Consulting");
+  });
+
   // Estimates duplicated the same subtotal-rounding logic as customer/
   // supplier invoices (df34770 fixed it there on 2026-07-12) but never got
   // the fix applied here -- summing full-precision line totals and rounding

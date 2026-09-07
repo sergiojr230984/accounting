@@ -19,8 +19,10 @@ const updateSchema = z.object({
     .array(
       z.object({
         id: z.string().optional(),
-        description: z.string().min(1),
-        itemDescription: z.string().optional(),
+        // Trimmed -- see the matching comment on the create route's item
+        // schema (app/api/invoices/supplier/route.ts).
+        description: z.string().trim().min(1),
+        itemDescription: z.string().trim().optional(),
         quantity: z.string(),
         unitCost: z.string(),
         taxRate: z.string().default("0"),
@@ -118,9 +120,13 @@ export async function PATCH(
       // a client-side bug that submits a stale/blank value for a field the
       // user never touched into something immediately diagnosable instead
       // of an indistinguishable-from-a-genuine-edit dead end.
+      // Compared trimmed -- see the matching comment on the customer-
+      // invoice equivalent of this guard: a stray leading/trailing space in
+      // a stored description isn't a meaningful edit and shouldn't block
+      // an otherwise-untouched save.
       const mismatches: string[] = [];
-      if (match.description !== item.description) mismatches.push("description");
-      if ((match.itemDescription ?? "") !== (item.itemDescription ?? "")) mismatches.push("itemDescription");
+      if (match.description.trim() !== item.description.trim()) mismatches.push("description");
+      if ((match.itemDescription ?? "").trim() !== (item.itemDescription ?? "").trim()) mismatches.push("itemDescription");
       if (!new Decimal(match.quantity.toString()).equals(new Decimal(item.quantity || "0"))) mismatches.push("quantity");
       if (!new Decimal(match.unitCost.toString()).equals(new Decimal(item.unitCost || "0"))) mismatches.push("unitCost");
       if (!new Decimal(match.taxRate.toString()).equals(new Decimal(item.taxRate || "0"))) mismatches.push("taxRate");

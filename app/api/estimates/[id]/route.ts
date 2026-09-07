@@ -26,8 +26,10 @@ const updateSchema = z.object({
   items: z
     .array(
       z.object({
-        description: z.string().min(1),
-        itemDescription: z.string().optional(),
+        // Trimmed -- see the matching comment on the create route's item
+        // schema (app/api/estimates/route.ts).
+        description: z.string().trim().min(1),
+        itemDescription: z.string().trim().optional(),
         quantity: z.string(),
         unitPrice: z.string(),
         taxRate: z.string().default("0"),
