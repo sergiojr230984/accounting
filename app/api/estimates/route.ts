@@ -44,12 +44,22 @@ export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
   const customerId = searchParams.get("customerId");
   const status = searchParams.get("status");
+  const search = searchParams.get("search")?.trim();
   const page = parseInt(searchParams.get("page") ?? "1");
   const limit = parseInt(searchParams.get("limit") ?? "20");
 
   const where: Record<string, unknown> = {};
   if (customerId) where.customerId = customerId;
   if (status) where.status = status;
+  // See app/api/invoices/customer/route.ts for why this has to happen
+  // server-side across the whole dataset rather than in the page's
+  // client-only filter.
+  if (search) {
+    where.OR = [
+      { estimateNumber: { contains: search, mode: "insensitive" } },
+      { customer: { name: { contains: search, mode: "insensitive" } } },
+    ];
+  }
 
   const [estimates, total] = await Promise.all([
     prisma.estimate.findMany({

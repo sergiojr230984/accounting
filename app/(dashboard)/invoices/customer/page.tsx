@@ -49,6 +49,17 @@ export default function CustomerInvoicesPage() {
       .catch(() => {});
   }, []);
 
+  // Debounced so every keystroke doesn't fire a request, and so the search
+  // term is sent to the server instead of only filtering whatever page of
+  // results happened to already be loaded (which is what let invoice #1297
+  // go "missing" -- it just wasn't on the currently-fetched page).
+  const [debouncedSearch, setDebouncedSearch] = useState("");
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedSearch(search.trim()), 300);
+    return () => clearTimeout(t);
+  }, [search]);
+  useEffect(() => { setPage(1); }, [debouncedSearch]);
+
   const load = useCallback(async () => {
     setLoading(true);
     try {
@@ -58,6 +69,7 @@ export default function CustomerInvoicesPage() {
       if (customerFilter) params.set("customerId", customerFilter);
       if (from) params.set("from", from);
       if (to) params.set("to", to);
+      if (debouncedSearch) params.set("search", debouncedSearch);
       const res = await fetch(`/api/invoices/customer?${params}`);
       const data = await res.json();
       setInvoices(data.invoices);
@@ -65,19 +77,11 @@ export default function CustomerInvoicesPage() {
     } finally {
       setLoading(false);
     }
-  }, [page, statusFilter, customerFilter, from, to, tab]);
+  }, [page, statusFilter, customerFilter, from, to, tab, debouncedSearch]);
 
   useEffect(() => { load(); }, [load]);
 
-  const filtered = useMemo(
-    () =>
-      invoices.filter(
-        (inv) =>
-          inv.invoiceNumber.toLowerCase().includes(search.toLowerCase()) ||
-          inv.customer.name.toLowerCase().includes(search.toLowerCase())
-      ),
-    [invoices, search]
-  );
+  const filtered = invoices;
 
   const stats: Stats = useMemo(() => {
     const today = new Date();

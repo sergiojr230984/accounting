@@ -320,3 +320,40 @@ describe("invalid foreign keys are rejected cleanly, not a raw DB-constraint 500
     expect(body.error).toContain("customer");
   });
 });
+
+// Same fix as the invoices list search regression (tests/invoices.test.ts):
+// the estimates list page's search box only ever filtered the rows already
+// fetched, never told the server what to look for. Applied here too per
+// the "fix applied once, needed everywhere" pattern for the
+// customer-invoice/supplier-bill/estimate trio.
+describe("estimate list search — matches server-side, not just the currently loaded page", () => {
+  it("finds an estimate by number", async () => {
+    const targetNumber = `EST-SEARCH-TARGET-${Date.now()}`;
+    await admin.postJson("/api/estimates", {
+      customerId,
+      estimateNumber: targetNumber,
+      estimateDate: "2026-01-01",
+      items: [{ description: "x", quantity: "1", unitPrice: "1" }],
+    });
+    const searched = await admin.getJson<{ total: number; estimates: { estimateNumber: string }[] }>(
+      `/api/estimates?search=${encodeURIComponent(targetNumber)}`
+    );
+    expect(searched.body.total).toBe(1);
+    expect(searched.body.estimates[0]?.estimateNumber).toBe(targetNumber);
+  });
+
+  it("also matches by customer name, case-insensitively", async () => {
+    const uniqueName = `Zzz Estimate Search By Name ${Date.now()}`;
+    const searchCustomer = await admin.postJson<{ id: string }>("/api/customers", { name: uniqueName });
+    await admin.postJson("/api/estimates", {
+      customerId: searchCustomer.body.id,
+      estimateNumber: `EST-NAME-SEARCH-${Date.now()}`,
+      estimateDate: "2026-01-01",
+      items: [{ description: "x", quantity: "1", unitPrice: "1" }],
+    });
+    const searched = await admin.getJson<{ total: number }>(
+      `/api/estimates?search=${encodeURIComponent(uniqueName.toLowerCase())}`
+    );
+    expect(searched.body.total).toBe(1);
+  });
+});
