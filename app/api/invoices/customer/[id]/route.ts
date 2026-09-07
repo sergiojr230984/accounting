@@ -527,7 +527,11 @@ export async function DELETE(
     where: { id },
     include: {
       items: {
-        include: { purchaseRequest: { include: { supplierInvoice: { select: { id: true } } } } },
+        include: {
+          purchaseRequest: {
+            include: { supplierInvoice: { select: { id: true, invoiceNumber: true, paymentStatus: true } } },
+          },
+        },
       },
     },
   });
@@ -560,26 +564,40 @@ export async function DELETE(
   // exactly the silent-failure shape documented in CLAUDE.md, just from a
   // DELETE instead of a PATCH.
   if (purchaseRequests.length > 0) {
-    // A purchase_request with a linked supplier bill means real money has
-    // already been tracked against it (see SupplierInvoice.purchaseRequestId
-    // in prisma/schema.prisma) -- that's actual financial history, not just
-    // a dangling request, and force can't touch it. Untangling this needs a
-    // deliberate look at the bill itself, not a bulk override here.
-    const hasLinkedBill = purchaseRequests.some((pr) => pr.supplierInvoice);
-    if (hasLinkedBill) {
+    const linkedBills = purchaseRequests
+      .map((pr) => pr.supplierInvoice)
+      .filter((si): si is NonNullable<typeof si> => si !== null);
+
+    // A linked bill with a recorded payment is real financial history on
+    // the purchasing side, same reasoning as this invoice's own payment
+    // guard above -- there's no safe automatic undo for money that's
+    // actually changed hands with the supplier, so force can't reach past
+    // this one. Everything else here (a bill that simply exists but was
+    // never paid) DOES have a safe undo -- see the force branch below.
+    const unpaidBillsBlocked = linkedBills.filter((si) => si.paymentStatus !== "UNPAID");
+    if (unpaidBillsBlocked.length > 0) {
       return NextResponse.json(
         {
-          error:
-            "This invoice has a supplier bill linked to one of its purchase requests (real cost already tracked) and can't be deleted. Unlink or delete that bill first.",
+          error: `This invoice has a supplier bill with a recorded payment (Bill #${unpaidBillsBlocked[0].invoiceNumber}) linked to one of its purchase requests and can't be deleted. Resolve that bill's payment first.`,
         },
         { status: 409 }
       );
     }
 
     if (!force) {
+      const parts: string[] = [];
+      const pendingOnlyCount = purchaseRequests.length - linkedBills.length;
+      if (pendingOnlyCount > 0) {
+        parts.push(`${pendingOnlyCount} pending purchase request${pendingOnlyCount !== 1 ? "s" : ""} (no cost entered yet)`);
+      }
+      if (linkedBills.length > 0) {
+        parts.push(
+          `${linkedBills.length} supplier bill${linkedBills.length !== 1 ? "s" : ""} (${linkedBills.map((b) => `#${b.invoiceNumber}`).join(", ")}) already tracking cost for it -- the item was effectively returned to the supplier with no cost owed`
+        );
+      }
       return NextResponse.json(
         {
-          error: `This invoice has ${purchaseRequests.length} pending purchase request${purchaseRequests.length !== 1 ? "s" : ""} attached (no cost entered yet, left over from a payment that was later corrected back to $0). An admin can force-delete it, discarding those pending requests.`,
+          error: `This invoice has ${parts.join(" and ")} attached. An admin can force-delete it, discarding the purchase request${purchaseRequests.length !== 1 ? "s" : ""}${linkedBills.length > 0 ? " and deleting the linked bill" + (linkedBills.length !== 1 ? "s" : "") : ""}.`,
           forceable: true,
         },
         { status: 409 }
@@ -594,6 +612,22 @@ export async function DELETE(
     }
 
     await prisma.$transaction([
+      // The bill has to go before the purchase_request it fulfills --
+      // SupplierInvoice.purchaseRequestId points at it, and nothing here
+      // needs the bill's own itemsLocked/paymentStatus guards (those exist
+      // for a bill deleted on its own via .../supplier/[id]/route.ts) since
+      // the whole sale this bill was sourcing for no longer exists once
+      // this invoice is gone -- there's no "reopen as pending" to preserve.
+      ...(linkedBills.length > 0
+        ? [
+            // UploadedFile.supplierInvoiceId has no cascading/nulling FK
+            // action (NO ACTION) -- an attached file must be cleared before
+            // the bill it's attached to, same fix as the bill's own DELETE
+            // route (app/api/invoices/supplier/[id]/route.ts).
+            prisma.uploadedFile.deleteMany({ where: { supplierInvoiceId: { in: linkedBills.map((b) => b.id) } } }),
+            prisma.supplierInvoice.deleteMany({ where: { id: { in: linkedBills.map((b) => b.id) } } }),
+          ]
+        : []),
       prisma.purchaseRequest.deleteMany({ where: { id: { in: purchaseRequests.map((pr) => pr.id) } } }),
       prisma.customerInvoice.delete({ where: { id } }),
     ]);
@@ -607,6 +641,9 @@ export async function DELETE(
       changes: {
         forced: { old: false, new: true },
         discardedPurchaseRequestIds: { old: null, new: purchaseRequests.map((pr) => pr.id) },
+        ...(linkedBills.length > 0
+          ? { deletedBillNumbers: { old: null, new: linkedBills.map((b) => b.invoiceNumber) } }
+          : {}),
       },
       ...extractMeta(request),
     });

@@ -367,6 +367,11 @@ export async function DELETE(
         where: { id: purchaseRequestId },
         data: { status: "PENDING", cost: null, fulfilledAt: null },
       }),
+      // UploadedFile.supplierInvoiceId has no ON DELETE action (NO ACTION,
+      // i.e. effectively RESTRICT) -- an attached file must be cleared
+      // first or this delete hits an uncaught FK-violation 500 instead of
+      // succeeding. Same fix applied to the plain-delete path below.
+      prisma.uploadedFile.deleteMany({ where: { supplierInvoiceId: id } }),
       prisma.supplierInvoice.delete({ where: { id } }),
     ]);
 
@@ -386,7 +391,13 @@ export async function DELETE(
     return NextResponse.json({ ok: true });
   }
 
-  await prisma.supplierInvoice.delete({ where: { id } });
+  // See the matching comment in the force-delete branch above -- an
+  // attached file has no cascading/nulling FK action and must be cleared
+  // first.
+  await prisma.$transaction([
+    prisma.uploadedFile.deleteMany({ where: { supplierInvoiceId: id } }),
+    prisma.supplierInvoice.delete({ where: { id } }),
+  ]);
 
   await writeAuditLog({
     ...actorFromSession(session),
