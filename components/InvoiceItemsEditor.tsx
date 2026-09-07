@@ -57,10 +57,14 @@ interface InvoiceItemsEditorProps<T extends FieldValues> {
   // Optional per-line fees (credit card fee / custom fees from Settings).
   // Only rendered when provided and non-empty.
   feeOptions?: FeeOption[];
-  // Fee ids previously applied to the invoice as a whole — seeded onto the
-  // first line item the first time fee options become available, since
-  // fees aren't tracked per-line in the database.
-  initialAppliedFeeIds?: string[];
+  // Fees already saved on the invoice/estimate being edited, exact amounts
+  // included. Their ids are seeded onto the first line item's fee slots the
+  // first time fee options become available (fees aren't tracked per-line
+  // in the database, so this is only ever a best-effort guess at which
+  // line(s) they applied to) -- but the AMOUNTS reported back via
+  // onFeesChange are these original values verbatim until the user actually
+  // touches a fee selection. See the `feesTouched` state below for why.
+  initialAppliedFees?: AppliedFee[];
   onFeesChange?: (fees: AppliedFee[]) => void;
   // Number of leading rows (by original load order) that already existed
   // when a payment was recorded against this invoice/bill. The server
@@ -103,7 +107,7 @@ export default function InvoiceItemsEditor<T extends FieldValues = any>({
   fieldName = "items",
   type,
   feeOptions = [],
-  initialAppliedFeeIds = [],
+  initialAppliedFees = [],
   onFeesChange,
   lockedCount = 0,
   setValue,
@@ -139,19 +143,29 @@ export default function InvoiceItemsEditor<T extends FieldValues = any>({
   const [itemFeeSlots, setItemFeeSlots] = useState<(string | null)[][]>([]);
   const [feesSeeded, setFeesSeeded] = useState(false);
 
+  // Whether the user has explicitly changed a fee selection (picked one,
+  // removed one) during this edit session. Until they do, onFeesChange
+  // reports initialAppliedFees back completely unchanged instead of a
+  // recomputed guess -- see the effect below for why this matters.
+  const [feesTouched, setFeesTouched] = useState(false);
+
   // Seed previously-applied fees onto the first line the first time fee
   // options are available (fees aren't tracked per-line in the database).
+  // This only drives which option shows pre-selected in the per-line
+  // dropdown below -- it does NOT feed the dollar amount reported by
+  // onFeesChange (see feesTouched above).
   useEffect(() => {
     if (feesSeeded || feeOptions.length === 0 || fields.length === 0) return;
-    if (initialAppliedFeeIds.length > 0) {
+    if (initialAppliedFees.length > 0) {
       setItemFeeSlots((prev) => {
         const next = fields.map((_, i) => prev[i] ?? []);
-        next[0] = [...initialAppliedFeeIds, null];
+        next[0] = [...initialAppliedFees.map((f) => f.id), null];
         return next;
       });
     }
     setFeesSeeded(true);
-  }, [feeOptions.length, fields.length, feesSeeded, initialAppliedFeeIds]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [feeOptions.length, fields.length, feesSeeded]);
 
   // Keep itemFeeSlots positionally aligned with the items field array.
   useEffect(() => {
@@ -163,6 +177,7 @@ export default function InvoiceItemsEditor<T extends FieldValues = any>({
   }, [fields.length]);
 
   function selectLineFee(itemIdx: number, slotIdx: number, feeId: string | null) {
+    setFeesTouched(true);
     setItemFeeSlots((prev) => {
       const next = [...prev];
       const slots = next[itemIdx] && next[itemIdx].length > 0 ? [...next[itemIdx]] : [null];
@@ -174,6 +189,7 @@ export default function InvoiceItemsEditor<T extends FieldValues = any>({
   }
 
   function removeLineFee(itemIdx: number, slotIdx: number) {
+    setFeesTouched(true);
     setItemFeeSlots((prev) => {
       const next = [...prev];
       const filtered = (next[itemIdx] ?? []).filter((_, i) => i !== slotIdx);
@@ -185,6 +201,26 @@ export default function InvoiceItemsEditor<T extends FieldValues = any>({
   // Aggregate all per-line fee selections into totals and report them up.
   useEffect(() => {
     if (!onFeesChange) return;
+
+    // Regression guard: editing something unrelated to fees (notes, a new
+    // line item, invoice dates...) used to silently wipe out or shrink
+    // whatever fees (credit card fee, a custom "financial institution" fee,
+    // etc.) the invoice/estimate already had, because this effect always
+    // ran and always recomputed appliedFees from scratch based on which
+    // line(s) currently have a fee slot selected. Fees aren't tracked
+    // per-line in the database, so on load that selection is only ever a
+    // guess (the seeding effect above puts every previously-applied fee id
+    // onto line 1) -- recomputing from that guess instead of trusting the
+    // stored amount could and did produce a smaller total, or $0 once the
+    // guessed line's own price didn't match whatever combination of lines
+    // the fee actually applied to when the invoice was created. Until the
+    // user actually opens a fee dropdown and changes something, the fees
+    // this document already had are reported back completely untouched.
+    if (!feesTouched) {
+      onFeesChange(initialAppliedFees);
+      return;
+    }
+
     // Kept as full-precision Decimals while accumulating -- rounding each
     // line's contribution to cents before adding it to the running total
     // (as opposed to rounding once at the end) compounds upward across
@@ -227,7 +263,7 @@ export default function InvoiceItemsEditor<T extends FieldValues = any>({
       Array.from(feeAgg.values()).map((f) => ({ ...f, amount: f.amount.toFixed(2) }))
     );
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [items, itemFeeSlots, feeOptions]);
+  }, [items, itemFeeSlots, feeOptions, feesTouched]);
 
   return (
     <div>
