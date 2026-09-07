@@ -113,15 +113,22 @@ export async function PATCH(
       const match = existingById.get(item.id);
       if (!match) continue; // unknown id — treated as a new line below
       seenIds.add(item.id);
-      const unchanged =
-        match.description === item.description &&
-        (match.itemDescription ?? "") === (item.itemDescription ?? "") &&
-        new Decimal(match.quantity.toString()).equals(new Decimal(item.quantity || "0")) &&
-        new Decimal(match.unitCost.toString()).equals(new Decimal(item.unitCost || "0")) &&
-        new Decimal(match.taxRate.toString()).equals(new Decimal(item.taxRate || "0"));
-      if (!unchanged) {
+      // Named per-field, not a single boolean -- see the matching comment
+      // on the customer-invoice equivalent of this guard for why: it turns
+      // a client-side bug that submits a stale/blank value for a field the
+      // user never touched into something immediately diagnosable instead
+      // of an indistinguishable-from-a-genuine-edit dead end.
+      const mismatches: string[] = [];
+      if (match.description !== item.description) mismatches.push("description");
+      if ((match.itemDescription ?? "") !== (item.itemDescription ?? "")) mismatches.push("itemDescription");
+      if (!new Decimal(match.quantity.toString()).equals(new Decimal(item.quantity || "0"))) mismatches.push("quantity");
+      if (!new Decimal(match.unitCost.toString()).equals(new Decimal(item.unitCost || "0"))) mismatches.push("unitCost");
+      if (!new Decimal(match.taxRate.toString()).equals(new Decimal(item.taxRate || "0"))) mismatches.push("taxRate");
+      if (mismatches.length > 0) {
         return NextResponse.json(
-          { error: "This bill has a recorded payment -- existing line items can't be changed or removed. You can still add new items." },
+          {
+            error: `This bill has a recorded payment -- existing line items can't be changed or removed. You can still add new items. (Field${mismatches.length > 1 ? "s" : ""} that differ on "${match.description}": ${mismatches.join(", ")}.)`,
+          },
           { status: 409 }
         );
       }
@@ -129,7 +136,9 @@ export async function PATCH(
     for (const existingItem of existing.items) {
       if (!seenIds.has(existingItem.id)) {
         return NextResponse.json(
-          { error: "This bill has a recorded payment -- existing line items can't be changed or removed. You can still add new items." },
+          {
+            error: `This bill has a recorded payment -- existing line items can't be changed or removed. You can still add new items. ("${existingItem.description}" was removed or its id wasn't submitted.)`,
+          },
           { status: 409 }
         );
       }

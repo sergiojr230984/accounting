@@ -206,9 +206,20 @@ export default function CustomerInvoiceDetailPage() {
         setFeeOptions(options);
       })
       .catch(() => {});
+    // Deliberately NOT filtered to active suppliers here (unlike the "new
+    // invoice" page, which only ever needs choices for a fresh line) --
+    // this is the EDIT page, so an existing line item may already reference
+    // a supplier that's since been deactivated. InvoiceItemsEditor still
+    // only offers active suppliers for a NEW selection; it separately keeps
+    // whichever supplier a given line already has, active or not, so that
+    // supplier doesn't silently disappear from the dropdown -- which used
+    // to submit an empty supplierId for an unrelated save (e.g. just
+    // editing notes) and get rejected by the itemsLocked "existing line
+    // items must match byte-for-byte" guard on a paid invoice, with no
+    // indication why.
     fetch("/api/suppliers")
       .then((r) => (r.ok ? r.json() : []))
-      .then((list: SupplierCodeOpt[]) => setSuppliers(Array.isArray(list) ? list.filter((s) => s.active) : []))
+      .then((list: SupplierCodeOpt[]) => setSuppliers(Array.isArray(list) ? list : []))
       .catch(() => {});
   }, []);
 

@@ -35,6 +35,12 @@ interface SupplierCodeOption {
   id: string;
   name: string;
   code: string | null;
+  // Optional -- callers that only ever need fresh selections (e.g. the
+  // new-invoice page's own inline supplier UI) don't pass this at all, so
+  // it's treated as active. The invoice-edit page passes it explicitly and
+  // relies on the per-line fallback below to keep an inactive supplier
+  // already assigned to a line selectable/visible instead of disappearing.
+  active?: boolean;
 }
 
 interface AppliedFee {
@@ -377,9 +383,14 @@ export default function InvoiceItemsEditor<T extends FieldValues = any>({
                         {...register(`${fieldName}.${index}.supplierId` as Path<T>)}
                       >
                         <option value="">Supplier…</option>
-                        {supplierOptions.map((s) => (
-                          <option key={s.id} value={s.id}>{s.code ?? "??"} — {s.name}</option>
-                        ))}
+                        {supplierOptions
+                          .filter((s) => s.active !== false || s.id === items?.[index]?.supplierId)
+                          .map((s) => (
+                            <option key={s.id} value={s.id}>
+                              {s.code ?? "??"} — {s.name}
+                              {s.active === false ? " (inactive)" : ""}
+                            </option>
+                          ))}
                       </select>
                       <input
                         className="input text-sm flex-1 min-w-0"
