@@ -17,6 +17,10 @@ interface Invoice {
   paymentStatus: "UNPAID" | "PARTIALLY_PAID" | "PAID";
   category: "COGS" | "SERVICES_EXPENSE" | "OPERATING_EXPENSE" | "OTHER";
   supplier: { id: string; name: string };
+  // The customer invoice this bill was raised against, if any -- previously
+  // only visible on the bill's own detail page, which meant finding "the
+  // bill for customer invoice #1297" meant opening bills one at a time.
+  customerInvoiceRef: string | null;
 }
 
 export default function SupplierInvoicesPage() {
@@ -83,7 +87,7 @@ export default function SupplierInvoicesPage() {
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
             <input
               className="input pl-9 text-sm"
-              placeholder="Search by invoice # or supplier…"
+              placeholder="Search by invoice #, customer invoice #, or supplier…"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
             />
@@ -118,6 +122,7 @@ export default function SupplierInvoicesPage() {
           <thead className="bg-gray-50 border-b border-gray-100">
             <tr>
               <th className="text-left px-5 py-3 text-xs font-semibold text-gray-500 uppercase">Invoice #</th>
+              <th className="text-left px-5 py-3 text-xs font-semibold text-gray-500 uppercase">Customer Invoice #</th>
               <th className="text-left px-5 py-3 text-xs font-semibold text-gray-500 uppercase">Supplier</th>
               <th className="text-left px-5 py-3 text-xs font-semibold text-gray-500 uppercase">Date</th>
               <th className="text-left px-5 py-3 text-xs font-semibold text-gray-500 uppercase">Category</th>
@@ -130,7 +135,7 @@ export default function SupplierInvoicesPage() {
             {loading
               ? Array.from({ length: 5 }).map((_, i) => (
                   <tr key={i}>
-                    {Array.from({ length: 7 }).map((_, j) => (
+                    {Array.from({ length: 8 }).map((_, j) => (
                       <td key={j} className="px-5 py-3">
                         <div className="h-4 bg-gray-100 rounded animate-pulse" />
                       </td>
@@ -140,6 +145,9 @@ export default function SupplierInvoicesPage() {
               : filtered.map((inv) => (
                   <tr key={inv.id} className="hover:bg-gray-50 transition-colors">
                     <td className="px-5 py-3 font-medium text-brand-600">{inv.invoiceNumber}</td>
+                    <td className="px-5 py-3 text-gray-500">
+                      {inv.customerInvoiceRef ?? <span className="text-gray-300">—</span>}
+                    </td>
                     <td className="px-5 py-3 text-gray-700">{inv.supplier.name}</td>
                     <td className="px-5 py-3 text-gray-500">{formatDateOnly(inv.invoiceDate)}</td>
                     <td className="px-5 py-3"><CategoryBadge category={inv.category} /></td>
