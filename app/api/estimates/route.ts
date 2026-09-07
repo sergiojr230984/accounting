@@ -11,8 +11,14 @@ import Decimal from "decimal.js";
 const ESTIMATE_PREFIX = `EST-${new Date().getFullYear()}-`;
 
 const itemSchema = z.object({
-  description: z.string().min(1),
-  itemDescription: z.string().optional(),
+  // Trimmed -- see the matching comment on the customer-invoice equivalent
+  // (app/api/invoices/customer/route.ts) for the incident this traces to.
+  // Estimates have no itemsLocked-style guard themselves, but a converted
+  // estimate hands its items straight to the customer invoice it becomes
+  // (app/api/estimates/[id]/convert/route.ts), so an untrimmed description
+  // here would carry the same latent problem forward.
+  description: z.string().trim().min(1),
+  itemDescription: z.string().trim().optional(),
   quantity: z.string().regex(/^\d+(\.\d+)?$/, "Must be a number"),
   unitPrice: z.string().regex(/^\d+(\.\d+)?$/, "Must be a number"),
   taxRate: z.string().regex(/^\d+(\.\d+)?$/, "Must be a number").default("0"),

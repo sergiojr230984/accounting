@@ -32,8 +32,12 @@ const updateSchema = z.object({
     .array(
       z.object({
         id: z.string().optional(),
-        description: z.string().min(1),
-        itemDescription: z.string().optional(),
+        // Trimmed -- see the matching comment on the create route's item
+        // schema (app/api/invoices/customer/route.ts). Also keeps a
+        // resubmitted, already-trimmed-on-write existing item comparing
+        // equal here against the itemsLocked guard below.
+        description: z.string().trim().min(1),
+        itemDescription: z.string().trim().optional(),
         quantity: z.string(),
         unitPrice: z.string(),
         taxRate: z.string().default("0"),
@@ -186,17 +190,34 @@ export async function PATCH(
       const match = existingById.get(item.id);
       if (!match) continue; // unknown id — treated as a new line below
       seenIds.add(item.id);
-      const unchanged =
-        match.description === item.description &&
-        (match.itemDescription ?? "") === (item.itemDescription ?? "") &&
-        new Decimal(match.quantity.toString()).equals(new Decimal(item.quantity || "0")) &&
-        new Decimal(match.unitPrice.toString()).equals(new Decimal(item.unitPrice || "0")) &&
-        new Decimal(match.taxRate.toString()).equals(new Decimal(item.taxRate || "0")) &&
-        (match.supplierId ?? "") === (item.supplierId ?? "") &&
-        (match.partNumber ?? "") === (item.partNumber ?? "");
-      if (!unchanged) {
+      // Named per-field, not a single boolean -- a client-side bug that
+      // submits a stale/blank value for a field the user never touched
+      // (e.g. a dropdown whose option list no longer includes the item's
+      // actual, since-deactivated selection) previously came back as the
+      // exact same "recorded payment" message a genuine edit would, making
+      // the two indistinguishable from the outside. Naming which field
+      // actually differs turns that from a dead end into something
+      // immediately diagnosable.
+      // description/itemDescription compare trimmed -- confirmed via
+      // invoice 1334's own report: its stored description had a trailing
+      // space ("MESA +4 SILLAS NEGRAS Y BLANCAS ") that the resubmitted
+      // value from the edit form's ProductAutocomplete input didn't, which
+      // this guard (correctly, by its literal rules, but not by intent)
+      // treated as a changed line and blocked an otherwise-untouched save.
+      // A leading/trailing space is not a meaningful edit to a line item.
+      const mismatches: string[] = [];
+      if (match.description.trim() !== item.description.trim()) mismatches.push("description");
+      if ((match.itemDescription ?? "").trim() !== (item.itemDescription ?? "").trim()) mismatches.push("itemDescription");
+      if (!new Decimal(match.quantity.toString()).equals(new Decimal(item.quantity || "0"))) mismatches.push("quantity");
+      if (!new Decimal(match.unitPrice.toString()).equals(new Decimal(item.unitPrice || "0"))) mismatches.push("unitPrice");
+      if (!new Decimal(match.taxRate.toString()).equals(new Decimal(item.taxRate || "0"))) mismatches.push("taxRate");
+      if ((match.supplierId ?? "") !== (item.supplierId ?? "")) mismatches.push("supplierId");
+      if ((match.partNumber ?? "") !== (item.partNumber ?? "")) mismatches.push("partNumber");
+      if (mismatches.length > 0) {
         return NextResponse.json(
-          { error: "This invoice has a recorded payment -- existing line items can't be changed or removed. You can still add new items." },
+          {
+            error: `This invoice has a recorded payment -- existing line items can't be changed or removed. You can still add new items. (Field${mismatches.length > 1 ? "s" : ""} that differ on "${match.description}": ${mismatches.join(", ")}.)`,
+          },
           { status: 409 }
         );
       }
@@ -204,7 +225,9 @@ export async function PATCH(
     for (const existingItem of existing.items) {
       if (!seenIds.has(existingItem.id)) {
         return NextResponse.json(
-          { error: "This invoice has a recorded payment -- existing line items can't be changed or removed. You can still add new items." },
+          {
+            error: `This invoice has a recorded payment -- existing line items can't be changed or removed. You can still add new items. ("${existingItem.description}" was removed or its id wasn't submitted.)`,
+          },
           { status: 409 }
         );
       }

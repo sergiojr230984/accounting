@@ -11,8 +11,13 @@ import { z } from "zod";
 import Decimal from "decimal.js";
 
 const itemSchema = z.object({
-  description: z.string().min(1),
-  itemDescription: z.string().optional(),
+  // Trimmed -- a stray leading/trailing space here used to get stored
+  // verbatim, then made an otherwise-untouched save fail on a paid invoice:
+  // the itemsLocked "existing item must match byte-for-byte" guard on the
+  // PATCH route treats the resubmitted (differently-trimmed) value as a
+  // genuine edit. See that route's comment for the incident this traces to.
+  description: z.string().trim().min(1),
+  itemDescription: z.string().trim().optional(),
   quantity: z.string().regex(/^\d+(\.\d+)?$/, "Must be a number"),
   unitPrice: z.string().regex(/^\d+(\.\d+)?$/, "Must be a number"),
   taxRate: z.string().regex(/^\d+(\.\d+)?$/, "Must be a number").default("0"),

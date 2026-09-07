@@ -32,6 +32,46 @@ describe("invoice creation — server-side totals", () => {
     expect(Number(body.totalAmount)).toBe(41);
   });
 
+  // Regression coverage for invoice 1334's own report: its stored line-item
+  // description had a trailing space ("MESA +4 SILLAS NEGRAS Y BLANCAS "),
+  // which the itemsLocked "existing item must match byte-for-byte" guard on
+  // the PATCH route (see .../[id]/route.ts) treated as a real edit and used
+  // to block an otherwise-untouched save with the same "recorded payment"
+  // message a genuine edit would produce. Trimming here, at creation, means
+  // no new invoice can end up with this latent problem in the first place.
+  it("trims leading/trailing whitespace from a line item's description on create", async () => {
+    const { status, body } = await admin.postJson<{ items: { description: string; itemDescription: string | null }[] }>(
+      "/api/invoices/customer",
+      {
+        customerId,
+        invoiceNumber: `TRIM-TEST-${Date.now()}`,
+        invoiceDate: "2026-01-01",
+        dueDate: "2026-01-31",
+        items: [{ description: "  Mesa +4 sillas  ", itemDescription: "  Negras y blancas  ", quantity: "1", unitPrice: "1" }],
+      }
+    );
+    expect(status).toBe(201);
+    expect(body.items[0].description).toBe("Mesa +4 sillas");
+    expect(body.items[0].itemDescription).toBe("Negras y blancas");
+  });
+
+  // Same fix applied to the supplier-bill sibling per the "fix applied once,
+  // needed everywhere" pattern.
+  it("supplier bills: trims leading/trailing whitespace from a line item's description on create", async () => {
+    const supplier = await admin.postJson<{ id: string }>("/api/suppliers", {
+      name: `Trim Test Supplier ${Date.now()}`,
+    });
+    const { status, body } = await admin.postJson<{ items: { description: string }[] }>("/api/invoices/supplier", {
+      supplierId: supplier.body.id,
+      invoiceNumber: `Po-TRIM-${Date.now()}`,
+      invoiceDate: "2026-01-01",
+      category: "COGS",
+      items: [{ description: "  Materials  ", quantity: "1", unitCost: "1" }],
+    });
+    expect(status).toBe(201);
+    expect(body.items[0].description).toBe("Materials");
+  });
+
   it("rejects a duplicate invoice number for the same customer", async () => {
     const invoiceNumber = `DUP-TEST-${Date.now()}`;
     const payload = {
@@ -157,6 +197,108 @@ describe("paid-invoice protection", () => {
       "PATCH"
     );
     expect(status).toBe(200);
+  });
+});
+
+// Regression coverage for "editing an unrelated field (notes) on an invoice
+// fails with 'this invoice has a recorded payment', even though nothing
+// about the line item was touched": the real edit screen always resubmits
+// the full `items` array on every save (unlike the test above, which omits
+// `items` entirely and so never exercises the itemsLocked byte-for-byte
+// comparison at all). If a line item references a supplier that's since
+// been deactivated, the edit form's supplier dropdown can no longer
+// represent it and used to silently submit an empty supplierId for that
+// line -- a mismatch against the stored value that this guard (correctly)
+// rejects, but with no indication of why. Two things are checked here: the
+// server accepts a save that resubmits an item unchanged (this is what the
+// UI fix guarantees actually happens now, even for a deactivated
+// supplier), and the error message names the mismatched field on a save
+// that does have a real one.
+describe("locked line items -- diagnosable mismatch, not a mystery 409", () => {
+  async function createLockedInvoiceWithSupplierItem(): Promise<{
+    id: string;
+    supplierId: string;
+    item: { id: string; description: string; quantity: string; unitPrice: string; taxRate: string; supplierId: string; partNumber: string };
+    supplierName: string;
+  }> {
+    const supplierName = `Lock Test Supplier ${Date.now()}`;
+    const supplierRes = await admin.postJson<{ id: string }>("/api/suppliers", {
+      name: supplierName,
+    });
+    const supplierId = supplierRes.body.id;
+    const created = await admin.postJson<{ id: string; items: { id: string }[] }>("/api/invoices/customer", {
+      customerId,
+      invoiceNumber: `LOCK-MISMATCH-${Date.now()}`,
+      invoiceDate: "2026-01-01",
+      dueDate: "2026-01-31",
+      items: [
+        {
+          description: "Mesa +4 sillas",
+          quantity: "1",
+          unitPrice: "375",
+          taxRate: "0.07",
+          supplierId,
+          partNumber: "T1042",
+        },
+      ],
+    });
+    const id = created.body.id;
+    const itemId = created.body.items[0].id;
+
+    // Record a payment (locks the item via a purchase_request), then
+    // correct it back to $0 -- paymentStatus reads UNPAID again, but the
+    // purchase_request (and therefore the lock) persists, exactly as
+    // documented on the PATCH route's itemsLocked comment.
+    await admin.postJson(`/api/invoices/customer/${id}`, { paidAmount: "401.25" }, "PATCH");
+    await admin.postJson(`/api/invoices/customer/${id}`, { paidAmount: "0" }, "PATCH");
+
+    return {
+      id,
+      supplierId,
+      supplierName,
+      item: {
+        id: itemId,
+        description: "Mesa +4 sillas",
+        quantity: "1",
+        unitPrice: "375",
+        taxRate: "0.07",
+        supplierId,
+        partNumber: "T1042",
+      },
+    };
+  }
+
+  it("still saves an unrelated field when the resubmitted item exactly matches, even after its supplier is deactivated", async () => {
+    const { id, supplierId, supplierName, item } = await createLockedInvoiceWithSupplierItem();
+
+    // Deactivate the supplier after the invoice was locked -- this is what
+    // makes the edit form's dropdown unable to represent it. `name` is
+    // required by the PATCH schema even though only `active` is changing.
+    const deactivated = await admin.postJson(
+      `/api/suppliers/${supplierId}`,
+      { name: supplierName, active: false },
+      "PATCH"
+    );
+    expect(deactivated.status).toBe(200);
+
+    const { status, body } = await admin.postJson<{ error?: string }>(
+      `/api/invoices/customer/${id}`,
+      { notes: "Called customer to confirm receipt", items: [item] },
+      "PATCH"
+    );
+    expect(status, JSON.stringify(body)).toBe(200);
+  });
+
+  it("names the mismatched field(s) instead of a bare 'recorded payment' message", async () => {
+    const { id, item } = await createLockedInvoiceWithSupplierItem();
+
+    const { status, body } = await admin.postJson<{ error: string }>(
+      `/api/invoices/customer/${id}`,
+      { items: [{ ...item, supplierId: "" }] },
+      "PATCH"
+    );
+    expect(status).toBe(409);
+    expect(body.error).toContain("supplierId");
   });
 });
 

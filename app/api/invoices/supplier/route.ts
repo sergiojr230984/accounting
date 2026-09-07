@@ -9,8 +9,12 @@ import { z } from "zod";
 import Decimal from "decimal.js";
 
 const itemSchema = z.object({
-  description: z.string().min(1),
-  itemDescription: z.string().optional(),
+  // Trimmed -- see the matching comment on the customer-invoice equivalent
+  // (app/api/invoices/customer/route.ts): a stray leading/trailing space
+  // stored verbatim can make an otherwise-untouched save on a paid bill
+  // fail the itemsLocked byte-for-byte guard.
+  description: z.string().trim().min(1),
+  itemDescription: z.string().trim().optional(),
   quantity: z.string().regex(/^\d+(\.\d+)?$/),
   unitCost: z.string().regex(/^\d+(\.\d+)?$/),
   taxRate: z.string().regex(/^\d+(\.\d+)?$/).default("0"),
