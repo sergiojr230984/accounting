@@ -883,4 +883,29 @@ describe("invoice list search — matches across the whole dataset, not just the
     expect(searched.body.total).toBe(1);
     expect(searched.body.invoices[0]?.invoiceNumber).toBe(targetNumber);
   });
+
+  // A bill's own invoiceNumber is often the supplier's own (unmemorable)
+  // reference, not something the person looking for it would know -- what
+  // they're far more likely to have on hand is the customer invoice/sale
+  // that the bill was raised to fulfill. Search needs to match that too, not
+  // just the bill's own number.
+  it("supplier bills: search also matches the linked customer invoice reference", async () => {
+    const supplier = await admin.postJson<{ id: string }>("/api/suppliers", {
+      name: `Ref Search Supplier ${Date.now()}`,
+    });
+    const customerRef = `CUSTREF-${Date.now()}`;
+    const created = await admin.postJson<{ id: string; invoiceNumber: string }>("/api/invoices/supplier", {
+      supplierId: supplier.body.id,
+      invoiceNumber: `Po-${Date.now()}`,
+      invoiceDate: "2026-01-01",
+      category: "COGS",
+      items: [{ description: "x", quantity: "1", unitCost: "1" }],
+      customerInvoiceRef: customerRef,
+    });
+    const searched = await admin.getJson<{ total: number; invoices: { id: string }[] }>(
+      `/api/invoices/supplier?search=${encodeURIComponent(customerRef)}`
+    );
+    expect(searched.body.total).toBe(1);
+    expect(searched.body.invoices[0]?.id).toBe(created.body.id);
+  });
 });

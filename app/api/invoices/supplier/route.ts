@@ -59,11 +59,15 @@ export async function GET(request: Request) {
   }
   // See app/api/invoices/customer/route.ts for why this has to happen
   // server-side across the whole dataset rather than in the page's
-  // client-only filter.
+  // client-only filter. Also matches customerInvoiceRef -- the customer
+  // invoice this bill was raised against (see its schema doc comment) --
+  // so a bill can be found by the sale that generated it, not just by its
+  // own (often supplier-assigned, not memorable) invoice number.
   if (search) {
     where.OR = [
       { invoiceNumber: { contains: search, mode: "insensitive" } },
       { supplier: { name: { contains: search, mode: "insensitive" } } },
+      { customerInvoiceRef: { contains: search, mode: "insensitive" } },
     ];
   }
 
