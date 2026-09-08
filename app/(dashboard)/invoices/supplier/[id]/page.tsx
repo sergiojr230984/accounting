@@ -15,6 +15,7 @@ import InvoiceDocumentPreview from "@/components/InvoiceDocumentPreview";
 import { formatCurrency } from "@/lib/money";
 import { formatDateOnly } from "@/lib/date";
 import { generateInvoicePDF } from "@/lib/invoice-pdf";
+import Decimal from "decimal.js";
 
 const editSchema = z.object({
   invoiceNumber: z.string().min(1),
@@ -80,7 +81,7 @@ export default function SupplierInvoiceDetailPage() {
   const [deleteForceable, setDeleteForceable] = useState(false);
   const [userRole, setUserRole] = useState<string | null>(null);
 
-  const { register, handleSubmit, control, reset, watch, formState: { errors } } = useForm<EditForm>({
+  const { register, handleSubmit, control, reset, watch, setValue, formState: { errors } } = useForm<EditForm>({
     resolver: zodResolver(editSchema),
   });
 
@@ -118,6 +119,36 @@ export default function SupplierInvoiceDetailPage() {
   }, [id, reset, router]);
 
   useEffect(() => { load(); }, [load]);
+
+  // Auto-update paymentStatus when paidAmount changes in edit mode -- same
+  // fix as the customer-invoice edit page's matching effect (which this
+  // page never got, per this codebase's "fix applied once, needed
+  // everywhere" pattern). Without it, correcting Amount Paid back to $0 to
+  // resolve "this bill has a recorded payment" left the Payment Status
+  // dropdown showing its old value (Paid/Partially Paid) unless the user
+  // also remembered to change that separately -- paymentStatus is a
+  // required field on every save, not auto-derived server-side once the
+  // client sends an explicit value, so the bill silently stayed non-UNPAID
+  // and every delete/force-delete path kept refusing it.
+  useEffect(() => {
+    if (!editing || !invoice) return;
+    try {
+      const total = new Decimal(invoice.totalAmount || "0");
+      const paid = new Decimal(watchedPaidAmount || "0");
+      const balance = total.minus(paid);
+      let status: "UNPAID" | "PARTIALLY_PAID" | "PAID";
+      if (balance.lte(0)) {
+        status = "PAID";
+      } else if (paid.gt(0)) {
+        status = "PARTIALLY_PAID";
+      } else {
+        status = "UNPAID";
+      }
+      setValue("paymentStatus", status, { shouldValidate: false });
+    } catch {
+      // Ignore Decimal parse errors on incomplete / empty input
+    }
+  }, [watchedPaidAmount, editing, invoice, setValue]);
 
   useEffect(() => {
     fetch("/api/me")
