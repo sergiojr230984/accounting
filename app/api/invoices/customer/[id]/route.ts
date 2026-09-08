@@ -22,10 +22,16 @@ const updateSchema = z.object({
   dueDate: z.string().optional(),
   notes: z.string().optional(),
   paymentStatus: z.enum(["UNPAID", "PARTIALLY_PAID", "PAID"]).optional(),
-  paidAmount: z.string().optional(),
-  downPayment: z.string().optional(),
+  // Regex-validated for the same reason as the create route's paidAmount/
+  // downPayment/commissionRate (app/api/invoices/customer/route.ts) --
+  // without it, an empty string (e.g. the "Amount Paid" field cleared in
+  // the edit form) passes `.optional()` unchanged and reaches
+  // `new Decimal(...)` below, which throws uncaught and 500s the whole
+  // save silently. See the matching fix on the supplier-bill edit route.
+  paidAmount: z.string().regex(/^\d+(\.\d+)?$/, "paidAmount must be a number").optional(),
+  downPayment: z.string().regex(/^\d+(\.\d+)?$/, "downPayment must be a number").optional(),
   employeeId: z.string().nullable().optional(),
-  commissionRate: z.string().optional(),
+  commissionRate: z.string().regex(/^\d+(\.\d+)?$/, "commissionRate must be a number").optional(),
   customerAddress: z.string().optional().nullable(),
   appliedFees: z.array(appliedFeeSchema).optional(),
   items: z

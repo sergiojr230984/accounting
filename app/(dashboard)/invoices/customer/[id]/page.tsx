@@ -24,10 +24,10 @@ const editSchema = z.object({
   invoiceDate: z.string(),
   dueDate: z.string(),
   paymentStatus: z.enum(["UNPAID", "PARTIALLY_PAID", "PAID"]),
-  paidAmount: z.string(),
-  downPayment: z.string().default("0"),
+  paidAmount: z.string().regex(/^\d+(\.\d+)?$/, "Amount paid must be a number"),
+  downPayment: z.string().regex(/^\d+(\.\d+)?$/, "Down payment must be a number").default("0"),
   employeeId: z.string().default(""),
-  commissionRate: z.string().default("0"),
+  commissionRate: z.string().regex(/^\d+(\.\d+)?$/, "Commission rate must be a number").default("0"),
   notes: z.string().optional(),
   customerAddress: z.string().optional(),
   items: z.array(
@@ -559,6 +559,7 @@ export default function CustomerInvoiceDetailPage() {
               {errors.dueDate && <li>Due date is required</li>}
               {errors.paidAmount && <li>Amount paid must be a number</li>}
               {errors.downPayment && <li>Down payment must be a number</li>}
+              {errors.commissionRate && <li>Commission rate must be a number</li>}
               {errors.items && (
                 <li>
                   One or more line items are missing a description, quantity, or price.
