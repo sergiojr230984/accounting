@@ -32,6 +32,46 @@ describe("invoice creation — server-side totals", () => {
     expect(Number(body.totalAmount)).toBe(41);
   });
 
+  // Regression coverage for invoice 1334's own report: its stored line-item
+  // description had a trailing space ("MESA +4 SILLAS NEGRAS Y BLANCAS "),
+  // which the itemsLocked "existing item must match byte-for-byte" guard on
+  // the PATCH route (see .../[id]/route.ts) treated as a real edit and used
+  // to block an otherwise-untouched save with the same "recorded payment"
+  // message a genuine edit would produce. Trimming here, at creation, means
+  // no new invoice can end up with this latent problem in the first place.
+  it("trims leading/trailing whitespace from a line item's description on create", async () => {
+    const { status, body } = await admin.postJson<{ items: { description: string; itemDescription: string | null }[] }>(
+      "/api/invoices/customer",
+      {
+        customerId,
+        invoiceNumber: `TRIM-TEST-${Date.now()}`,
+        invoiceDate: "2026-01-01",
+        dueDate: "2026-01-31",
+        items: [{ description: "  Mesa +4 sillas  ", itemDescription: "  Negras y blancas  ", quantity: "1", unitPrice: "1" }],
+      }
+    );
+    expect(status).toBe(201);
+    expect(body.items[0].description).toBe("Mesa +4 sillas");
+    expect(body.items[0].itemDescription).toBe("Negras y blancas");
+  });
+
+  // Same fix applied to the supplier-bill sibling per the "fix applied once,
+  // needed everywhere" pattern.
+  it("supplier bills: trims leading/trailing whitespace from a line item's description on create", async () => {
+    const supplier = await admin.postJson<{ id: string }>("/api/suppliers", {
+      name: `Trim Test Supplier ${Date.now()}`,
+    });
+    const { status, body } = await admin.postJson<{ items: { description: string }[] }>("/api/invoices/supplier", {
+      supplierId: supplier.body.id,
+      invoiceNumber: `Po-TRIM-${Date.now()}`,
+      invoiceDate: "2026-01-01",
+      category: "COGS",
+      items: [{ description: "  Materials  ", quantity: "1", unitCost: "1" }],
+    });
+    expect(status).toBe(201);
+    expect(body.items[0].description).toBe("Materials");
+  });
+
   it("rejects a duplicate invoice number for the same customer", async () => {
     const invoiceNumber = `DUP-TEST-${Date.now()}`;
     const payload = {
@@ -67,6 +107,55 @@ describe("invoice creation — server-side totals", () => {
     );
     const sumOfLines = body.items.reduce((s, i) => s + Number(i.lineTotal), 0);
     expect(Number(body.subtotal)).toBeCloseTo(sumOfLines, 2); // currently 10.01 vs 10.02
+  });
+});
+
+// Fixed: the invoiceNumber input on invoices/customer/new used to be
+// free-typed -- nothing stopped a sales rep from clearing the auto-filled
+// "Inv 1320" prefix and submitting a bare "1320". The invoices list used to
+// sort by invoiceNumber (a string) descending, so a bare-digit number like
+// "1320" sorts *below* any "Inv "-prefixed number ('1' < 'I' in ASCII)
+// regardless of when it was actually created -- a just-created invoice
+// could vanish off the first page of "All invoices" while older,
+// differently-formatted invoices sat above it. Sorting by createdAt
+// instead makes list order track actual creation order no matter what's in
+// the number field.
+//
+// The create/edit forms now lock this field to the system-assigned number
+// (see invoices/customer/new and .../[id]) so a sales rep can no longer
+// type over it -- but the API itself still has to accept whatever number a
+// caller sends: the AI PDF/image extractor (handleExtracted in
+// invoices/customer/new) still fills this field from a scanned document's
+// own printed number, which is never going to match the "Inv ####"
+// sequence. This test keeps the list itself honest regardless of where an
+// oddly-formatted number came from.
+describe("invoice list order survives an inconsistently-formatted invoice number", () => {
+  it("a just-created invoice with a bare number still sorts first", async () => {
+    const prefixed = await admin.postJson<{ id: string }>("/api/invoices/customer", {
+      customerId,
+      invoiceNumber: `Inv SORT-${Date.now()}`,
+      invoiceDate: "2026-01-01",
+      dueDate: "2026-01-31",
+      items: [{ description: "x", quantity: "1", unitPrice: "1" }],
+    });
+    expect(prefixed.status).toBe(201);
+
+    // Created after the one above, but with a bare number lacking the "Inv "
+    // prefix -- under the old invoiceNumber-string sort this would land
+    // *after* "Inv SORT-..." even though it's the newer invoice.
+    const bare = await admin.postJson<{ id: string }>("/api/invoices/customer", {
+      customerId,
+      invoiceNumber: `${Date.now()}`,
+      invoiceDate: "2026-01-01",
+      dueDate: "2026-01-31",
+      items: [{ description: "x", quantity: "1", unitPrice: "1" }],
+    });
+    expect(bare.status).toBe(201);
+
+    const { body } = await admin.getJson<{ invoices: { id: string }[] }>(
+      `/api/invoices/customer?customerId=${customerId}&limit=5`
+    );
+    expect(body.invoices[0].id).toBe(bare.body.id);
   });
 });
 
@@ -108,6 +197,108 @@ describe("paid-invoice protection", () => {
       "PATCH"
     );
     expect(status).toBe(200);
+  });
+});
+
+// Regression coverage for "editing an unrelated field (notes) on an invoice
+// fails with 'this invoice has a recorded payment', even though nothing
+// about the line item was touched": the real edit screen always resubmits
+// the full `items` array on every save (unlike the test above, which omits
+// `items` entirely and so never exercises the itemsLocked byte-for-byte
+// comparison at all). If a line item references a supplier that's since
+// been deactivated, the edit form's supplier dropdown can no longer
+// represent it and used to silently submit an empty supplierId for that
+// line -- a mismatch against the stored value that this guard (correctly)
+// rejects, but with no indication of why. Two things are checked here: the
+// server accepts a save that resubmits an item unchanged (this is what the
+// UI fix guarantees actually happens now, even for a deactivated
+// supplier), and the error message names the mismatched field on a save
+// that does have a real one.
+describe("locked line items -- diagnosable mismatch, not a mystery 409", () => {
+  async function createLockedInvoiceWithSupplierItem(): Promise<{
+    id: string;
+    supplierId: string;
+    item: { id: string; description: string; quantity: string; unitPrice: string; taxRate: string; supplierId: string; partNumber: string };
+    supplierName: string;
+  }> {
+    const supplierName = `Lock Test Supplier ${Date.now()}`;
+    const supplierRes = await admin.postJson<{ id: string }>("/api/suppliers", {
+      name: supplierName,
+    });
+    const supplierId = supplierRes.body.id;
+    const created = await admin.postJson<{ id: string; items: { id: string }[] }>("/api/invoices/customer", {
+      customerId,
+      invoiceNumber: `LOCK-MISMATCH-${Date.now()}`,
+      invoiceDate: "2026-01-01",
+      dueDate: "2026-01-31",
+      items: [
+        {
+          description: "Mesa +4 sillas",
+          quantity: "1",
+          unitPrice: "375",
+          taxRate: "0.07",
+          supplierId,
+          partNumber: "T1042",
+        },
+      ],
+    });
+    const id = created.body.id;
+    const itemId = created.body.items[0].id;
+
+    // Record a payment (locks the item via a purchase_request), then
+    // correct it back to $0 -- paymentStatus reads UNPAID again, but the
+    // purchase_request (and therefore the lock) persists, exactly as
+    // documented on the PATCH route's itemsLocked comment.
+    await admin.postJson(`/api/invoices/customer/${id}`, { paidAmount: "401.25" }, "PATCH");
+    await admin.postJson(`/api/invoices/customer/${id}`, { paidAmount: "0" }, "PATCH");
+
+    return {
+      id,
+      supplierId,
+      supplierName,
+      item: {
+        id: itemId,
+        description: "Mesa +4 sillas",
+        quantity: "1",
+        unitPrice: "375",
+        taxRate: "0.07",
+        supplierId,
+        partNumber: "T1042",
+      },
+    };
+  }
+
+  it("still saves an unrelated field when the resubmitted item exactly matches, even after its supplier is deactivated", async () => {
+    const { id, supplierId, supplierName, item } = await createLockedInvoiceWithSupplierItem();
+
+    // Deactivate the supplier after the invoice was locked -- this is what
+    // makes the edit form's dropdown unable to represent it. `name` is
+    // required by the PATCH schema even though only `active` is changing.
+    const deactivated = await admin.postJson(
+      `/api/suppliers/${supplierId}`,
+      { name: supplierName, active: false },
+      "PATCH"
+    );
+    expect(deactivated.status).toBe(200);
+
+    const { status, body } = await admin.postJson<{ error?: string }>(
+      `/api/invoices/customer/${id}`,
+      { notes: "Called customer to confirm receipt", items: [item] },
+      "PATCH"
+    );
+    expect(status, JSON.stringify(body)).toBe(200);
+  });
+
+  it("names the mismatched field(s) instead of a bare 'recorded payment' message", async () => {
+    const { id, item } = await createLockedInvoiceWithSupplierItem();
+
+    const { status, body } = await admin.postJson<{ error: string }>(
+      `/api/invoices/customer/${id}`,
+      { items: [{ ...item, supplierId: "" }] },
+      "PATCH"
+    );
+    expect(status).toBe(409);
+    expect(body.error).toContain("supplierId");
   });
 });
 
@@ -825,5 +1016,121 @@ describe("customer address — per-invoice override, not a shared write to Custo
     );
     expect(cleared.status).toBe(200);
     expect(cleared.body.customerAddress).toBeNull();
+  });
+});
+
+// Regression coverage for "the search box can't find an invoice that was
+// created on the system": the invoices list page's search input only ever
+// filtered the ~20 rows already fetched for the current page/tab -- it
+// never told the server what to search for. So an invoice sitting on page
+// 2+ (or outside the default "Unpaid" tab) was invisible to search no
+// matter how exactly its number was typed. Fixed by having GET
+// /api/invoices/{customer,supplier} accept a `search` param and filter the
+// whole dataset server-side before pagination is applied.
+describe("invoice list search — matches across the whole dataset, not just the currently loaded page", () => {
+  it("finds a customer invoice whose number would otherwise be buried past page 1", async () => {
+    const customer = await admin.postJson<{ id: string }>("/api/customers", {
+      name: `Search Test Customer ${Date.now()}`,
+    });
+    const searchCustomerId = customer.body.id;
+
+    // The target invoice gets the oldest date so plain, most-recent-first
+    // pagination pushes it off page 1.
+    const targetNumber = `SEARCH-TARGET-${Date.now()}`;
+    await admin.postJson("/api/invoices/customer", {
+      customerId: searchCustomerId,
+      invoiceNumber: targetNumber,
+      invoiceDate: "2020-01-01",
+      dueDate: "2020-01-31",
+      items: [{ description: "x", quantity: "1", unitPrice: "1" }],
+    });
+
+    // 20 newer invoices for the same customer so the target is guaranteed
+    // to fall past the default page size.
+    for (let i = 0; i < 20; i++) {
+      await admin.postJson("/api/invoices/customer", {
+        customerId: searchCustomerId,
+        invoiceNumber: `SEARCH-FILLER-${Date.now()}-${i}`,
+        invoiceDate: "2026-06-01",
+        dueDate: "2026-06-30",
+        items: [{ description: "x", quantity: "1", unitPrice: "1" }],
+      });
+    }
+
+    // Confirm it's really buried: unfiltered page 1 for this customer does
+    // not include it.
+    const page1 = await admin.getJson<{ invoices: { invoiceNumber: string }[] }>(
+      `/api/invoices/customer?customerId=${searchCustomerId}&page=1&limit=20`
+    );
+    expect(page1.body.invoices.some((i) => i.invoiceNumber === targetNumber)).toBe(false);
+
+    // Searching for its number finds it regardless of pagination.
+    const searched = await admin.getJson<{ invoices: { invoiceNumber: string }[]; total: number }>(
+      `/api/invoices/customer?search=${encodeURIComponent(targetNumber)}`
+    );
+    expect(searched.body.total).toBe(1);
+    expect(searched.body.invoices[0]?.invoiceNumber).toBe(targetNumber);
+  });
+
+  it("also matches by customer name, case-insensitively", async () => {
+    const uniqueName = `Zzz Search By Name ${Date.now()}`;
+    const customer = await admin.postJson<{ id: string }>("/api/customers", { name: uniqueName });
+    await admin.postJson("/api/invoices/customer", {
+      customerId: customer.body.id,
+      invoiceNumber: `NAME-SEARCH-${Date.now()}`,
+      invoiceDate: "2026-01-01",
+      dueDate: "2026-01-31",
+      items: [{ description: "x", quantity: "1", unitPrice: "1" }],
+    });
+    const searched = await admin.getJson<{ total: number }>(
+      `/api/invoices/customer?search=${encodeURIComponent(uniqueName.toLowerCase())}`
+    );
+    expect(searched.body.total).toBe(1);
+  });
+
+  // Same fix, applied to the supplier-bills sibling per the "fix applied
+  // once, needed everywhere" pattern.
+  it("supplier bills: search matches invoice number too", async () => {
+    const supplier = await admin.postJson<{ id: string }>("/api/suppliers", {
+      name: `Search Supplier ${Date.now()}`,
+    });
+    const targetNumber = `BILL-SEARCH-TARGET-${Date.now()}`;
+    await admin.postJson("/api/invoices/supplier", {
+      supplierId: supplier.body.id,
+      invoiceNumber: targetNumber,
+      invoiceDate: "2020-01-01",
+      category: "OTHER",
+      items: [{ description: "x", quantity: "1", unitCost: "1" }],
+    });
+    const searched = await admin.getJson<{ total: number; invoices: { invoiceNumber: string }[] }>(
+      `/api/invoices/supplier?search=${encodeURIComponent(targetNumber)}`
+    );
+    expect(searched.body.total).toBe(1);
+    expect(searched.body.invoices[0]?.invoiceNumber).toBe(targetNumber);
+  });
+
+  // A bill's own invoiceNumber is often the supplier's own (unmemorable)
+  // reference, not something the person looking for it would know -- what
+  // they're far more likely to have on hand is the customer invoice/sale
+  // that the bill was raised to fulfill. Search needs to match that too, not
+  // just the bill's own number.
+  it("supplier bills: search also matches the linked customer invoice reference", async () => {
+    const supplier = await admin.postJson<{ id: string }>("/api/suppliers", {
+      name: `Ref Search Supplier ${Date.now()}`,
+    });
+    const customerRef = `CUSTREF-${Date.now()}`;
+    const created = await admin.postJson<{ id: string; invoiceNumber: string }>("/api/invoices/supplier", {
+      supplierId: supplier.body.id,
+      invoiceNumber: `Po-${Date.now()}`,
+      invoiceDate: "2026-01-01",
+      category: "COGS",
+      items: [{ description: "x", quantity: "1", unitCost: "1" }],
+      customerInvoiceRef: customerRef,
+    });
+    const searched = await admin.getJson<{ total: number; invoices: { id: string }[] }>(
+      `/api/invoices/supplier?search=${encodeURIComponent(customerRef)}`
+    );
+    expect(searched.body.total).toBe(1);
+    expect(searched.body.invoices[0]?.id).toBe(created.body.id);
   });
 });

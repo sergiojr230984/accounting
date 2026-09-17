@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback, useMemo } from "react";
+import { useState, useEffect, useCallback } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Plus, Search, ChevronRight, FileText, ArrowRightCircle, Loader2 } from "lucide-react";
@@ -57,12 +57,23 @@ export default function EstimatesPage() {
       .catch(() => {});
   }, []);
 
+  // Debounced so every keystroke doesn't fire a request, and so the search
+  // term is sent to the server instead of only filtering whatever page of
+  // results happened to already be loaded (see the identical comment on
+  // app/(dashboard)/invoices/customer/page.tsx).
+  const [debouncedSearch, setDebouncedSearch] = useState("");
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedSearch(search.trim()), 300);
+    return () => clearTimeout(t);
+  }, [search]);
+
   const load = useCallback(async () => {
     setLoading(true);
     try {
       const params = new URLSearchParams();
       if (statusFilter) params.set("status", statusFilter);
       if (customerFilter) params.set("customerId", customerFilter);
+      if (debouncedSearch) params.set("search", debouncedSearch);
       const res = await fetch(`/api/estimates?${params}`);
       const data = await res.json();
       setEstimates(data.estimates);
@@ -70,7 +81,7 @@ export default function EstimatesPage() {
     } finally {
       setLoading(false);
     }
-  }, [statusFilter, customerFilter]);
+  }, [statusFilter, customerFilter, debouncedSearch]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -90,15 +101,7 @@ export default function EstimatesPage() {
     }
   }
 
-  const filtered = useMemo(
-    () =>
-      estimates.filter(
-        (est) =>
-          est.estimateNumber.toLowerCase().includes(search.toLowerCase()) ||
-          est.customer.name.toLowerCase().includes(search.toLowerCase())
-      ),
-    [estimates, search]
-  );
+  const filtered = estimates;
 
   const activeFilters = [customerFilter, statusFilter].filter(Boolean).length;
 

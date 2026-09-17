@@ -146,7 +146,14 @@ export default function EstimateDetailPage() {
         body: JSON.stringify({ ...data, appliedFees: computedAppliedFees }),
       });
       if (!res.ok) {
-        const d = await res.json();
+        // A failed request doesn't always come back as the JSON
+        // { error: "..." } shape every route normally returns -- an
+        // unhandled exception, a proxy timeout, or a gateway error can hand
+        // back a plain HTML/text error page instead. res.json() throws on
+        // that; uncaught, the exception used to propagate straight past
+        // this function silently, so Save just looked like it did nothing.
+        // See the matching fix in the customer-invoice edit page.
+        const d = await res.json().catch(() => ({}));
         setError(d.error ?? "Save failed");
         return;
       }
@@ -360,7 +367,9 @@ export default function EstimateDetailPage() {
             <div className="grid grid-cols-2 gap-4">
               <div>
                 <label className="label">Estimate Number</label>
-                <input className="input" {...register("estimateNumber")} />
+                {/* Locked, not free-typed -- an estimate's number is fixed
+                    once issued (see the new-estimate page's field for why). */}
+                <input className="input bg-gray-50 text-gray-500 cursor-not-allowed" readOnly {...register("estimateNumber")} />
                 {errors.estimateNumber && <p className="text-red-500 text-xs mt-1">{errors.estimateNumber.message}</p>}
               </div>
               <div>
@@ -395,7 +404,10 @@ export default function EstimateDetailPage() {
               type="customer"
               setValue={setValue}
               feeOptions={feeOptions}
-              initialAppliedFeeIds={estimate.appliedFees.map((f) => f.id).filter((fid): fid is string => !!fid)}
+              initialAppliedFees={estimate.appliedFees.filter(
+                (f): f is { id: string; label: string; rate: number; amount: string } =>
+                  !!f.id && f.rate !== undefined
+              )}
               onFeesChange={setComputedAppliedFees}
             />
           </div>
@@ -484,7 +496,17 @@ export default function EstimateDetailPage() {
                     </td>
                     <td className="py-2 text-right">{item.quantity}</td>
                     <td className="py-2 text-right">{formatCurrency(item.unitPrice)}</td>
-                    <td className="py-2 text-right">{(parseFloat(item.taxRate) * 100).toFixed(0)}%</td>
+                    <td className="py-2 text-right">
+                      {(parseFloat(item.taxRate) * 100).toFixed(0)}%
+                      {parseFloat(item.taxRate) > 0 && (
+                        <span className="text-gray-400">
+                          {" "}
+                          ({formatCurrency(
+                            (parseFloat(item.quantity) * parseFloat(item.unitPrice) * parseFloat(item.taxRate)).toFixed(2)
+                          )})
+                        </span>
+                      )}
+                    </td>
                     <td className="py-2 text-right font-medium">{formatCurrency(item.lineTotal)}</td>
                   </tr>
                 ))}

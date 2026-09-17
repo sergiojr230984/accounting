@@ -26,6 +26,22 @@ describe("estimate creation", () => {
     expect(Number(body.totalAmount)).toBe(300);
   });
 
+  // Same fix as customer/supplier invoices (tests/invoices.test.ts) applied
+  // here too: a converted estimate hands its items straight to the
+  // customer invoice it becomes, so an untrimmed description would carry a
+  // latent whitespace mismatch forward into that invoice's own
+  // itemsLocked guard.
+  it("trims leading/trailing whitespace from a line item's description on create", async () => {
+    const { status, body } = await admin.postJson<{ items: { description: string }[] }>("/api/estimates", {
+      customerId,
+      estimateNumber: `EST-TRIM-${Date.now()}`,
+      estimateDate: "2026-01-01",
+      items: [{ description: "  Consulting  ", quantity: "1", unitPrice: "1" }],
+    });
+    expect(status).toBe(201);
+    expect(body.items[0].description).toBe("Consulting");
+  });
+
   // Estimates duplicated the same subtotal-rounding logic as customer/
   // supplier invoices (df34770 fixed it there on 2026-07-12) but never got
   // the fix applied here -- summing full-precision line totals and rounding
@@ -50,6 +66,36 @@ describe("estimate creation", () => {
     const sumOfLines = body.items.reduce((s, i) => s + Number(i.lineTotal), 0);
     expect(Number(body.subtotal)).toBeCloseTo(sumOfLines, 2);
     expect(Number(body.subtotal)).toBe(10.02);
+  });
+
+  // Same bug/fix as customer invoices (see tests/invoices.test.ts): the
+  // estimateNumber input used to be free-typed, so sorting the list by
+  // estimateNumber (a string) descending let a bare-digit number sort below
+  // any "EST-..."-prefixed one regardless of actual creation order. The
+  // create/edit forms now lock this field to the system-assigned number, but
+  // the API still accepts whatever a caller sends -- this keeps the list
+  // itself correct regardless.
+  it("a just-created estimate with a differently-formatted number still sorts first", async () => {
+    const prefixed = await admin.postJson<{ id: string }>("/api/estimates", {
+      customerId,
+      estimateNumber: `EST-SORT-${Date.now()}`,
+      estimateDate: "2026-01-01",
+      items: [{ description: "x", quantity: "1", unitPrice: "1" }],
+    });
+    expect(prefixed.status).toBe(201);
+
+    const bare = await admin.postJson<{ id: string }>("/api/estimates", {
+      customerId,
+      estimateNumber: `${Date.now()}`,
+      estimateDate: "2026-01-01",
+      items: [{ description: "x", quantity: "1", unitPrice: "1" }],
+    });
+    expect(bare.status).toBe(201);
+
+    const { body } = await admin.getJson<{ estimates: { id: string }[] }>(
+      `/api/estimates?customerId=${customerId}&limit=5`
+    );
+    expect(body.estimates[0].id).toBe(bare.body.id);
   });
 
   it("an estimate does not count as revenue until converted", async () => {
@@ -372,5 +418,42 @@ describe("concurrency — estimate numbering", () => {
       "PATCH"
     );
     expect(rename.status).toBe(409);
+  });
+});
+
+// Same fix as the invoices list search regression (tests/invoices.test.ts):
+// the estimates list page's search box only ever filtered the rows already
+// fetched, never told the server what to look for. Applied here too per
+// the "fix applied once, needed everywhere" pattern for the
+// customer-invoice/supplier-bill/estimate trio.
+describe("estimate list search — matches server-side, not just the currently loaded page", () => {
+  it("finds an estimate by number", async () => {
+    const targetNumber = `EST-SEARCH-TARGET-${Date.now()}`;
+    await admin.postJson("/api/estimates", {
+      customerId,
+      estimateNumber: targetNumber,
+      estimateDate: "2026-01-01",
+      items: [{ description: "x", quantity: "1", unitPrice: "1" }],
+    });
+    const searched = await admin.getJson<{ total: number; estimates: { estimateNumber: string }[] }>(
+      `/api/estimates?search=${encodeURIComponent(targetNumber)}`
+    );
+    expect(searched.body.total).toBe(1);
+    expect(searched.body.estimates[0]?.estimateNumber).toBe(targetNumber);
+  });
+
+  it("also matches by customer name, case-insensitively", async () => {
+    const uniqueName = `Zzz Estimate Search By Name ${Date.now()}`;
+    const searchCustomer = await admin.postJson<{ id: string }>("/api/customers", { name: uniqueName });
+    await admin.postJson("/api/estimates", {
+      customerId: searchCustomer.body.id,
+      estimateNumber: `EST-NAME-SEARCH-${Date.now()}`,
+      estimateDate: "2026-01-01",
+      items: [{ description: "x", quantity: "1", unitPrice: "1" }],
+    });
+    const searched = await admin.getJson<{ total: number }>(
+      `/api/estimates?search=${encodeURIComponent(uniqueName.toLowerCase())}`
+    );
+    expect(searched.body.total).toBe(1);
   });
 });

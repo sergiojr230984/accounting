@@ -12,8 +12,14 @@ import Decimal from "decimal.js";
 const ESTIMATE_PREFIX = `EST-${new Date().getFullYear()}-`;
 
 const itemSchema = z.object({
-  description: z.string().min(1),
-  itemDescription: z.string().optional(),
+  // Trimmed -- see the matching comment on the customer-invoice equivalent
+  // (app/api/invoices/customer/route.ts) for the incident this traces to.
+  // Estimates have no itemsLocked-style guard themselves, but a converted
+  // estimate hands its items straight to the customer invoice it becomes
+  // (app/api/estimates/[id]/convert/route.ts), so an untrimmed description
+  // here would carry the same latent problem forward.
+  description: z.string().trim().min(1),
+  itemDescription: z.string().trim().optional(),
   quantity: z.string().regex(/^\d+(\.\d+)?$/, "Must be a number"),
   unitPrice: z.string().regex(/^\d+(\.\d+)?$/, "Must be a number"),
   taxRate: z.string().regex(/^\d+(\.\d+)?$/, "Must be a number").default("0"),
@@ -45,12 +51,22 @@ export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
   const customerId = searchParams.get("customerId");
   const status = searchParams.get("status");
+  const search = searchParams.get("search")?.trim();
   const page = parseInt(searchParams.get("page") ?? "1");
   const limit = parseInt(searchParams.get("limit") ?? "20");
 
   const where: Record<string, unknown> = {};
   if (customerId) where.customerId = customerId;
   if (status) where.status = status;
+  // See app/api/invoices/customer/route.ts for why this has to happen
+  // server-side across the whole dataset rather than in the page's
+  // client-only filter.
+  if (search) {
+    where.OR = [
+      { estimateNumber: { contains: search, mode: "insensitive" } },
+      { customer: { name: { contains: search, mode: "insensitive" } } },
+    ];
+  }
 
   const [estimates, total] = await Promise.all([
     prisma.estimate.findMany({
@@ -59,7 +75,16 @@ export async function GET(request: Request) {
         customer: { select: { id: true, name: true } },
         items: true,
       },
-      orderBy: { estimateDate: "desc" },
+      // estimateNumber is free-typed (see estimates/new's input), not a
+      // guaranteed-consistent zero-padded sequence -- sorting on it
+      // lexicographically means an estimate numbered without the usual
+      // prefix sorts far from its chronological neighbors and can look like
+      // it's missing from the top of the list. createdAt reflects actual
+      // creation order regardless of what was typed into the number field;
+      // see app/api/invoices/customer/route.ts for the same fix applied to
+      // customer invoices (and .../supplier/route.ts, which already sorted
+      // this way).
+      orderBy: { createdAt: "desc" },
       skip: (page - 1) * limit,
       take: limit,
     }),

@@ -1,7 +1,7 @@
 "use client";
 
 import { Fragment, useState, useEffect } from "react";
-import { Download, Loader2, FileText, TrendingUp, ExternalLink, ChevronDown, ChevronRight } from "lucide-react";
+import { Download, Loader2, FileText, TrendingUp, ExternalLink, ChevronDown, ChevronRight, Search } from "lucide-react";
 import Link from "next/link";
 import { formatCurrency } from "@/lib/money";
 import { formatDateOnly } from "@/lib/date";
@@ -160,6 +160,7 @@ export default function ReportsPage() {
   const [data, setData] = useState<PLData | IncomeData | ExpenseData | OutstandingData | ProfitabilityData | AccountTransactionsData | ItemsOrderedData | null>(null);
   const [loading, setLoading] = useState(false);
   const [expandedRow, setExpandedRow] = useState<string | null>(null);
+  const [invoiceSearch, setInvoiceSearch] = useState("");
 
   const [account, setAccount] = useState<LedgerAccount>("receivable");
   const [contactId, setContactId] = useState("");
@@ -189,6 +190,7 @@ export default function ReportsPage() {
   async function generateReport() {
     setLoading(true);
     setExpandedRow(null);
+    setInvoiceSearch("");
     try {
       const params = new URLSearchParams({ type: reportType });
       if (from) params.set("from", from);
@@ -461,7 +463,7 @@ export default function ReportsPage() {
             <select
               className="input w-52"
               value={reportType}
-              onChange={(e) => { setReportType(e.target.value as ReportType); setData(null); }}
+              onChange={(e) => { setReportType(e.target.value as ReportType); setData(null); setInvoiceSearch(""); }}
             >
               {reportOptions.map((o) => (
                 <option key={o.value} value={o.value}>{o.label}</option>
@@ -675,8 +677,33 @@ export default function ReportsPage() {
           {reportType === "profitability" && (() => {
             const d = data as ProfitabilityData;
             const margin = parseFloat(d.overallMargin);
+            const query = invoiceSearch.trim().toLowerCase();
+            const filteredRows = query
+              ? d.rows.filter(
+                  (r) =>
+                    r.invoiceNumber.toLowerCase().includes(query) ||
+                    r.customerName.toLowerCase().includes(query)
+                )
+              : d.rows;
             return (
               <div>
+                <div className="mb-4 flex items-center gap-3">
+                  <div className="relative w-72">
+                    <Search className="w-4 h-4 text-gray-400 absolute left-2.5 top-1/2 -translate-y-1/2" />
+                    <input
+                      type="text"
+                      className="input pl-8 w-full"
+                      placeholder="Search invoice # or customer..."
+                      value={invoiceSearch}
+                      onChange={(e) => { setInvoiceSearch(e.target.value); setExpandedRow(null); }}
+                    />
+                  </div>
+                  {query && (
+                    <span className="text-sm text-gray-500">
+                      {filteredRows.length} of {d.rows.length} invoice{d.rows.length !== 1 ? "s" : ""}
+                    </span>
+                  )}
+                </div>
                 <div className="mb-6 grid grid-cols-2 md:grid-cols-4 gap-3">
                   <div className="bg-green-50 rounded-lg p-3 border border-green-100">
                     <span className="text-xs font-medium text-green-700 uppercase">Total Revenue</span>
@@ -718,7 +745,14 @@ export default function ReportsPage() {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-50">
-                    {d.rows.map((row) => {
+                    {filteredRows.length === 0 && (
+                      <tr>
+                        <td colSpan={9} className="py-6 text-center text-gray-400">
+                          No invoices match &ldquo;{invoiceSearch}&rdquo;
+                        </td>
+                      </tr>
+                    )}
+                    {filteredRows.map((row) => {
                       const m = parseFloat(row.grossMargin);
                       const marginColor = m >= 20 ? "text-green-600" : m >= 0 ? "text-yellow-600" : "text-red-600";
                       const expandable = row.lines.length > 0;

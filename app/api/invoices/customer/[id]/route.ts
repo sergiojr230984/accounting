@@ -23,18 +23,28 @@ const updateSchema = z.object({
   dueDate: z.string().optional(),
   notes: z.string().optional(),
   paymentStatus: z.enum(["UNPAID", "PARTIALLY_PAID", "PAID"]).optional(),
-  paidAmount: z.string().optional(),
-  downPayment: z.string().optional(),
+  // Regex-validated for the same reason as the create route's paidAmount/
+  // downPayment/commissionRate (app/api/invoices/customer/route.ts) --
+  // without it, an empty string (e.g. the "Amount Paid" field cleared in
+  // the edit form) passes `.optional()` unchanged and reaches
+  // `new Decimal(...)` below, which throws uncaught and 500s the whole
+  // save silently. See the matching fix on the supplier-bill edit route.
+  paidAmount: z.string().regex(/^\d+(\.\d+)?$/, "paidAmount must be a number").optional(),
+  downPayment: z.string().regex(/^\d+(\.\d+)?$/, "downPayment must be a number").optional(),
   employeeId: z.string().nullable().optional(),
-  commissionRate: z.string().optional(),
+  commissionRate: z.string().regex(/^\d+(\.\d+)?$/, "commissionRate must be a number").optional(),
   customerAddress: z.string().optional().nullable(),
   appliedFees: z.array(appliedFeeSchema).optional(),
   items: z
     .array(
       z.object({
         id: z.string().optional(),
-        description: z.string().min(1),
-        itemDescription: z.string().optional(),
+        // Trimmed -- see the matching comment on the create route's item
+        // schema (app/api/invoices/customer/route.ts). Also keeps a
+        // resubmitted, already-trimmed-on-write existing item comparing
+        // equal here against the itemsLocked guard below.
+        description: z.string().trim().min(1),
+        itemDescription: z.string().trim().optional(),
         quantity: z.string(),
         unitPrice: z.string(),
         taxRate: z.string().default("0"),
@@ -138,7 +148,7 @@ export async function PATCH(
 
   const existing = await prisma.customerInvoice.findUnique({
     where: { id },
-    include: { items: true },
+    include: { items: { include: { purchaseRequest: { select: { id: true } } } } },
   });
   if (!existing) return NextResponse.json({ error: "Not found" }, { status: 404 });
 
@@ -151,15 +161,35 @@ export async function PATCH(
     customerAddress: existing.customerAddress,
   };
 
-  // Once any payment has been recorded, existing line items (and the totals
-  // derived from them) are financial history -- rewriting or removing them
-  // after money has changed hands should go through a correction/void flow,
-  // not a silent overwrite. A customer coming back to add a NEW item (e.g. a
-  // second product bought on a later visit) is not rewriting history though,
-  // so that's still allowed: every incoming item that carries an id must
-  // match an existing item byte-for-byte, and every existing item's id must
-  // still be present -- only genuinely new lines (no id) may differ.
-  if (parsed.data.items !== undefined && existing.paymentStatus !== "UNPAID") {
+  // An item is locked -- can't be deleted or have its identity changed --
+  // once EITHER of two things is true:
+  //   1. The invoice has a recorded payment (paymentStatus !== UNPAID): the
+  //      items are financial history at that point.
+  //   2. A purchase_request already exists for one of its items
+  //      (lib/purchase-requests.ts's ensurePurchaseRequestsForInvoice, fired
+  //      the moment paidAmount first moved off zero). That row references
+  //      CustomerInvoiceItem.id with ON DELETE RESTRICT, so it survives even
+  //      if the triggering payment is later edited/corrected back down to
+  //      $0 -- nothing in this codebase deletes a purchase_request just
+  //      because the payment that created it changed. paymentStatus can
+  //      legitimately read UNPAID again at that point while the item is
+  //      still permanently pinned in the database.
+  // Checking only paymentStatus (as this used to) missed case 2 entirely:
+  // the "UNPAID -> freely rewrite via deleteMany({})" branch further below
+  // would try to delete that still-referenced row, which Postgres rejects
+  // with a restrict-violation -- an uncaught, non-JSON 500 that looked to
+  // the user like Save silently doing nothing.
+  const itemsLocked = existing.paymentStatus !== "UNPAID" || existing.items.some((it) => it.purchaseRequest);
+
+  // Once locked, existing line items (and the totals derived from them) are
+  // financial history -- rewriting or removing them should go through a
+  // correction/void flow, not a silent overwrite. A customer coming back to
+  // add a NEW item (e.g. a second product bought on a later visit) is not
+  // rewriting history though, so that's still allowed: every incoming item
+  // that carries an id must match an existing item byte-for-byte, and every
+  // existing item's id must still be present -- only genuinely new lines
+  // (no id) may differ.
+  if (parsed.data.items !== undefined && itemsLocked) {
     const existingById = new Map(existing.items.map((it) => [it.id, it]));
     const seenIds = new Set<string>();
     for (const item of parsed.data.items) {
@@ -167,17 +197,34 @@ export async function PATCH(
       const match = existingById.get(item.id);
       if (!match) continue; // unknown id — treated as a new line below
       seenIds.add(item.id);
-      const unchanged =
-        match.description === item.description &&
-        (match.itemDescription ?? "") === (item.itemDescription ?? "") &&
-        new Decimal(match.quantity.toString()).equals(new Decimal(item.quantity || "0")) &&
-        new Decimal(match.unitPrice.toString()).equals(new Decimal(item.unitPrice || "0")) &&
-        new Decimal(match.taxRate.toString()).equals(new Decimal(item.taxRate || "0")) &&
-        (match.supplierId ?? "") === (item.supplierId ?? "") &&
-        (match.partNumber ?? "") === (item.partNumber ?? "");
-      if (!unchanged) {
+      // Named per-field, not a single boolean -- a client-side bug that
+      // submits a stale/blank value for a field the user never touched
+      // (e.g. a dropdown whose option list no longer includes the item's
+      // actual, since-deactivated selection) previously came back as the
+      // exact same "recorded payment" message a genuine edit would, making
+      // the two indistinguishable from the outside. Naming which field
+      // actually differs turns that from a dead end into something
+      // immediately diagnosable.
+      // description/itemDescription compare trimmed -- confirmed via
+      // invoice 1334's own report: its stored description had a trailing
+      // space ("MESA +4 SILLAS NEGRAS Y BLANCAS ") that the resubmitted
+      // value from the edit form's ProductAutocomplete input didn't, which
+      // this guard (correctly, by its literal rules, but not by intent)
+      // treated as a changed line and blocked an otherwise-untouched save.
+      // A leading/trailing space is not a meaningful edit to a line item.
+      const mismatches: string[] = [];
+      if (match.description.trim() !== item.description.trim()) mismatches.push("description");
+      if ((match.itemDescription ?? "").trim() !== (item.itemDescription ?? "").trim()) mismatches.push("itemDescription");
+      if (!new Decimal(match.quantity.toString()).equals(new Decimal(item.quantity || "0"))) mismatches.push("quantity");
+      if (!new Decimal(match.unitPrice.toString()).equals(new Decimal(item.unitPrice || "0"))) mismatches.push("unitPrice");
+      if (!new Decimal(match.taxRate.toString()).equals(new Decimal(item.taxRate || "0"))) mismatches.push("taxRate");
+      if ((match.supplierId ?? "") !== (item.supplierId ?? "")) mismatches.push("supplierId");
+      if ((match.partNumber ?? "") !== (item.partNumber ?? "")) mismatches.push("partNumber");
+      if (mismatches.length > 0) {
         return NextResponse.json(
-          { error: "This invoice has a recorded payment -- existing line items can't be changed or removed. You can still add new items." },
+          {
+            error: `This invoice has a recorded payment -- existing line items can't be changed or removed. You can still add new items. (Field${mismatches.length > 1 ? "s" : ""} that differ on "${match.description}": ${mismatches.join(", ")}.)`,
+          },
           { status: 409 }
         );
       }
@@ -185,7 +232,9 @@ export async function PATCH(
     for (const existingItem of existing.items) {
       if (!seenIds.has(existingItem.id)) {
         return NextResponse.json(
-          { error: "This invoice has a recorded payment -- existing line items can't be changed or removed. You can still add new items." },
+          {
+            error: `This invoice has a recorded payment -- existing line items can't be changed or removed. You can still add new items. ("${existingItem.description}" was removed or its id wasn't submitted.)`,
+          },
           { status: 409 }
         );
       }
@@ -337,9 +386,9 @@ export async function PATCH(
     updateData.taxAmount = taxAmount.toFixed(2);
     updateData.totalAmount = subtotal.plus(taxAmount).plus(feesSum).toFixed(2);
 
-    if (existing.paymentStatus === "UNPAID") {
-      // No money has changed hands yet, so the whole line-item set is still
-      // a draft and can be freely rewritten.
+    if (!itemsLocked) {
+      // Nothing pins any existing item in place, so the whole line-item set
+      // is still a draft and can be freely rewritten.
       //
       // The delete and the create used to be two separate statements (an
       // eager deleteMany() here, then a create nested in the update() call
@@ -364,11 +413,13 @@ export async function PATCH(
         })),
       };
     } else {
-      // A payment already exists: the guard above already proved every
-      // incoming item either matches an existing row untouched or has no
-      // id at all. Only create rows for the latter -- existing rows (and
-      // their original createdAt) are left completely alone rather than
-      // being deleted and recreated.
+      // itemsLocked: the guard above already proved every incoming item
+      // either matches an existing row untouched or has no id at all. Only
+      // create rows for the latter -- existing rows (and their original
+      // createdAt) are left completely alone rather than being deleted and
+      // recreated, which is required, not just cautious, whenever any of
+      // them already has a purchase_request (see itemsLocked above): that
+      // row's ON DELETE RESTRICT FK would reject the delete outright.
       const existingIds = new Set(existing.items.map((it) => it.id));
       const newItems = data.items
         .map((item, idx) => ({ id: item.id, computed: computedItems[idx] }))
@@ -501,18 +552,134 @@ export async function DELETE(
   if (guard instanceof NextResponse) return guard;
 
   const { id } = await params;
+  const force = new URL(request.url).searchParams.get("force") === "true";
 
-  const existing = await prisma.customerInvoice.findUnique({ where: { id } });
+  const existing = await prisma.customerInvoice.findUnique({
+    where: { id },
+    include: {
+      items: {
+        include: {
+          purchaseRequest: {
+            include: { supplierInvoice: { select: { id: true, invoiceNumber: true, paymentStatus: true } } },
+          },
+        },
+      },
+    },
+  });
   if (!existing) return NextResponse.json({ error: "Not found" }, { status: 404 });
 
   // An invoice with a recorded payment is a financial record, not a draft
   // -- deleting it destroys the only evidence money was collected against
-  // it. Same reasoning as the PATCH guard above.
+  // it. Same reasoning as the PATCH guard above. Unlike the purchase-request
+  // case below, this is never forceable: paymentStatus can only be non-UNPAID
+  // while it's actually true right now (unlike a purchase_request, nothing
+  // here survives a later correction back to $0), so there's no safe override.
   if (existing.paymentStatus !== "UNPAID") {
     return NextResponse.json(
       { error: "This invoice has a recorded payment and can no longer be deleted." },
       { status: 409 }
     );
+  }
+
+  const purchaseRequests = existing.items
+    .map((it) => it.purchaseRequest)
+    .filter((pr): pr is NonNullable<typeof pr> => pr !== null);
+
+  // A purchase_request can outlive the payment that created it (see the
+  // itemsLocked comment on the PATCH handler above): paidAmount can be
+  // corrected back to $0 -- reading paymentStatus === UNPAID here -- while
+  // the purchase_request row it triggered is still sitting in the database,
+  // its ON DELETE RESTRICT FK still pointing at this invoice's items. Without
+  // this check, the delete below would reach Postgres, get rejected by that
+  // FK, and throw an uncaught exception the client can't parse as JSON --
+  // exactly the silent-failure shape documented in CLAUDE.md, just from a
+  // DELETE instead of a PATCH.
+  if (purchaseRequests.length > 0) {
+    const linkedBills = purchaseRequests
+      .map((pr) => pr.supplierInvoice)
+      .filter((si): si is NonNullable<typeof si> => si !== null);
+
+    // A linked bill with a recorded payment is real financial history on
+    // the purchasing side, same reasoning as this invoice's own payment
+    // guard above -- there's no safe automatic undo for money that's
+    // actually changed hands with the supplier, so force can't reach past
+    // this one. Everything else here (a bill that simply exists but was
+    // never paid) DOES have a safe undo -- see the force branch below.
+    const unpaidBillsBlocked = linkedBills.filter((si) => si.paymentStatus !== "UNPAID");
+    if (unpaidBillsBlocked.length > 0) {
+      return NextResponse.json(
+        {
+          error: `This invoice has a supplier bill with a recorded payment (Bill #${unpaidBillsBlocked[0].invoiceNumber}) linked to one of its purchase requests and can't be deleted. Resolve that bill's payment first.`,
+        },
+        { status: 409 }
+      );
+    }
+
+    if (!force) {
+      const parts: string[] = [];
+      const pendingOnlyCount = purchaseRequests.length - linkedBills.length;
+      if (pendingOnlyCount > 0) {
+        parts.push(`${pendingOnlyCount} pending purchase request${pendingOnlyCount !== 1 ? "s" : ""} (no cost entered yet)`);
+      }
+      if (linkedBills.length > 0) {
+        parts.push(
+          `${linkedBills.length} supplier bill${linkedBills.length !== 1 ? "s" : ""} (${linkedBills.map((b) => `#${b.invoiceNumber}`).join(", ")}) already tracking cost for it -- the item was effectively returned to the supplier with no cost owed`
+        );
+      }
+      return NextResponse.json(
+        {
+          error: `This invoice has ${parts.join(" and ")} attached. An admin can force-delete it, discarding the purchase request${purchaseRequests.length !== 1 ? "s" : ""}${linkedBills.length > 0 ? " and deleting the linked bill" + (linkedBills.length !== 1 ? "s" : "") : ""}.`,
+          forceable: true,
+        },
+        { status: 409 }
+      );
+    }
+
+    if (guard.user.role !== "ADMIN") {
+      return NextResponse.json(
+        { error: `Forbidden — only an admin can force-delete an invoice with pending purchase requests attached.` },
+        { status: 403 }
+      );
+    }
+
+    await prisma.$transaction([
+      // The bill has to go before the purchase_request it fulfills --
+      // SupplierInvoice.purchaseRequestId points at it, and nothing here
+      // needs the bill's own itemsLocked/paymentStatus guards (those exist
+      // for a bill deleted on its own via .../supplier/[id]/route.ts) since
+      // the whole sale this bill was sourcing for no longer exists once
+      // this invoice is gone -- there's no "reopen as pending" to preserve.
+      ...(linkedBills.length > 0
+        ? [
+            // UploadedFile.supplierInvoiceId has no cascading/nulling FK
+            // action (NO ACTION) -- an attached file must be cleared before
+            // the bill it's attached to, same fix as the bill's own DELETE
+            // route (app/api/invoices/supplier/[id]/route.ts).
+            prisma.uploadedFile.deleteMany({ where: { supplierInvoiceId: { in: linkedBills.map((b) => b.id) } } }),
+            prisma.supplierInvoice.deleteMany({ where: { id: { in: linkedBills.map((b) => b.id) } } }),
+          ]
+        : []),
+      prisma.purchaseRequest.deleteMany({ where: { id: { in: purchaseRequests.map((pr) => pr.id) } } }),
+      prisma.customerInvoice.delete({ where: { id } }),
+    ]);
+
+    await writeAuditLog({
+      ...actorFromSession(guard),
+      action: "DELETE",
+      entityType: "customer_invoice",
+      entityId: id,
+      entityLabel: `Invoice #${existing.invoiceNumber}`,
+      changes: {
+        forced: { old: false, new: true },
+        discardedPurchaseRequestIds: { old: null, new: purchaseRequests.map((pr) => pr.id) },
+        ...(linkedBills.length > 0
+          ? { deletedBillNumbers: { old: null, new: linkedBills.map((b) => b.invoiceNumber) } }
+          : {}),
+      },
+      ...extractMeta(request),
+    });
+
+    return NextResponse.json({ ok: true });
   }
 
   await prisma.customerInvoice.delete({ where: { id } });

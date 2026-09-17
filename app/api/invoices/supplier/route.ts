@@ -9,8 +9,12 @@ import { z } from "zod";
 import Decimal from "decimal.js";
 
 const itemSchema = z.object({
-  description: z.string().min(1),
-  itemDescription: z.string().optional(),
+  // Trimmed -- see the matching comment on the customer-invoice equivalent
+  // (app/api/invoices/customer/route.ts): a stray leading/trailing space
+  // stored verbatim can make an otherwise-untouched save on a paid bill
+  // fail the itemsLocked byte-for-byte guard.
+  description: z.string().trim().min(1),
+  itemDescription: z.string().trim().optional(),
   quantity: z.string().regex(/^\d+(\.\d+)?$/),
   unitCost: z.string().regex(/^\d+(\.\d+)?$/),
   taxRate: z.string().regex(/^\d+(\.\d+)?$/).default("0"),
@@ -43,6 +47,7 @@ export async function GET(request: Request) {
   const status = searchParams.get("status");
   const from = searchParams.get("from");
   const to = searchParams.get("to");
+  const search = searchParams.get("search")?.trim();
   const page = parseInt(searchParams.get("page") ?? "1");
   const limit = parseInt(searchParams.get("limit") ?? "20");
 
@@ -56,6 +61,19 @@ export async function GET(request: Request) {
       ...(to ? { lte: new Date(to) } : {}),
     };
   }
+  // See app/api/invoices/customer/route.ts for why this has to happen
+  // server-side across the whole dataset rather than in the page's
+  // client-only filter. Also matches customerInvoiceRef -- the customer
+  // invoice this bill was raised against (see its schema doc comment) --
+  // so a bill can be found by the sale that generated it, not just by its
+  // own (often supplier-assigned, not memorable) invoice number.
+  if (search) {
+    where.OR = [
+      { invoiceNumber: { contains: search, mode: "insensitive" } },
+      { supplier: { name: { contains: search, mode: "insensitive" } } },
+      { customerInvoiceRef: { contains: search, mode: "insensitive" } },
+    ];
+  }
 
   const [invoices, total] = await Promise.all([
     prisma.supplierInvoice.findMany({
@@ -65,7 +83,13 @@ export async function GET(request: Request) {
         items: true,
         files: { select: { id: true, originalName: true, mimeType: true } },
       },
-      orderBy: { invoiceDate: "desc" },
+      // Unlike customer invoices/estimates, invoiceNumber here is the
+      // *supplier's own* free-text invoice number (see schema.prisma),
+      // not one we generate sequentially -- sorting by it alphabetically
+      // wouldn't produce numerical/chronological order and could jumble
+      // things worse than dates do. createdAt (the order bills were
+      // entered into this system) is the closest we have to "chronological".
+      orderBy: { createdAt: "desc" },
       skip: (page - 1) * limit,
       take: limit,
     }),

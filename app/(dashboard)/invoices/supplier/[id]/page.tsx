@@ -15,6 +15,7 @@ import InvoiceDocumentPreview from "@/components/InvoiceDocumentPreview";
 import { formatCurrency } from "@/lib/money";
 import { formatDateOnly } from "@/lib/date";
 import { generateInvoicePDF } from "@/lib/invoice-pdf";
+import Decimal from "decimal.js";
 
 const editSchema = z.object({
   invoiceNumber: z.string().min(1),
@@ -22,7 +23,7 @@ const editSchema = z.object({
   dueDate: z.string().optional(),
   category: z.enum(["COGS", "SERVICES_EXPENSE", "OPERATING_EXPENSE", "OTHER"]),
   paymentStatus: z.enum(["UNPAID", "PARTIALLY_PAID", "PAID"]),
-  paidAmount: z.string(),
+  paidAmount: z.string().regex(/^\d+(\.\d+)?$/, "Amount paid must be a number"),
   notes: z.string().optional(),
   customerInvoiceRef: z.string().optional().nullable(),
   items: z.array(
@@ -76,8 +77,11 @@ export default function SupplierInvoiceDetailPage() {
   const [error, setError] = useState("");
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState("");
+  const [deleteForceable, setDeleteForceable] = useState(false);
+  const [userRole, setUserRole] = useState<string | null>(null);
 
-  const { register, handleSubmit, control, reset, watch, formState: { errors } } = useForm<EditForm>({
+  const { register, handleSubmit, control, reset, watch, setValue, formState: { errors } } = useForm<EditForm>({
     resolver: zodResolver(editSchema),
   });
 
@@ -116,6 +120,43 @@ export default function SupplierInvoiceDetailPage() {
 
   useEffect(() => { load(); }, [load]);
 
+  // Auto-update paymentStatus when paidAmount changes in edit mode -- same
+  // fix as the customer-invoice edit page's matching effect (which this
+  // page never got, per this codebase's "fix applied once, needed
+  // everywhere" pattern). Without it, correcting Amount Paid back to $0 to
+  // resolve "this bill has a recorded payment" left the Payment Status
+  // dropdown showing its old value (Paid/Partially Paid) unless the user
+  // also remembered to change that separately -- paymentStatus is a
+  // required field on every save, not auto-derived server-side once the
+  // client sends an explicit value, so the bill silently stayed non-UNPAID
+  // and every delete/force-delete path kept refusing it.
+  useEffect(() => {
+    if (!editing || !invoice) return;
+    try {
+      const total = new Decimal(invoice.totalAmount || "0");
+      const paid = new Decimal(watchedPaidAmount || "0");
+      const balance = total.minus(paid);
+      let status: "UNPAID" | "PARTIALLY_PAID" | "PAID";
+      if (balance.lte(0)) {
+        status = "PAID";
+      } else if (paid.gt(0)) {
+        status = "PARTIALLY_PAID";
+      } else {
+        status = "UNPAID";
+      }
+      setValue("paymentStatus", status, { shouldValidate: false });
+    } catch {
+      // Ignore Decimal parse errors on incomplete / empty input
+    }
+  }, [watchedPaidAmount, editing, invoice, setValue]);
+
+  useEffect(() => {
+    fetch("/api/me")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d: { viewer?: { role?: string } } | null) => setUserRole(d?.viewer?.role ?? null))
+      .catch(() => {});
+  }, []);
+
   async function onSave(data: EditForm) {
     setSaving(true);
     setError("");
@@ -126,7 +167,14 @@ export default function SupplierInvoiceDetailPage() {
         body: JSON.stringify(data),
       });
       if (!res.ok) {
-        const d = await res.json();
+        // A failed request doesn't always come back as the JSON
+        // { error: "..." } shape every route normally returns -- an
+        // unhandled exception, a proxy timeout, or a gateway error can hand
+        // back a plain HTML/text error page instead. res.json() throws on
+        // that; uncaught, the exception used to propagate straight past
+        // this function silently, so Save just looked like it did nothing.
+        // See the matching fix in the customer-invoice edit page.
+        const d = await res.json().catch(() => ({}));
         setError(d.error ?? "Save failed");
         return;
       }
@@ -137,14 +185,17 @@ export default function SupplierInvoiceDetailPage() {
     }
   }
 
-  async function handleDelete() {
+  async function handleDelete(force = false) {
     setDeleting(true);
+    setDeleteError("");
     try {
-      const res = await fetch(`/api/invoices/supplier/${id}`, { method: "DELETE" });
+      const res = await fetch(`/api/invoices/supplier/${id}${force ? "?force=true" : ""}`, { method: "DELETE" });
       if (!res.ok) {
+        // Same guard as onSave above -- a failed response isn't guaranteed
+        // to be JSON.
         const d = await res.json().catch(() => ({}));
-        setError(d.error ?? "Failed to delete");
-        setConfirmDelete(false);
+        setDeleteError(d.error ?? "Failed to delete");
+        setDeleteForceable(Boolean(d.forceable));
         return;
       }
       router.push("/invoices/supplier");
@@ -245,16 +296,40 @@ export default function SupplierInvoiceDetailPage() {
                 <Edit2 className="w-4 h-4" /> Edit
               </button>
               {!confirmDelete ? (
-                <button onClick={() => setConfirmDelete(true)} className="btn-danger">
+                <button
+                  onClick={() => { setConfirmDelete(true); setDeleteError(""); setDeleteForceable(false); }}
+                  className="btn-danger"
+                >
                   <Trash2 className="w-4 h-4" /> Delete
                 </button>
               ) : (
-                <div className="flex items-center gap-2 bg-red-50 border border-red-200 rounded-lg px-3 py-1.5">
-                  <span className="text-sm text-red-700">Confirm delete?</span>
-                  <button onClick={handleDelete} disabled={deleting} className="text-red-700 font-medium text-sm hover:underline">
-                    {deleting ? "…" : "Yes"}
-                  </button>
-                  <button onClick={() => setConfirmDelete(false)} className="text-gray-500 text-sm hover:underline">No</button>
+                <div className="flex flex-col items-end gap-1.5">
+                  <div className="flex items-center gap-2 bg-red-50 border border-red-200 rounded-lg px-3 py-1.5">
+                    <span className="text-sm text-red-700">Confirm delete?</span>
+                    <button onClick={() => handleDelete(false)} disabled={deleting} className="text-red-700 font-medium text-sm hover:underline">
+                      {deleting ? "…" : "Yes"}
+                    </button>
+                    <button
+                      onClick={() => { setConfirmDelete(false); setDeleteError(""); setDeleteForceable(false); }}
+                      className="text-gray-500 text-sm hover:underline"
+                    >
+                      No
+                    </button>
+                  </div>
+                  {deleteError && (
+                    <div className="max-w-xs text-right text-xs text-red-700">
+                      {deleteError}
+                      {deleteForceable && userRole === "ADMIN" && (
+                        <button
+                          onClick={() => handleDelete(true)}
+                          disabled={deleting}
+                          className="block ml-auto mt-1 font-semibold underline hover:no-underline"
+                        >
+                          {deleting ? "…" : "Force delete anyway (reopens the linked purchase request as pending)"}
+                        </button>
+                      )}
+                    </div>
+                  )}
                 </div>
               )}
             </>
@@ -327,6 +402,7 @@ export default function SupplierInvoiceDetailPage() {
               <div>
                 <label className="label">Amount Paid ($)</label>
                 <input type="number" step="0.01" min="0" className="input" {...register("paidAmount")} />
+                {errors.paidAmount && <p className="text-red-500 text-xs mt-1">{errors.paidAmount.message}</p>}
               </div>
               <div className="col-span-2">
                 <label className="label">Customer Invoice # (for profitability)</label>
@@ -442,7 +518,17 @@ export default function SupplierInvoiceDetailPage() {
                     </td>
                     <td className="py-2 text-right">{item.quantity}</td>
                     <td className="py-2 text-right">{formatCurrency(item.unitCost)}</td>
-                    <td className="py-2 text-right">{(parseFloat(item.taxRate) * 100).toFixed(0)}%</td>
+                    <td className="py-2 text-right">
+                      {(parseFloat(item.taxRate) * 100).toFixed(0)}%
+                      {parseFloat(item.taxRate) > 0 && (
+                        <span className="text-gray-400">
+                          {" "}
+                          ({formatCurrency(
+                            (parseFloat(item.quantity) * parseFloat(item.unitCost) * parseFloat(item.taxRate)).toFixed(2)
+                          )})
+                        </span>
+                      )}
+                    </td>
                     <td className="py-2 text-right font-medium">{formatCurrency(item.lineTotal)}</td>
                   </tr>
                 ))}

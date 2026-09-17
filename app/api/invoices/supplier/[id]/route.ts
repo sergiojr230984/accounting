@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
+import { requireRole } from "@/lib/api";
 import { prisma } from "@/lib/prisma";
 import { writeAuditLog, extractMeta, actorFromSession, diffChanges } from "@/lib/audit";
 import { computeLineTotals } from "@/lib/money";
@@ -13,14 +14,21 @@ const updateSchema = z.object({
   category: z.enum(["COGS", "SERVICES_EXPENSE", "OPERATING_EXPENSE", "OTHER"]).optional(),
   notes: z.string().optional(),
   paymentStatus: z.enum(["UNPAID", "PARTIALLY_PAID", "PAID"]).optional(),
-  paidAmount: z.string().optional(),
+  // Regex-validated for the same reason as the create route's paidAmount
+  // (app/api/invoices/supplier/route.ts) -- without it, an empty string
+  // (e.g. the "Amount Paid" field cleared in the edit form) passes
+  // `.optional()` unchanged and reaches `new Decimal(data.paidAmount)`
+  // below, which throws uncaught and 500s the whole save silently.
+  paidAmount: z.string().regex(/^\d+(\.\d+)?$/, "paidAmount must be a number").optional(),
   customerInvoiceRef: z.string().optional().nullable(),
   items: z
     .array(
       z.object({
         id: z.string().optional(),
-        description: z.string().min(1),
-        itemDescription: z.string().optional(),
+        // Trimmed -- see the matching comment on the create route's item
+        // schema (app/api/invoices/supplier/route.ts).
+        description: z.string().trim().min(1),
+        itemDescription: z.string().trim().optional(),
         quantity: z.string(),
         unitCost: z.string(),
         taxRate: z.string().default("0"),
@@ -113,15 +121,26 @@ export async function PATCH(
       const match = existingById.get(item.id);
       if (!match) continue; // unknown id — treated as a new line below
       seenIds.add(item.id);
-      const unchanged =
-        match.description === item.description &&
-        (match.itemDescription ?? "") === (item.itemDescription ?? "") &&
-        new Decimal(match.quantity.toString()).equals(new Decimal(item.quantity || "0")) &&
-        new Decimal(match.unitCost.toString()).equals(new Decimal(item.unitCost || "0")) &&
-        new Decimal(match.taxRate.toString()).equals(new Decimal(item.taxRate || "0"));
-      if (!unchanged) {
+      // Named per-field, not a single boolean -- see the matching comment
+      // on the customer-invoice equivalent of this guard for why: it turns
+      // a client-side bug that submits a stale/blank value for a field the
+      // user never touched into something immediately diagnosable instead
+      // of an indistinguishable-from-a-genuine-edit dead end.
+      // Compared trimmed -- see the matching comment on the customer-
+      // invoice equivalent of this guard: a stray leading/trailing space in
+      // a stored description isn't a meaningful edit and shouldn't block
+      // an otherwise-untouched save.
+      const mismatches: string[] = [];
+      if (match.description.trim() !== item.description.trim()) mismatches.push("description");
+      if ((match.itemDescription ?? "").trim() !== (item.itemDescription ?? "").trim()) mismatches.push("itemDescription");
+      if (!new Decimal(match.quantity.toString()).equals(new Decimal(item.quantity || "0"))) mismatches.push("quantity");
+      if (!new Decimal(match.unitCost.toString()).equals(new Decimal(item.unitCost || "0"))) mismatches.push("unitCost");
+      if (!new Decimal(match.taxRate.toString()).equals(new Decimal(item.taxRate || "0"))) mismatches.push("taxRate");
+      if (mismatches.length > 0) {
         return NextResponse.json(
-          { error: "This bill has a recorded payment -- existing line items can't be changed or removed. You can still add new items." },
+          {
+            error: `This bill has a recorded payment -- existing line items can't be changed or removed. You can still add new items. (Field${mismatches.length > 1 ? "s" : ""} that differ on "${match.description}": ${mismatches.join(", ")}.)`,
+          },
           { status: 409 }
         );
       }
@@ -129,7 +148,9 @@ export async function PATCH(
     for (const existingItem of existing.items) {
       if (!seenIds.has(existingItem.id)) {
         return NextResponse.json(
-          { error: "This bill has a recorded payment -- existing line items can't be changed or removed. You can still add new items." },
+          {
+            error: `This bill has a recorded payment -- existing line items can't be changed or removed. You can still add new items. ("${existingItem.description}" was removed or its id wasn't submitted.)`,
+          },
           { status: 409 }
         );
       }
@@ -300,8 +321,12 @@ export async function DELETE(
   if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   const { id } = await params;
+  const force = new URL(request.url).searchParams.get("force") === "true";
 
-  const existing = await prisma.supplierInvoice.findUnique({ where: { id } });
+  const existing = await prisma.supplierInvoice.findUnique({
+    where: { id },
+    include: { purchaseRequest: { select: { id: true, customerInvoiceItemId: true } } },
+  });
   if (!existing) return NextResponse.json({ error: "Not found" }, { status: 404 });
 
   if (existing.paymentStatus !== "UNPAID") {
@@ -311,19 +336,73 @@ export async function DELETE(
     );
   }
 
-  // Deleting a bill that closed out a purchase_request would leave the
-  // linked invoice line's actualCost and the purchase_request's FULFILLED
-  // status/cost as orphaned, unrecoverable history -- there's no "reopen"
-  // flow to put it back to PENDING. Same reasoning as the payment guard
-  // above, just for the purchasing-trigger side of this bill's data.
-  if (existing.purchaseRequestId) {
-    return NextResponse.json(
-      { error: "This bill fulfills a purchase request and can no longer be deleted." },
-      { status: 409 }
-    );
+  // A bill that closed out a purchase_request left the linked customer
+  // invoice line's actualCost set and the purchase_request marked
+  // FULFILLED -- deleting the bill outright would leave both of those
+  // pointing at a bill that no longer exists. Unlike the payment guard
+  // above, this IS forceable: unlike a recorded payment, there's a clean
+  // "undo" available -- put the purchase_request back to PENDING (no cost)
+  // and clear the invoice line's actualCost, i.e. exactly the state before
+  // this bill was ever created. This is also the deliberate resolution the
+  // customer-invoice DELETE route's own error message points at when IT
+  // can't force past a purchase_request with a linked bill ("Unlink or
+  // delete that bill first") -- this is that "delete the bill" step.
+  if (existing.purchaseRequestId && existing.purchaseRequest) {
+    if (!force) {
+      return NextResponse.json(
+        {
+          error:
+            "This bill fulfills a purchase request. Deleting it will reopen that request as pending (no cost entered) instead of leaving it stuck marked fulfilled with no bill behind it. An admin can force-delete it.",
+          forceable: true,
+        },
+        { status: 409 }
+      );
+    }
+
+    const roleGuard = await requireRole("ADMIN");
+    if (roleGuard instanceof NextResponse) return roleGuard;
+
+    const purchaseRequestId = existing.purchaseRequest.id;
+    await prisma.$transaction([
+      prisma.customerInvoiceItem.update({
+        where: { id: existing.purchaseRequest.customerInvoiceItemId },
+        data: { actualCost: null },
+      }),
+      prisma.purchaseRequest.update({
+        where: { id: purchaseRequestId },
+        data: { status: "PENDING", cost: null, fulfilledAt: null },
+      }),
+      // UploadedFile.supplierInvoiceId has no ON DELETE action (NO ACTION,
+      // i.e. effectively RESTRICT) -- an attached file must be cleared
+      // first or this delete hits an uncaught FK-violation 500 instead of
+      // succeeding. Same fix applied to the plain-delete path below.
+      prisma.uploadedFile.deleteMany({ where: { supplierInvoiceId: id } }),
+      prisma.supplierInvoice.delete({ where: { id } }),
+    ]);
+
+    await writeAuditLog({
+      ...actorFromSession(session),
+      action: "DELETE",
+      entityType: "supplier_invoice",
+      entityId: id,
+      entityLabel: `Bill #${existing.invoiceNumber}`,
+      changes: {
+        forced: { old: false, new: true },
+        reopenedPurchaseRequestId: { old: null, new: purchaseRequestId },
+      },
+      ...extractMeta(request),
+    });
+
+    return NextResponse.json({ ok: true });
   }
 
-  await prisma.supplierInvoice.delete({ where: { id } });
+  // See the matching comment in the force-delete branch above -- an
+  // attached file has no cascading/nulling FK action and must be cleared
+  // first.
+  await prisma.$transaction([
+    prisma.uploadedFile.deleteMany({ where: { supplierInvoiceId: id } }),
+    prisma.supplierInvoice.delete({ where: { id } }),
+  ]);
 
   await writeAuditLog({
     ...actorFromSession(session),

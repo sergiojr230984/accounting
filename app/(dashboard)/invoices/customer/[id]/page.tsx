@@ -24,10 +24,10 @@ const editSchema = z.object({
   invoiceDate: z.string(),
   dueDate: z.string(),
   paymentStatus: z.enum(["UNPAID", "PARTIALLY_PAID", "PAID"]),
-  paidAmount: z.string(),
-  downPayment: z.string().default("0"),
+  paidAmount: z.string().regex(/^\d+(\.\d+)?$/, "Amount paid must be a number"),
+  downPayment: z.string().regex(/^\d+(\.\d+)?$/, "Down payment must be a number").default("0"),
   employeeId: z.string().default(""),
-  commissionRate: z.string().default("0"),
+  commissionRate: z.string().regex(/^\d+(\.\d+)?$/, "Commission rate must be a number").default("0"),
   notes: z.string().optional(),
   customerAddress: z.string().optional(),
   items: z.array(
@@ -101,6 +101,8 @@ export default function CustomerInvoiceDetailPage() {
   const [error, setError] = useState("");
   const [deleting, setDeleting] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [deleteError, setDeleteError] = useState("");
+  const [deleteForceable, setDeleteForceable] = useState(false);
   const [sending, setSending] = useState(false);
   const [sendMessage, setSendMessage] = useState<{ kind: "success" | "error"; text: string } | null>(null);
   const [linkCopied, setLinkCopied] = useState(false);
@@ -204,9 +206,20 @@ export default function CustomerInvoiceDetailPage() {
         setFeeOptions(options);
       })
       .catch(() => {});
+    // Deliberately NOT filtered to active suppliers here (unlike the "new
+    // invoice" page, which only ever needs choices for a fresh line) --
+    // this is the EDIT page, so an existing line item may already reference
+    // a supplier that's since been deactivated. InvoiceItemsEditor still
+    // only offers active suppliers for a NEW selection; it separately keeps
+    // whichever supplier a given line already has, active or not, so that
+    // supplier doesn't silently disappear from the dropdown -- which used
+    // to submit an empty supplierId for an unrelated save (e.g. just
+    // editing notes) and get rejected by the itemsLocked "existing line
+    // items must match byte-for-byte" guard on a paid invoice, with no
+    // indication why.
     fetch("/api/suppliers")
       .then((r) => (r.ok ? r.json() : []))
-      .then((list: SupplierCodeOpt[]) => setSuppliers(Array.isArray(list) ? list.filter((s) => s.active) : []))
+      .then((list: SupplierCodeOpt[]) => setSuppliers(Array.isArray(list) ? list : []))
       .catch(() => {});
   }, []);
 
@@ -242,7 +255,15 @@ export default function CustomerInvoiceDetailPage() {
         body: JSON.stringify({ ...data, appliedFees: computedAppliedFees }),
       });
       if (!res.ok) {
-        const d = await res.json();
+        // A failed request doesn't always come back as the JSON
+        // { error: "..." } shape every route normally returns -- an
+        // unhandled exception, a proxy timeout, or a gateway error can hand
+        // back a plain HTML/text error page instead. res.json() throws on
+        // that, and since nothing here used to catch it, the exception
+        // propagated straight past this function silently: the "saving"
+        // spinner cleared (the finally block below still ran), but no error
+        // ever reached the screen -- Save looked like it just did nothing.
+        const d = await res.json().catch(() => ({}));
         setError(d.error ?? "Save failed");
         return;
       }
@@ -253,10 +274,25 @@ export default function CustomerInvoiceDetailPage() {
     }
   }
 
-  async function handleDelete() {
+  async function handleDelete(force = false) {
     setDeleting(true);
-    await fetch(`/api/invoices/customer/${id}`, { method: "DELETE" });
-    router.push("/invoices/customer");
+    setDeleteError("");
+    try {
+      const res = await fetch(`/api/invoices/customer/${id}${force ? "?force=true" : ""}`, { method: "DELETE" });
+      if (!res.ok) {
+        // Same guard as onSave above -- a failed response isn't guaranteed
+        // to be JSON (an uncaught exception, timeout, or gateway error can
+        // come back as HTML/empty instead), so res.json() must not be
+        // trusted bare.
+        const d = await res.json().catch(() => ({}));
+        setDeleteError(d.error ?? "Delete failed");
+        setDeleteForceable(Boolean(d.forceable));
+        return;
+      }
+      router.push("/invoices/customer");
+    } finally {
+      setDeleting(false);
+    }
   }
 
   async function handleSend() {
@@ -457,17 +493,41 @@ export default function CustomerInvoiceDetailPage() {
                   Edit
                 </button>
                 {!confirmDelete ? (
-                  <button onClick={() => setConfirmDelete(true)} className="btn-danger">
+                  <button
+                    onClick={() => { setConfirmDelete(true); setDeleteError(""); setDeleteForceable(false); }}
+                    className="btn-danger"
+                  >
                     <Trash2 className="w-4 h-4" />
                     Delete
                   </button>
                 ) : (
-                  <div className="flex items-center gap-2 bg-red-50 border border-red-200 rounded-lg px-3 py-1.5">
-                    <span className="text-sm text-red-700">Confirm delete?</span>
-                    <button onClick={handleDelete} disabled={deleting} className="text-red-700 font-medium text-sm hover:underline">
-                      {deleting ? "…" : "Yes"}
-                    </button>
-                    <button onClick={() => setConfirmDelete(false)} className="text-gray-500 text-sm hover:underline">No</button>
+                  <div className="flex flex-col items-end gap-1.5">
+                    <div className="flex items-center gap-2 bg-red-50 border border-red-200 rounded-lg px-3 py-1.5">
+                      <span className="text-sm text-red-700">Confirm delete?</span>
+                      <button onClick={() => handleDelete(false)} disabled={deleting} className="text-red-700 font-medium text-sm hover:underline">
+                        {deleting ? "…" : "Yes"}
+                      </button>
+                      <button
+                        onClick={() => { setConfirmDelete(false); setDeleteError(""); setDeleteForceable(false); }}
+                        className="text-gray-500 text-sm hover:underline"
+                      >
+                        No
+                      </button>
+                    </div>
+                    {deleteError && (
+                      <div className="max-w-xs text-right text-xs text-red-700">
+                        {deleteError}
+                        {deleteForceable && userRole === "ADMIN" && (
+                          <button
+                            onClick={() => handleDelete(true)}
+                            disabled={deleting}
+                            className="block ml-auto mt-1 font-semibold underline hover:no-underline"
+                          >
+                            {deleting ? "…" : "Force delete anyway (discards those pending purchase requests)"}
+                          </button>
+                        )}
+                      </div>
+                    )}
                   </div>
                 )}
               </>
@@ -499,6 +559,7 @@ export default function CustomerInvoiceDetailPage() {
               {errors.dueDate && <li>Due date is required</li>}
               {errors.paidAmount && <li>Amount paid must be a number</li>}
               {errors.downPayment && <li>Down payment must be a number</li>}
+              {errors.commissionRate && <li>Commission rate must be a number</li>}
               {errors.items && (
                 <li>
                   One or more line items are missing a description, quantity, or price.
@@ -534,7 +595,9 @@ export default function CustomerInvoiceDetailPage() {
               <div className="grid grid-cols-2 gap-4">
                 <div>
                   <label className="label">Invoice Number</label>
-                  <input className="input" {...register("invoiceNumber")} />
+                  {/* Locked, not free-typed -- an invoice's number is fixed
+                      once issued (see the new-invoice page's field for why). */}
+                  <input className="input bg-gray-50 text-gray-500 cursor-not-allowed" readOnly {...register("invoiceNumber")} />
                   {errors.invoiceNumber && <p className="text-red-500 text-xs mt-1">{errors.invoiceNumber.message}</p>}
                 </div>
                 <div>
@@ -605,7 +668,10 @@ export default function CustomerInvoiceDetailPage() {
                 type="customer"
                 setValue={setValue}
                 feeOptions={feeOptions}
-                initialAppliedFeeIds={invoice.appliedFees.map((f) => f.id).filter((fid): fid is string => !!fid)}
+                initialAppliedFees={invoice.appliedFees.filter(
+                  (f): f is { id: string; label: string; rate: number; amount: string } =>
+                    !!f.id && f.rate !== undefined
+                )}
                 onFeesChange={setComputedAppliedFees}
                 lockedCount={invoice.paymentStatus !== "UNPAID" ? invoice.items.length : 0}
                 showItemCode
@@ -742,7 +808,17 @@ export default function CustomerInvoiceDetailPage() {
                       </td>
                       <td className="py-2 text-right">{item.quantity}</td>
                       <td className="py-2 text-right">{formatCurrency(item.unitPrice)}</td>
-                      <td className="py-2 text-right">{(parseFloat(item.taxRate) * 100).toFixed(0)}%</td>
+                      <td className="py-2 text-right">
+                        {(parseFloat(item.taxRate) * 100).toFixed(0)}%
+                        {parseFloat(item.taxRate) > 0 && (
+                          <span className="text-gray-400">
+                            {" "}
+                            ({formatCurrency(
+                              (parseFloat(item.quantity) * parseFloat(item.unitPrice) * parseFloat(item.taxRate)).toFixed(2)
+                            )})
+                          </span>
+                        )}
+                      </td>
                       <td className="py-2 text-right font-medium">{formatCurrency(item.lineTotal)}</td>
                       {canSeeCommission && (
                         <td className="py-2 text-right">
@@ -770,6 +846,19 @@ export default function CustomerInvoiceDetailPage() {
                   <span className="text-gray-500">Tax</span>
                   <span>{formatCurrency(invoice.taxAmount)}</span>
                 </div>
+                {/* Fees (credit card fee, custom fees from Settings) applied
+                    to this invoice -- these were being silently included in
+                    Total with no line explaining where the extra amount came
+                    from. The estimate detail page already listed these the
+                    same way; this brings the customer-invoice view in line
+                    with it (see CLAUDE.md's "fix applied once, needed
+                    everywhere" pattern). */}
+                {invoice.appliedFees.map((f, i) => (
+                  <div key={f.id ?? i} className="flex justify-between">
+                    <span className="text-gray-500">{f.label}</span>
+                    <span>{formatCurrency(f.amount)}</span>
+                  </div>
+                ))}
                 <div className="flex justify-between font-bold text-base border-t pt-2">
                   <span>Total</span>
                   <span>{formatCurrency(invoice.totalAmount)}</span>
