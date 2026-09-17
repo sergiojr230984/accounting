@@ -172,18 +172,15 @@ export async function POST(request: Request) {
   }
 
   // Duplicate check -- a fast path only. Two requests for the same
-  // invoiceNumber/customerId can both pass this check before either has
-  // inserted (a classic check-then-act race), so it doesn't by itself
-  // guarantee uniqueness; the DB's own unique constraint on
-  // (invoiceNumber, customerId) is the real guard, enforced below.
-  const existing = await prisma.customerInvoice.findUnique({
-    where: { invoiceNumber_customerId: { invoiceNumber, customerId } },
-  });
+  // invoiceNumber (from two different customers included -- invoiceNumber
+  // is globally unique, issued from one company-wide counter; see the doc
+  // comment on CustomerInvoice.invoiceNumber in prisma/schema.prisma) can
+  // both pass this check before either has inserted (a classic check-then-
+  // act race), so it doesn't by itself guarantee uniqueness; the DB's own
+  // unique constraint on invoiceNumber is the real guard, enforced below.
+  const existing = await prisma.customerInvoice.findUnique({ where: { invoiceNumber } });
   if (existing) {
-    return NextResponse.json(
-      { error: "Invoice number already exists for this customer" },
-      { status: 409 }
-    );
+    return NextResponse.json({ error: "Invoice number already exists" }, { status: 409 });
   }
 
   const { lines: lineTotals, subtotal, taxAmount } = computeLineTotals(
@@ -315,16 +312,14 @@ export async function POST(request: Request) {
     });
   } catch (err) {
     // The findUnique check above is only a fast path -- it can't stop two
-    // concurrent requests for the same invoiceNumber/customerId from both
-    // passing it before either has inserted. When that happens, the DB's
-    // own unique constraint on (invoiceNumber, customerId) rejects the
-    // second insert with a P2002 error. Without this catch that surfaced as
-    // an unhandled 500 instead of the same clean 409 the fast path returns.
+    // concurrent requests for the same invoiceNumber (whether for the same
+    // customer or two different ones) from both passing it before either has
+    // inserted. When that happens, the DB's own unique constraint on
+    // invoiceNumber rejects the second insert with a P2002 error. Without
+    // this catch that surfaced as an unhandled 500 instead of the same clean
+    // 409 the fast path returns.
     if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002") {
-      return NextResponse.json(
-        { error: "Invoice number already exists for this customer" },
-        { status: 409 }
-      );
+      return NextResponse.json({ error: "Invoice number already exists" }, { status: 409 });
     }
     throw err;
   }

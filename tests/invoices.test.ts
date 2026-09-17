@@ -601,6 +601,89 @@ describe("concurrency — invoice numbering", () => {
     expect(created.length).toBe(1);
     expect(errored.length).toBe(0);
   });
+
+  // Reproduces the reported bug: two different users each creating an
+  // invoice at the same time (e.g. both looking at the same
+  // /api/invoices/customer/next-number suggestion before either has saved)
+  // could both submit the SAME auto-generated invoiceNumber for TWO
+  // DIFFERENT customers. invoiceNumber is issued from one company-wide
+  // counter (CompanyProfile.customerInvoiceNextSeq), so it must be globally
+  // unique -- but the DB constraint used to be scoped to (invoiceNumber,
+  // customerId), which never compares rows across two different customers
+  // at all. Without the fix, this asserts 2 (both succeed with a duplicate
+  // number); with it, exactly one wins and the other gets a clean 409.
+  it("the same invoice number can never be used by two different customers, even concurrently", async () => {
+    const otherCustomer = await admin.postJson<{ id: string }>("/api/customers", {
+      name: "Invoice Number Race — Second Customer",
+    });
+    expect(otherCustomer.status).toBe(201);
+    const invoiceNumber = `CROSS-CUSTOMER-RACE-${Date.now()}`;
+
+    const results = await Promise.all([
+      admin.postJson("/api/invoices/customer", {
+        customerId,
+        invoiceNumber,
+        invoiceDate: "2026-01-01",
+        dueDate: "2026-01-31",
+        items: [{ description: "race", quantity: "1", unitPrice: "1" }],
+      }),
+      admin.postJson("/api/invoices/customer", {
+        customerId: otherCustomer.body.id,
+        invoiceNumber,
+        invoiceDate: "2026-01-01",
+        dueDate: "2026-01-31",
+        items: [{ description: "race", quantity: "1", unitPrice: "1" }],
+      }),
+    ]);
+
+    const created = results.filter((r) => r.status === 201);
+    const conflicted = results.filter((r) => r.status === 409);
+    const errored = results.filter((r) => r.status >= 500);
+    expect(created.length).toBe(1);
+    expect(conflicted.length).toBe(1);
+    expect(errored.length).toBe(0);
+
+    // Belt-and-suspenders: confirm the DB itself never holds two rows with
+    // this number, regardless of which request "won".
+    const all = await admin.getJson<{ invoices: { invoiceNumber: string }[] }>(
+      `/api/invoices/customer?limit=200`
+    );
+    const matches = all.body.invoices.filter((inv) => inv.invoiceNumber === invoiceNumber);
+    expect(matches.length).toBe(1);
+  });
+
+  it("rejects editing an invoice's number onto one already used by a different customer", async () => {
+    const otherCustomer = await admin.postJson<{ id: string }>("/api/customers", {
+      name: "Invoice Number Rename — Second Customer",
+    });
+    expect(otherCustomer.status).toBe(201);
+
+    const takenNumber = `RENAME-TARGET-${Date.now()}`;
+    const taken = await admin.postJson<{ id: string }>("/api/invoices/customer", {
+      customerId: otherCustomer.body.id,
+      invoiceNumber: takenNumber,
+      invoiceDate: "2026-01-01",
+      dueDate: "2026-01-31",
+      items: [{ description: "x", quantity: "1", unitPrice: "1" }],
+    });
+    expect(taken.status).toBe(201);
+
+    const mine = await admin.postJson<{ id: string }>("/api/invoices/customer", {
+      customerId,
+      invoiceNumber: `RENAME-SOURCE-${Date.now()}`,
+      invoiceDate: "2026-01-01",
+      dueDate: "2026-01-31",
+      items: [{ description: "x", quantity: "1", unitPrice: "1" }],
+    });
+    expect(mine.status).toBe(201);
+
+    const rename = await admin.postJson(
+      `/api/invoices/customer/${mine.body.id}`,
+      { invoiceNumber: takenNumber },
+      "PATCH"
+    );
+    expect(rename.status).toBe(409);
+  });
 });
 
 describe("invalid foreign keys are rejected cleanly, not a raw DB-constraint 500", () => {

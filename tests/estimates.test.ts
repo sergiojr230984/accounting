@@ -290,3 +290,87 @@ describe("invalid foreign keys are rejected cleanly, not a raw DB-constraint 500
     expect(body.error).toContain("customer");
   });
 });
+
+describe("concurrency — estimate numbering", () => {
+  it("concurrent creates with the same estimate number produce exactly one estimate, never a duplicate or a 500", async () => {
+    const estimateNumber = `EST-RACE-TEST-${Date.now()}`;
+    const payload = {
+      customerId,
+      estimateNumber,
+      estimateDate: "2026-01-01",
+      items: [{ description: "race", quantity: "1", unitPrice: "1" }],
+    };
+    const results = await Promise.all(
+      Array.from({ length: 6 }, () => admin.postJson("/api/estimates", payload))
+    );
+    const created = results.filter((r) => r.status === 201);
+    const errored = results.filter((r) => r.status >= 500);
+    expect(created.length).toBe(1);
+    expect(errored.length).toBe(0);
+  });
+
+  // Mirrors the customer-invoice reproduction in tests/invoices.test.ts:
+  // estimateNumber comes from one company-wide counter
+  // (CompanyProfile.estimateNextSeq), so it must be globally unique across
+  // ALL customers, not just unique per customer.
+  it("the same estimate number can never be used by two different customers, even concurrently", async () => {
+    const otherCustomer = await admin.postJson<{ id: string }>("/api/customers", {
+      name: "Estimate Number Race — Second Customer",
+    });
+    expect(otherCustomer.status).toBe(201);
+    const estimateNumber = `EST-CROSS-CUSTOMER-RACE-${Date.now()}`;
+
+    const results = await Promise.all([
+      admin.postJson("/api/estimates", {
+        customerId,
+        estimateNumber,
+        estimateDate: "2026-01-01",
+        items: [{ description: "race", quantity: "1", unitPrice: "1" }],
+      }),
+      admin.postJson("/api/estimates", {
+        customerId: otherCustomer.body.id,
+        estimateNumber,
+        estimateDate: "2026-01-01",
+        items: [{ description: "race", quantity: "1", unitPrice: "1" }],
+      }),
+    ]);
+
+    const created = results.filter((r) => r.status === 201);
+    const conflicted = results.filter((r) => r.status === 409);
+    const errored = results.filter((r) => r.status >= 500);
+    expect(created.length).toBe(1);
+    expect(conflicted.length).toBe(1);
+    expect(errored.length).toBe(0);
+  });
+
+  it("rejects editing an estimate's number onto one already used by a different customer", async () => {
+    const otherCustomer = await admin.postJson<{ id: string }>("/api/customers", {
+      name: "Estimate Number Rename — Second Customer",
+    });
+    expect(otherCustomer.status).toBe(201);
+
+    const takenNumber = `EST-RENAME-TARGET-${Date.now()}`;
+    const taken = await admin.postJson<{ id: string }>("/api/estimates", {
+      customerId: otherCustomer.body.id,
+      estimateNumber: takenNumber,
+      estimateDate: "2026-01-01",
+      items: [{ description: "x", quantity: "1", unitPrice: "1" }],
+    });
+    expect(taken.status).toBe(201);
+
+    const mine = await admin.postJson<{ id: string }>("/api/estimates", {
+      customerId,
+      estimateNumber: `EST-RENAME-SOURCE-${Date.now()}`,
+      estimateDate: "2026-01-01",
+      items: [{ description: "x", quantity: "1", unitPrice: "1" }],
+    });
+    expect(mine.status).toBe(201);
+
+    const rename = await admin.postJson(
+      `/api/estimates/${mine.body.id}`,
+      { estimateNumber: takenNumber },
+      "PATCH"
+    );
+    expect(rename.status).toBe(409);
+  });
+});
