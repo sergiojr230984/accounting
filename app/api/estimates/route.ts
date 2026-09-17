@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { Prisma } from "@prisma/client";
 import { auth } from "@/lib/auth";
 import { requireReadAccess } from "@/lib/api";
 import { prisma } from "@/lib/prisma";
@@ -115,14 +116,15 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Selected customer no longer exists." }, { status: 404 });
   }
 
-  const existing = await prisma.estimate.findUnique({
-    where: { estimateNumber_customerId: { estimateNumber, customerId } },
-  });
+  // Fast path only -- estimateNumber is globally unique (issued from one
+  // company-wide counter, see the doc comment on Estimate.estimateNumber in
+  // prisma/schema.prisma), not just per-customer, and two concurrent
+  // requests can both pass this check before either has inserted. The DB's
+  // own unique constraint on estimateNumber is the real guard, enforced via
+  // the P2002 catch below.
+  const existing = await prisma.estimate.findUnique({ where: { estimateNumber } });
   if (existing) {
-    return NextResponse.json(
-      { error: "Estimate number already exists for this customer" },
-      { status: 409 }
-    );
+    return NextResponse.json({ error: "Estimate number already exists" }, { status: 409 });
   }
 
   const { lines: lineTotals, subtotal, taxAmount } = computeLineTotals(
@@ -182,34 +184,49 @@ export async function POST(request: Request) {
   // in one transaction -- see lib/next-number.ts's claimSequenceNumber doc
   // comment for why this is what actually guarantees a deleted estimate's
   // number is never reused.
-  const estimate = await prisma.$transaction(async (tx) => {
-    const created = await tx.estimate.create({
-      data: {
-        customerId,
-        estimateNumber,
-        estimateDate: new Date(estimateDate),
-        expiryDate: expiryDate ? new Date(expiryDate) : null,
-        subtotal: subtotal.toFixed(2),
-        taxAmount: taxAmount.toFixed(2),
-        totalAmount: totalAmount.toFixed(2),
-        appliedFees: appliedFees as unknown as object,
-        notes,
-        items: {
-          create: computedItems.map((item) => ({
-            description: item.description,
-            itemDescription: item.itemDescription ?? null,
-            quantity: item.quantity,
-            unitPrice: item.unitPrice,
-            taxRate: item.taxRate,
-            lineTotal: item.lineTotal,
-          })),
+  let estimate;
+  try {
+    estimate = await prisma.$transaction(async (tx) => {
+      const created = await tx.estimate.create({
+        data: {
+          customerId,
+          estimateNumber,
+          estimateDate: new Date(estimateDate),
+          expiryDate: expiryDate ? new Date(expiryDate) : null,
+          subtotal: subtotal.toFixed(2),
+          taxAmount: taxAmount.toFixed(2),
+          totalAmount: totalAmount.toFixed(2),
+          appliedFees: appliedFees as unknown as object,
+          notes,
+          items: {
+            create: computedItems.map((item) => ({
+              description: item.description,
+              itemDescription: item.itemDescription ?? null,
+              quantity: item.quantity,
+              unitPrice: item.unitPrice,
+              taxRate: item.taxRate,
+              lineTotal: item.lineTotal,
+            })),
+          },
         },
-      },
-      include: { customer: true, items: true },
+        include: { customer: true, items: true },
+      });
+      await claimSequenceNumber(tx, "estimateNextSeq", estimateNumber, ESTIMATE_PREFIX);
+      return created;
     });
-    await claimSequenceNumber(tx, "estimateNextSeq", estimateNumber, ESTIMATE_PREFIX);
-    return created;
-  });
+  } catch (err) {
+    // The findUnique check above is only a fast path -- it can't stop two
+    // concurrent requests for the same estimateNumber from both passing it
+    // before either has inserted. When that happens, the DB's own unique
+    // constraint on estimateNumber rejects the second insert with a P2002
+    // error. Without this catch that surfaced as an unhandled 500 instead of
+    // the same clean 409 the fast path returns -- mirrors the same catch on
+    // customer invoices (app/api/invoices/customer/route.ts).
+    if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002") {
+      return NextResponse.json({ error: "Estimate number already exists" }, { status: 409 });
+    }
+    throw err;
+  }
 
   return NextResponse.json(estimate, { status: 201 });
 }

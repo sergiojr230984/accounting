@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { Prisma } from "@prisma/client";
 import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { initializeDatabase } from "@/lib/init-db";
@@ -113,6 +114,19 @@ export async function PATCH(
   const data = parsed.data;
   const updateData: Record<string, unknown> = {};
 
+  // Fast-path only, same caveat as the create route's check (see
+  // app/api/estimates/route.ts) -- estimateNumber is globally unique, not
+  // just per-customer, so this also catches renaming this estimate onto a
+  // number already used by a *different* customer. The DB's own unique
+  // constraint is the real guard, enforced via the P2002 catch around the
+  // transaction below.
+  if (data.estimateNumber && data.estimateNumber !== existing.estimateNumber) {
+    const dupe = await prisma.estimate.findUnique({ where: { estimateNumber: data.estimateNumber } });
+    if (dupe) {
+      return NextResponse.json({ error: "Estimate number already exists" }, { status: 409 });
+    }
+  }
+
   if (data.estimateNumber) updateData.estimateNumber = data.estimateNumber;
   if (data.estimateDate) updateData.estimateDate = new Date(data.estimateDate);
   if (data.expiryDate !== undefined) updateData.expiryDate = data.expiryDate ? new Date(data.expiryDate) : null;
@@ -208,17 +222,28 @@ export async function PATCH(
   // If the estimate number is being changed here, the sequence counter
   // still needs to account for it -- see claimSequenceNumber's doc comment
   // in lib/next-number.ts.
-  const updated = await prisma.$transaction(async (tx) => {
-    const result = await tx.estimate.update({
-      where: { id },
-      data: updateData,
-      include: { customer: true, items: true },
+  let updated;
+  try {
+    updated = await prisma.$transaction(async (tx) => {
+      const result = await tx.estimate.update({
+        where: { id },
+        data: updateData,
+        include: { customer: true, items: true },
+      });
+      if (data.estimateNumber) {
+        await claimSequenceNumber(tx, "estimateNextSeq", data.estimateNumber, ESTIMATE_PREFIX);
+      }
+      return result;
     });
-    if (data.estimateNumber) {
-      await claimSequenceNumber(tx, "estimateNextSeq", data.estimateNumber, ESTIMATE_PREFIX);
+  } catch (err) {
+    // The fast-path check above can't stop two concurrent renames onto the
+    // same estimateNumber from both passing it before either has committed --
+    // same race as the create route (app/api/estimates/route.ts).
+    if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002") {
+      return NextResponse.json({ error: "Estimate number already exists" }, { status: 409 });
     }
-    return result;
-  });
+    throw err;
+  }
 
   return NextResponse.json(updated);
 }
