@@ -1,4 +1,4 @@
-import jsPDF from "jspdf";
+import jsPDF, { GState } from "jspdf";
 import autoTable from "jspdf-autotable";
 import Decimal from "decimal.js";
 import { formatDateOnly } from "./date";
@@ -64,12 +64,16 @@ export interface InvoicePDFData {
     // has no DB access to resolve a supplierId into a code.
     itemCode?: string | null;
   }[];
-  // Payment history — individual lines rendered inline in the totals block.
+  // Payment history — individual lines rendered inline in the totals block,
+  // and the source of the date stamped by the "PAID" mark below.
   payments?: {
     paymentDate: string | Date;
     amount: string | number;
     notes?: string | null;
   }[];
+  // Drives the "PAID" stamp (customer invoices only -- see its doc comment
+  // below). Optional because supplier bills/estimates don't pass it.
+  paymentStatus?: "UNPAID" | "PARTIALLY_PAID" | "PAID";
   company?: {
     name?: string | null;
     logo?: string | null;
@@ -274,6 +278,42 @@ export function generateInvoicePDF(invoice: InvoicePDFData): jsPDF {
     align: "right",
   });
   metaY += boxH;
+
+  // ─── PAID STAMP ──────────────────────────────────────
+  // Customer invoices only: a supplier bill's PDF is this company's own AP
+  // record, never handed to anyone as proof of payment, and it has no dated
+  // payment ledger to stamp a date from -- its paidAmount is set directly
+  // in one shot (app/api/invoices/supplier/[id]/route.ts), not through a
+  // dated Payment row the way a customer invoice's "Record payment" action
+  // does (app/api/invoices/customer/[id]/payments/route.ts). An estimate is
+  // never "paid" at all. Deliberately not applied to either sibling --
+  // see the commit introducing this for that reasoning.
+  if (!isPO && !isEstimate && invoice.paymentStatus === "PAID") {
+    const paymentTimestamps = (invoice.payments ?? [])
+      .map((p) => new Date(p.paymentDate).getTime())
+      .filter((t) => !isNaN(t));
+    // The date of the payment that actually brought the balance to zero --
+    // not "today", which would misdate a bill printed well after it was
+    // paid. Falls back to no date line at all (rather than a fabricated
+    // one) for the rare case of an invoice marked PAID with no dated
+    // payment on file (e.g. paid off entirely by its down payment, which
+    // has no date of its own).
+    const latestPaymentDate = paymentTimestamps.length > 0 ? new Date(Math.max(...paymentTimestamps)) : null;
+
+    doc.saveGraphicsState();
+    doc.setGState(new GState({ opacity: 0.55 }));
+    doc.setTextColor(196, 30, 40);
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(46);
+    const stampX = pageWidth / 2;
+    const stampY = metaTop + 34;
+    doc.text("PAID", stampX, stampY, { angle: 12, align: "center" });
+    if (latestPaymentDate) {
+      doc.setFontSize(12);
+      doc.text(formatDateOnly(latestPaymentDate), stampX, stampY + 20, { angle: 12, align: "center" });
+    }
+    doc.restoreGraphicsState();
+  }
 
   // ─── ITEMS TABLE ─────────────────────────────────────
   const tableStartY = Math.max(leftColBottom, metaY) + 28;
