@@ -772,6 +772,72 @@ describe("payment ledger — new on this branch, not present on main", () => {
     expect(Number(final.body.paidAmount)).toBe(800);
     expect(final.body.payments.length).toBe(8);
   });
+
+  // Matters beyond bookkeeping: the printed/downloaded PDF's "PAID" stamp
+  // (lib/invoice-pdf.ts) is driven live off this same paymentStatus/
+  // paidAmount, not a cached flag set once when the invoice first reached
+  // $0 balance -- so if this ever regressed to leaving paymentStatus stuck
+  // at PAID after deleting the payment that earned it, a rep could hand a
+  // customer a "PAID" printout for an invoice that's actually unpaid again.
+  it("deleting the payment that fully paid an invoice reverts its status back off PAID", async () => {
+    const created = await admin.postJson<{ id: string }>("/api/invoices/customer", {
+      customerId,
+      invoiceNumber: `PAYDEL-${Date.now()}`,
+      invoiceDate: "2026-01-01",
+      dueDate: "2026-01-31",
+      items: [{ description: "Service", quantity: "1", unitPrice: "1000" }],
+    });
+    const id = created.body.id;
+
+    const paid = await admin.postJson<{ paymentStatus: string; payments: { id: string }[] }>(
+      `/api/invoices/customer/${id}/payments`,
+      { amount: "1000", paymentDate: "2026-01-05" }
+    );
+    expect(paid.status).toBe(201);
+    expect(paid.body.paymentStatus).toBe("PAID");
+    const paymentId = paid.body.payments[0].id;
+
+    const afterDelete = await admin.postJson<{ paymentStatus: string; paidAmount: string; payments: unknown[] }>(
+      `/api/invoices/customer/${id}/payments/${paymentId}`,
+      {},
+      "DELETE"
+    );
+    expect(afterDelete.status).toBe(200);
+    expect(afterDelete.body.paymentStatus).toBe("UNPAID");
+    expect(Number(afterDelete.body.paidAmount)).toBe(0);
+    expect(afterDelete.body.payments.length).toBe(0);
+  });
+
+  // Same guarantee, but deleting only ONE of several payments -- the
+  // invoice must drop back to PARTIALLY_PAID (still owes money), not stay
+  // PAID and not fall all the way to UNPAID.
+  it("deleting one of several payments that together fully paid an invoice reverts it to PARTIALLY_PAID", async () => {
+    const created = await admin.postJson<{ id: string }>("/api/invoices/customer", {
+      customerId,
+      invoiceNumber: `PAYDEL-MULTI-${Date.now()}`,
+      invoiceDate: "2026-01-01",
+      dueDate: "2026-01-31",
+      items: [{ description: "Service", quantity: "1", unitPrice: "1000" }],
+    });
+    const id = created.body.id;
+
+    await admin.postJson(`/api/invoices/customer/${id}/payments`, { amount: "400", paymentDate: "2026-01-05" });
+    const second = await admin.postJson<{ paymentStatus: string; payments: { id: string; amount: string }[] }>(
+      `/api/invoices/customer/${id}/payments`,
+      { amount: "600", paymentDate: "2026-01-10" }
+    );
+    expect(second.body.paymentStatus).toBe("PAID");
+    const secondPaymentId = second.body.payments.find((p) => Number(p.amount) === 600)!.id;
+
+    const afterDelete = await admin.postJson<{ paymentStatus: string; paidAmount: string }>(
+      `/api/invoices/customer/${id}/payments/${secondPaymentId}`,
+      {},
+      "DELETE"
+    );
+    expect(afterDelete.status).toBe(200);
+    expect(afterDelete.body.paymentStatus).toBe("PARTIALLY_PAID");
+    expect(Number(afterDelete.body.paidAmount)).toBe(400);
+  });
 });
 
 describe("concurrency — invoice numbering", () => {
