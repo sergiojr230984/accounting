@@ -59,7 +59,7 @@ const SCHEMA_STATEMENTS: string[] = [
     "notes" TEXT,
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updatedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    CONSTRAINT "CustomerInvoice_invoiceNumber_customerId_key" UNIQUE ("invoiceNumber", "customerId"),
+    CONSTRAINT "CustomerInvoice_invoiceNumber_key" UNIQUE ("invoiceNumber"),
     CONSTRAINT "CustomerInvoice_customerId_fkey" FOREIGN KEY ("customerId") REFERENCES "Customer"("id") ON DELETE RESTRICT ON UPDATE CASCADE
   );`,
   `CREATE TABLE IF NOT EXISTS "CustomerInvoiceItem" (
@@ -224,7 +224,7 @@ const SCHEMA_STATEMENTS: string[] = [
     "convertedInvoiceId" TEXT,
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updatedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    CONSTRAINT "Estimate_estimateNumber_customerId_key" UNIQUE ("estimateNumber", "customerId"),
+    CONSTRAINT "Estimate_estimateNumber_key" UNIQUE ("estimateNumber"),
     CONSTRAINT "Estimate_customerId_fkey" FOREIGN KEY ("customerId") REFERENCES "Customer"("id") ON DELETE RESTRICT ON UPDATE CASCADE
   );`,
   `CREATE UNIQUE INDEX IF NOT EXISTS "Estimate_viewToken_key" ON "Estimate"("viewToken");`,
@@ -325,6 +325,39 @@ const SCHEMA_STATEMENTS: string[] = [
   // which reproduces today's behavior exactly until someone edits an
   // invoice's address for the first time.
   `ALTER TABLE "CustomerInvoice" ADD COLUMN IF NOT EXISTS "customerAddress" TEXT;`,
+
+  // Fix: invoiceNumber/estimateNumber are issued from a single company-wide
+  // counter (CompanyProfile.customerInvoiceNextSeq / estimateNextSeq -- see
+  // lib/next-number.ts), so they must be globally unique -- but the original
+  // constraints above were scoped to (invoiceNumber, customerId) /
+  // (estimateNumber, customerId). That let two concurrent creates for two
+  // DIFFERENT customers both successfully claim the same auto-suggested
+  // number, since the DB constraint only ever compared rows for the SAME
+  // customer. The CREATE TABLE statements above are fixed for brand-new
+  // databases (guarded by IF NOT EXISTS, so they don't touch an existing
+  // one); this migrates an existing database's already-created constraint.
+  // Wrapped in DO/EXCEPTION rather than "CREATE ... IF NOT EXISTS" because
+  // Postgres has no IF NOT EXISTS form for ADD CONSTRAINT: duplicate_object
+  // means this has already run; unique_violation means real historical data
+  // already has the same number reused across two different customers, which
+  // needs a human to resolve (rename one of the colliding numbers) before
+  // this constraint can be added -- logged clearly so it doesn't fail
+  // silently, and safe to leave failing on every boot in the meantime since
+  // every other statement here still runs independently.
+  `DO $$ BEGIN
+     ALTER TABLE "CustomerInvoice" DROP CONSTRAINT IF EXISTS "CustomerInvoice_invoiceNumber_customerId_key";
+     ALTER TABLE "CustomerInvoice" ADD CONSTRAINT "CustomerInvoice_invoiceNumber_key" UNIQUE ("invoiceNumber");
+   EXCEPTION
+     WHEN duplicate_object THEN NULL;
+     WHEN unique_violation THEN RAISE WARNING 'CustomerInvoice_invoiceNumber_key: could not add global-uniqueness constraint -- the same invoiceNumber is already used by more than one customer. Resolve the duplicate(s) manually, then this will apply on the next boot.';
+   END $$;`,
+  `DO $$ BEGIN
+     ALTER TABLE "Estimate" DROP CONSTRAINT IF EXISTS "Estimate_estimateNumber_customerId_key";
+     ALTER TABLE "Estimate" ADD CONSTRAINT "Estimate_estimateNumber_key" UNIQUE ("estimateNumber");
+   EXCEPTION
+     WHEN duplicate_object THEN NULL;
+     WHEN unique_violation THEN RAISE WARNING 'Estimate_estimateNumber_key: could not add global-uniqueness constraint -- the same estimateNumber is already used by more than one customer. Resolve the duplicate(s) manually, then this will apply on the next boot.';
+   END $$;`,
 ];
 
 export function initializeDatabase(): Promise<void> {

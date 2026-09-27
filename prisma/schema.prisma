@@ -102,7 +102,16 @@ model Supplier {
 
 model CustomerInvoice {
   id               String                @id @default(cuid())
-  invoiceNumber    String
+  // Globally unique, not just per-customer -- invoiceNumber is issued from
+  // CompanyProfile.customerInvoiceNextSeq, a single company-wide counter
+  // (see lib/next-number.ts), so two different customers must never be able
+  // to end up with the same number. Was previously @@unique([invoiceNumber,
+  // customerId]) only, which let two concurrent creates for two DIFFERENT
+  // customers both claim the same auto-suggested number -- the DB's own
+  // constraint had no way to reject the second insert since customerId
+  // differed. See the "concurrency — invoice numbering" describe block in
+  // tests/invoices.test.ts for the reproduction.
+  invoiceNumber    String                @unique
   customerId       String
   customer         Customer              @relation(fields: [customerId], references: [id])
   invoiceDate      DateTime
@@ -140,8 +149,6 @@ model CustomerInvoice {
   payments         Payment[]
   files            UploadedFile[]
   purchaseRequests PurchaseRequest[]
-
-  @@unique([invoiceNumber, customerId])
 }
 
 model CustomerInvoiceItem {
@@ -176,7 +183,10 @@ model CustomerInvoiceItem {
 
 model Estimate {
   id                 String         @id @default(cuid())
-  estimateNumber     String
+  // Globally unique, not just per-customer -- see the matching comment on
+  // CustomerInvoice.invoiceNumber above; estimateNumber comes from the same
+  // kind of single company-wide counter (CompanyProfile.estimateNextSeq).
+  estimateNumber     String         @unique
   customerId         String
   customer           Customer       @relation(fields: [customerId], references: [id])
   estimateDate       DateTime
@@ -193,8 +203,6 @@ model Estimate {
   createdAt          DateTime       @default(now())
   updatedAt          DateTime       @updatedAt
   items              EstimateItem[]
-
-  @@unique([estimateNumber, customerId])
 }
 
 model EstimateItem {

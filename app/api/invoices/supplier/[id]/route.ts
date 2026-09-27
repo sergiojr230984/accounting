@@ -14,7 +14,12 @@ const updateSchema = z.object({
   category: z.enum(["COGS", "SERVICES_EXPENSE", "OPERATING_EXPENSE", "OTHER"]).optional(),
   notes: z.string().optional(),
   paymentStatus: z.enum(["UNPAID", "PARTIALLY_PAID", "PAID"]).optional(),
-  paidAmount: z.string().optional(),
+  // Regex-validated for the same reason as the create route's paidAmount
+  // (app/api/invoices/supplier/route.ts) -- without it, an empty string
+  // (e.g. the "Amount Paid" field cleared in the edit form) passes
+  // `.optional()` unchanged and reaches `new Decimal(data.paidAmount)`
+  // below, which throws uncaught and 500s the whole save silently.
+  paidAmount: z.string().regex(/^\d+(\.\d+)?$/, "paidAmount must be a number").optional(),
   customerInvoiceRef: z.string().optional().nullable(),
   items: z
     .array(

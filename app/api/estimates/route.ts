@@ -1,11 +1,11 @@
 import { NextResponse } from "next/server";
+import { Prisma } from "@prisma/client";
 import { auth } from "@/lib/auth";
 import { requireReadAccess } from "@/lib/api";
 import { prisma } from "@/lib/prisma";
 import { initializeDatabase } from "@/lib/init-db";
 import { computeLineTotals } from "@/lib/money";
 import { claimSequenceNumber, resolveNewDocumentNumber } from "@/lib/next-number";
-import { Prisma } from "@prisma/client";
 import { z } from "zod";
 import Decimal from "decimal.js";
 

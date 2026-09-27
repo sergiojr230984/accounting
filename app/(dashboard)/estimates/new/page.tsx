@@ -96,7 +96,24 @@ export default function NewEstimatePage() {
       });
       if (!res.ok) {
         const d = await res.json();
-        setError(d.error?.formErrors?.[0] ?? d.error ?? "Failed to create estimate");
+        const message = d.error?.formErrors?.[0] ?? d.error ?? "Failed to create estimate";
+        // 409 on estimateNumber means someone else just claimed this exact
+        // number (a single company-wide sequence -- see lib/next-number.ts)
+        // between this page loading and Save. Pull a fresh next number
+        // rather than leaving the now-stale one for the user to notice.
+        if (res.status === 409 && typeof d.error === "string" && d.error.toLowerCase().includes("estimate number")) {
+          const fresh = await fetch("/api/estimates/next-number")
+            .then((r) => (r.ok ? r.json() : null))
+            .catch(() => null);
+          if (fresh?.nextNumber) setValue("estimateNumber", fresh.nextNumber);
+          setError(
+            fresh?.nextNumber
+              ? `${message} — advanced to the next available number (${fresh.nextNumber}). Review and click Save again.`
+              : `${message} Refresh the page and try again.`
+          );
+        } else {
+          setError(message);
+        }
         return;
       }
       const est = await res.json();

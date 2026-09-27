@@ -23,7 +23,7 @@ const editSchema = z.object({
   dueDate: z.string().optional(),
   category: z.enum(["COGS", "SERVICES_EXPENSE", "OPERATING_EXPENSE", "OTHER"]),
   paymentStatus: z.enum(["UNPAID", "PARTIALLY_PAID", "PAID"]),
-  paidAmount: z.string(),
+  paidAmount: z.string().regex(/^\d+(\.\d+)?$/, "Amount paid must be a number"),
   notes: z.string().optional(),
   customerInvoiceRef: z.string().optional().nullable(),
   items: z.array(
@@ -402,6 +402,7 @@ export default function SupplierInvoiceDetailPage() {
               <div>
                 <label className="label">Amount Paid ($)</label>
                 <input type="number" step="0.01" min="0" className="input" {...register("paidAmount")} />
+                {errors.paidAmount && <p className="text-red-500 text-xs mt-1">{errors.paidAmount.message}</p>}
               </div>
               <div className="col-span-2">
                 <label className="label">Customer Invoice # (for profitability)</label>

@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { requireAuth, requireRole } from "@/lib/api";
 import { syncProductCatalog } from "@/lib/product-catalog";
@@ -22,10 +23,16 @@ const updateSchema = z.object({
   dueDate: z.string().optional(),
   notes: z.string().optional(),
   paymentStatus: z.enum(["UNPAID", "PARTIALLY_PAID", "PAID"]).optional(),
-  paidAmount: z.string().optional(),
-  downPayment: z.string().optional(),
+  // Regex-validated for the same reason as the create route's paidAmount/
+  // downPayment/commissionRate (app/api/invoices/customer/route.ts) --
+  // without it, an empty string (e.g. the "Amount Paid" field cleared in
+  // the edit form) passes `.optional()` unchanged and reaches
+  // `new Decimal(...)` below, which throws uncaught and 500s the whole
+  // save silently. See the matching fix on the supplier-bill edit route.
+  paidAmount: z.string().regex(/^\d+(\.\d+)?$/, "paidAmount must be a number").optional(),
+  downPayment: z.string().regex(/^\d+(\.\d+)?$/, "downPayment must be a number").optional(),
   employeeId: z.string().nullable().optional(),
-  commissionRate: z.string().optional(),
+  commissionRate: z.string().regex(/^\d+(\.\d+)?$/, "commissionRate must be a number").optional(),
   customerAddress: z.string().optional().nullable(),
   appliedFees: z.array(appliedFeeSchema).optional(),
   items: z
@@ -236,6 +243,19 @@ export async function PATCH(
 
   const data = parsed.data;
   const updateData: Record<string, unknown> = {};
+
+  // Fast-path only, same caveat as the create route's check (see
+  // app/api/invoices/customer/route.ts) -- invoiceNumber is globally
+  // unique, not just per-customer, so this also catches renaming this
+  // invoice onto a number already used by a *different* customer. The DB's
+  // own unique constraint is the real guard, enforced via the P2002 catch
+  // around the transaction below.
+  if (data.invoiceNumber && data.invoiceNumber !== existing.invoiceNumber) {
+    const dupe = await prisma.customerInvoice.findUnique({ where: { invoiceNumber: data.invoiceNumber } });
+    if (dupe) {
+      return NextResponse.json({ error: "Invoice number already exists" }, { status: 409 });
+    }
+  }
 
   if (data.invoiceNumber) updateData.invoiceNumber = data.invoiceNumber;
   if (data.invoiceDate) updateData.invoiceDate = new Date(data.invoiceDate);
@@ -466,49 +486,55 @@ export async function PATCH(
   // a manual bump-up during an edit wouldn't protect that number from ever
   // being suggested/reused later. See lib/next-number.ts's claimSequenceNumber.
   //
-  // A *changed* number must also be free company-wide, not just for this
-  // customer (the DB constraint is per-customer only) -- checked under the
-  // same numbering lock creates take, so it can't race a concurrent create.
-  // An unchanged number is deliberately not re-checked: the edit page always
-  // resubmits it, and an invoice that already shares a number from before
-  // this check existed must still be editable.
+  // The fast-path check above is re-done here under the same numbering lock
+  // creates take (lib/next-number.ts), so a rename can't race a concurrent
+  // create onto the same number -- this holds even on a database where the
+  // global unique constraint couldn't be added yet (see lib/init-db.ts).
   const numberChanged = !!data.invoiceNumber && data.invoiceNumber !== existing.invoiceNumber;
-  const updated = await prisma.$transaction(async (tx) => {
-    if (numberChanged) {
-      await lockDocumentNumbering(tx, "customerInvoice");
-      if (await isDocumentNumberTaken(tx, "customerInvoice", data.invoiceNumber!, id)) return null;
-    }
-    const result = await tx.customerInvoice.update({
-      where: { id },
-      data: updateData,
-      include: { customer: true, items: true },
+  let updated;
+  try {
+    updated = await prisma.$transaction(async (tx) => {
+      if (numberChanged) {
+        await lockDocumentNumbering(tx, "customerInvoice");
+        if (await isDocumentNumberTaken(tx, "customerInvoice", data.invoiceNumber!, id)) return null;
+      }
+      const result = await tx.customerInvoice.update({
+        where: { id },
+        data: updateData,
+        include: { customer: true, items: true },
+      });
+      if (data.invoiceNumber) {
+        const prefix =
+          (await tx.companyProfile.findUnique({ where: { id: "default" }, select: { customerInvoicePrefix: true } }))
+            ?.customerInvoicePrefix || "INV-2026-";
+        await claimSequenceNumber(tx, "customerInvoiceNextSeq", data.invoiceNumber, prefix);
+      }
+
+      // Second write path (besides the payments POST route) that can move
+      // paidAmount off zero -- the edit screen's own "Amount Paid" field. Also
+      // covers a new line item added to an invoice that's already paid (an
+      // existing, deliberate feature -- see the post-payment append logic
+      // above): that new line needs its own purchase_request the moment it's
+      // saved, not just the lines that existed at the original payment.
+      // ensurePurchaseRequestsForInvoice is itself idempotent, so calling it
+      // on every qualifying save (not just the one that crossed zero) is safe.
+      if (new Decimal(result.paidAmount.toString()).gt(0)) {
+        await ensurePurchaseRequestsForInvoice(tx, id);
+      }
+
+      return result;
     });
-    if (data.invoiceNumber) {
-      const prefix =
-        (await tx.companyProfile.findUnique({ where: { id: "default" }, select: { customerInvoicePrefix: true } }))
-          ?.customerInvoicePrefix || "INV-2026-";
-      await claimSequenceNumber(tx, "customerInvoiceNextSeq", data.invoiceNumber, prefix);
+  } catch (err) {
+    // The fast-path check above can't stop two concurrent renames onto the
+    // same invoiceNumber from both passing it before either has committed --
+    // same race as the create route (app/api/invoices/customer/route.ts).
+    if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002") {
+      return NextResponse.json({ error: "Invoice number already exists" }, { status: 409 });
     }
-
-    // Second write path (besides the payments POST route) that can move
-    // paidAmount off zero -- the edit screen's own "Amount Paid" field. Also
-    // covers a new line item added to an invoice that's already paid (an
-    // existing, deliberate feature -- see the post-payment append logic
-    // above): that new line needs its own purchase_request the moment it's
-    // saved, not just the lines that existed at the original payment.
-    // ensurePurchaseRequestsForInvoice is itself idempotent, so calling it
-    // on every qualifying save (not just the one that crossed zero) is safe.
-    if (new Decimal(result.paidAmount.toString()).gt(0)) {
-      await ensurePurchaseRequestsForInvoice(tx, id);
-    }
-
-    return result;
-  });
+    throw err;
+  }
   if (!updated) {
-    return NextResponse.json(
-      { error: `Invoice number ${data.invoiceNumber} is already used by another invoice` },
-      { status: 409 }
-    );
+    return NextResponse.json({ error: "Invoice number already exists" }, { status: 409 });
   }
 
   await writeAuditLog({

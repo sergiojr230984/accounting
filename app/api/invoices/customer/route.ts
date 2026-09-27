@@ -352,13 +352,10 @@ export async function POST(request: Request) {
     }
     // Backstop only: resolveNewDocumentNumber's lock already serializes
     // number assignment, but if the DB's own unique constraint on
-    // (invoiceNumber, customerId) ever does reject an insert (P2002), it
-    // must be a clean 409, not an unhandled 500.
+    // invoiceNumber ever does reject an insert (P2002), it must be a clean
+    // 409, not an unhandled 500.
     if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002") {
-      return NextResponse.json(
-        { error: "Invoice number already exists for this customer" },
-        { status: 409 }
-      );
+      return NextResponse.json({ error: "Invoice number already exists" }, { status: 409 });
     }
     throw err;
   }

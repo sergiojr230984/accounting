@@ -422,7 +422,25 @@ export default function NewCustomerInvoicePage() {
       });
       if (!res.ok) {
         const d = await res.json().catch(() => ({}));
-        setError(d.error?.formErrors?.[0] ?? (typeof d.error === "string" ? d.error : "Failed to create"));
+        const message = d.error?.formErrors?.[0] ?? (typeof d.error === "string" ? d.error : "Failed to create");
+        // 409 on invoiceNumber means someone else just claimed this exact
+        // number (invoiceNumber is a single company-wide sequence -- see
+        // lib/next-number.ts) between this page loading and Save. Pull a
+        // fresh next number rather than leaving the now-stale one in the
+        // field for the user to notice and fix by hand.
+        if (res.status === 409 && typeof d.error === "string" && d.error.toLowerCase().includes("invoice number")) {
+          const fresh = await fetch("/api/invoices/customer/next-number")
+            .then((r) => (r.ok ? r.json() : null))
+            .catch(() => null);
+          if (fresh?.nextNumber) setInvoiceNumber(fresh.nextNumber);
+          setError(
+            fresh?.nextNumber
+              ? `${message} — advanced to the next available number (${fresh.nextNumber}). Review and click Save again.`
+              : `${message} Refresh the page and try again.`
+          );
+        } else {
+          setError(message);
+        }
         return;
       }
       const inv = await res.json();
