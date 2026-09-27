@@ -457,3 +457,65 @@ describe("estimate list search — matches server-side, not just the currently l
     expect(searched.body.total).toBe(1);
   });
 });
+
+// Same incident as tests/invoices.test.ts's "invoice numbers are unique
+// company-wide" block -- estimates had the identical per-customer-only
+// uniqueness rule and the identical preview-not-reservation number field.
+describe("estimate numbers are unique company-wide, not per customer", () => {
+  let otherCustomerId: string;
+
+  beforeAll(async () => {
+    const res = await admin.postJson<{ id: string }>("/api/customers", {
+      name: "Estimate Numbering Other Customer",
+    });
+    otherCustomerId = res.body.id;
+  });
+
+  const estimateFor = (cid: string, estimateNumber?: string) => ({
+    customerId: cid,
+    ...(estimateNumber !== undefined ? { estimateNumber } : {}),
+    estimateDate: "2026-01-01",
+    items: [{ description: "x", quantity: "1", unitPrice: "1" }],
+  });
+
+  it("two users saving the same suggested number for different customers get different numbers", async () => {
+    const { body: next } = await admin.getJson<{ nextNumber: string }>("/api/estimates/next-number");
+    const results = await Promise.all(
+      Array.from({ length: 6 }, (_, i) =>
+        admin.postJson<{ estimateNumber: string }>(
+          "/api/estimates",
+          estimateFor(i % 2 === 0 ? customerId : otherCustomerId, next.nextNumber)
+        )
+      )
+    );
+    expect(results.map((r) => r.status)).toEqual(Array(6).fill(201));
+    const numbers = results.map((r) => r.body.estimateNumber);
+    expect(new Set(numbers).size).toBe(6);
+    expect(numbers).toContain(next.nextNumber);
+  });
+
+  it("assigns the next number server-side when none is submitted", async () => {
+    const { body: next } = await admin.getJson<{ nextNumber: string }>("/api/estimates/next-number");
+    const res = await admin.postJson<{ estimateNumber: string }>("/api/estimates", estimateFor(customerId));
+    expect(res.status).toBe(201);
+    expect(res.body.estimateNumber).toBe(next.nextNumber);
+  });
+
+  it("rejects a custom (non-system) number already used by a different customer's estimate", async () => {
+    const estimateNumber = `EST-XCUST-DUP-${Date.now()}`;
+    const first = await admin.postJson("/api/estimates", estimateFor(customerId, estimateNumber));
+    expect(first.status).toBe(201);
+    const second = await admin.postJson("/api/estimates", estimateFor(otherCustomerId, estimateNumber));
+    expect(second.status).toBe(409);
+  });
+
+  it("rejects editing an estimate's number to one another customer's estimate already uses", async () => {
+    const taken = `EST-XCUST-EDIT-${Date.now()}`;
+    const a = await admin.postJson("/api/estimates", estimateFor(customerId, taken));
+    expect(a.status).toBe(201);
+    const b = await admin.postJson<{ id: string }>("/api/estimates", estimateFor(otherCustomerId, `${taken}-B`));
+    expect(b.status).toBe(201);
+    const patch = await admin.postJson(`/api/estimates/${b.body.id}`, { estimateNumber: taken }, "PATCH");
+    expect(patch.status).toBe(409);
+  });
+});

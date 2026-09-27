@@ -160,6 +160,8 @@ export default function NewEstimatePage() {
                   order but is easy to mistrust when the number itself looks
                   out of sequence. Always the system-assigned next number. */}
               <input className="input bg-gray-50 text-gray-500 cursor-not-allowed" readOnly {...register("estimateNumber")} />
+              {/* A preview, not a reservation -- see the matching note on invoices/customer/new. */}
+              <p className="text-xs text-gray-400 mt-1">Final number is confirmed when you save.</p>
               {errors.estimateNumber && <p className="text-red-500 text-xs mt-1">{errors.estimateNumber.message}</p>}
             </div>
 

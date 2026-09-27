@@ -1200,3 +1200,100 @@ describe("invoice list search — matches across the whole dataset, not just the
     expect(searched.body.invoices[0]?.id).toBe(created.body.id);
   });
 });
+
+// Real incident (2026-09): two people opened "New invoice" at the same
+// time, both were shown the same system-suggested number (Inv 1393), and
+// both saves succeeded because they were for different customers -- the
+// only uniqueness rule was per-(invoiceNumber, customerId). An invoice
+// number must be unique across the whole company, not per customer.
+describe("invoice numbers are unique company-wide, not per customer", () => {
+  let otherCustomerId: string;
+
+  beforeAll(async () => {
+    const res = await admin.postJson<{ id: string }>("/api/customers", {
+      name: "Invoice Numbering Other Customer",
+    });
+    otherCustomerId = res.body.id;
+  });
+
+  const invoiceFor = (cid: string, invoiceNumber?: string) => ({
+    customerId: cid,
+    ...(invoiceNumber !== undefined ? { invoiceNumber } : {}),
+    invoiceDate: "2026-01-01",
+    dueDate: "2026-01-31",
+    items: [{ description: "x", quantity: "1", unitPrice: "1" }],
+  });
+
+  it("two users saving the same suggested number for different customers get different numbers", async () => {
+    const { body: next } = await admin.getJson<{ nextNumber: string }>("/api/invoices/customer/next-number");
+    // Both "users" loaded the New Invoice page before either saved, so both
+    // submit the same suggested number -- concurrently, for different
+    // customers.
+    const results = await Promise.all(
+      Array.from({ length: 6 }, (_, i) =>
+        admin.postJson<{ invoiceNumber: string }>(
+          "/api/invoices/customer",
+          invoiceFor(i % 2 === 0 ? customerId : otherCustomerId, next.nextNumber)
+        )
+      )
+    );
+    expect(results.map((r) => r.status)).toEqual(Array(6).fill(201));
+    const numbers = results.map((r) => r.body.invoiceNumber);
+    expect(new Set(numbers).size).toBe(6);
+    expect(numbers).toContain(next.nextNumber);
+  });
+
+  it("a stale suggested number (already used by another customer's invoice) is replaced with the next free one", async () => {
+    const { body: next } = await admin.getJson<{ nextNumber: string }>("/api/invoices/customer/next-number");
+    const first = await admin.postJson<{ invoiceNumber: string }>("/api/invoices/customer", invoiceFor(customerId, next.nextNumber));
+    expect(first.status).toBe(201);
+    expect(first.body.invoiceNumber).toBe(next.nextNumber);
+
+    const second = await admin.postJson<{ invoiceNumber: string }>("/api/invoices/customer", invoiceFor(otherCustomerId, next.nextNumber));
+    expect(second.status).toBe(201);
+    expect(second.body.invoiceNumber).not.toBe(next.nextNumber);
+  });
+
+  it("assigns the next number server-side when none is submitted", async () => {
+    const { body: next } = await admin.getJson<{ nextNumber: string }>("/api/invoices/customer/next-number");
+    const res = await admin.postJson<{ invoiceNumber: string }>("/api/invoices/customer", invoiceFor(customerId));
+    expect(res.status).toBe(201);
+    expect(res.body.invoiceNumber).toBe(next.nextNumber);
+  });
+
+  it("rejects a custom (non-system) number already used by a different customer's invoice", async () => {
+    const invoiceNumber = `XCUST-DUP-${Date.now()}`;
+    const first = await admin.postJson("/api/invoices/customer", invoiceFor(customerId, invoiceNumber));
+    expect(first.status).toBe(201);
+    const second = await admin.postJson("/api/invoices/customer", invoiceFor(otherCustomerId, invoiceNumber));
+    expect(second.status).toBe(409);
+  });
+
+  it("rejects editing an invoice's number to one another customer's invoice already uses", async () => {
+    const taken = `XCUST-EDIT-${Date.now()}`;
+    const a = await admin.postJson("/api/invoices/customer", invoiceFor(customerId, taken));
+    expect(a.status).toBe(201);
+    const b = await admin.postJson<{ id: string }>("/api/invoices/customer", invoiceFor(otherCustomerId, `${taken}-B`));
+    expect(b.status).toBe(201);
+    const patch = await admin.postJson(`/api/invoices/customer/${b.body.id}`, { invoiceNumber: taken }, "PATCH");
+    expect(patch.status).toBe(409);
+  });
+
+  it("converting an estimate never reuses a number a regular invoice already took", async () => {
+    const { body: next } = await admin.getJson<{ nextNumber: string }>("/api/invoices/customer/next-number");
+    const est = await admin.postJson<{ id: string }>("/api/estimates", {
+      customerId: otherCustomerId,
+      estimateNumber: `EST-XCONV-${Date.now()}`,
+      estimateDate: "2026-01-01",
+      items: [{ description: "x", quantity: "1", unitPrice: "1" }],
+    });
+    const [inv, conv] = await Promise.all([
+      admin.postJson<{ invoiceNumber: string }>("/api/invoices/customer", invoiceFor(customerId, next.nextNumber)),
+      admin.postJson<{ invoiceId: string }>(`/api/estimates/${est.body.id}/convert`, {}),
+    ]);
+    expect(inv.status).toBe(201);
+    expect(conv.status).toBe(200);
+    const converted = await admin.getJson<{ invoiceNumber: string }>(`/api/invoices/customer/${conv.body.invoiceId}`);
+    expect(converted.body.invoiceNumber).not.toBe(inv.body.invoiceNumber);
+  });
+});

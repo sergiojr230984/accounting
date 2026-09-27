@@ -5,7 +5,7 @@ import { requireReadAccess } from "@/lib/api";
 import { prisma } from "@/lib/prisma";
 import { initializeDatabase } from "@/lib/init-db";
 import { computeLineTotals } from "@/lib/money";
-import { claimSequenceNumber } from "@/lib/next-number";
+import { claimSequenceNumber, resolveNewDocumentNumber } from "@/lib/next-number";
 import { z } from "zod";
 import Decimal from "decimal.js";
 
@@ -34,7 +34,9 @@ const appliedFeeSchema = z.object({
 
 const estimateSchema = z.object({
   customerId: z.string().min(1),
-  estimateNumber: z.string().min(1),
+  // Optional: omitted -> the server assigns the next number. See
+  // lib/next-number.ts's resolveNewDocumentNumber.
+  estimateNumber: z.string().min(1).optional(),
   estimateDate: z.string(),
   expiryDate: z.string().optional().nullable(),
   items: z.array(itemSchema).min(1),
@@ -106,7 +108,7 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
   }
 
-  const { customerId, estimateNumber, estimateDate, expiryDate, items, notes, appliedFees } = parsed.data;
+  const { customerId, estimateNumber: requestedNumber, estimateDate, expiryDate, items, notes, appliedFees } = parsed.data;
 
   // customerId is a foreign key the DB will reject with a raw constraint-
   // violation error if it references a row that doesn't exist -- checked
@@ -116,16 +118,9 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Selected customer no longer exists." }, { status: 404 });
   }
 
-  // Fast path only -- estimateNumber is globally unique (issued from one
-  // company-wide counter, see the doc comment on Estimate.estimateNumber in
-  // prisma/schema.prisma), not just per-customer, and two concurrent
-  // requests can both pass this check before either has inserted. The DB's
-  // own unique constraint on estimateNumber is the real guard, enforced via
-  // the P2002 catch below.
-  const existing = await prisma.estimate.findUnique({ where: { estimateNumber } });
-  if (existing) {
-    return NextResponse.json({ error: "Estimate number already exists" }, { status: 409 });
-  }
+  // Estimate-number uniqueness is enforced company-wide (not just per
+  // customer) inside the create transaction below -- see
+  // resolveNewDocumentNumber in lib/next-number.ts.
 
   const { lines: lineTotals, subtotal, taxAmount } = computeLineTotals(
     items.map((item) => ({ quantity: item.quantity, price: item.unitPrice, taxRate: item.taxRate }))
@@ -187,6 +182,9 @@ export async function POST(request: Request) {
   let estimate;
   try {
     estimate = await prisma.$transaction(async (tx) => {
+      const resolved = await resolveNewDocumentNumber(tx, "estimate", requestedNumber, ESTIMATE_PREFIX);
+      if ("conflict" in resolved) return null;
+      const estimateNumber = resolved.number;
       const created = await tx.estimate.create({
         data: {
           customerId,
@@ -215,17 +213,18 @@ export async function POST(request: Request) {
       return created;
     });
   } catch (err) {
-    // The findUnique check above is only a fast path -- it can't stop two
-    // concurrent requests for the same estimateNumber from both passing it
-    // before either has inserted. When that happens, the DB's own unique
-    // constraint on estimateNumber rejects the second insert with a P2002
-    // error. Without this catch that surfaced as an unhandled 500 instead of
-    // the same clean 409 the fast path returns -- mirrors the same catch on
-    // customer invoices (app/api/invoices/customer/route.ts).
+    // Backstop only (the numbering lock already serializes this) -- a
+    // unique-constraint hit must be a clean 409, never a 500.
     if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002") {
       return NextResponse.json({ error: "Estimate number already exists" }, { status: 409 });
     }
     throw err;
+  }
+  if (!estimate) {
+    return NextResponse.json(
+      { error: `Estimate number ${requestedNumber} is already used by another estimate` },
+      { status: 409 }
+    );
   }
 
   return NextResponse.json(estimate, { status: 201 });

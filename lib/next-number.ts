@@ -62,3 +62,111 @@ export async function claimSequenceNumber(
     WHERE "id" = 'default'
   `;
 }
+
+type NumberingTx = Pick<PrismaClient, "$executeRaw" | "$queryRaw">;
+
+/**
+ * Document types whose numbers must be unique across the whole company.
+ * The DB's own unique constraints are only per-(number, customerId), so on
+ * their own they let two different customers' documents share a number --
+ * which is exactly what happened in production (two invoices #1393 saved
+ * by two users at the same time for two different customers). The helpers
+ * below are the company-wide guard. Supplier bills are deliberately NOT
+ * here: a bill's number is the supplier's own number, so two suppliers
+ * legitimately reuse the same one.
+ */
+const NUMBERED_DOCS = {
+  customerInvoice: { table: "CustomerInvoice", column: "invoiceNumber", field: "customerInvoiceNextSeq" },
+  estimate: { table: "Estimate", column: "estimateNumber", field: "estimateNextSeq" },
+} as const satisfies Record<string, { table: string; column: string; field: SequenceField }>;
+
+export type NumberedDoc = keyof typeof NUMBERED_DOCS;
+
+/**
+ * Serializes every number-assigning write for one document type (create,
+ * number-changing edit, estimate->invoice conversion) for the rest of the
+ * transaction. Without it, "is this number free?" followed by the insert
+ * is a check-then-act race: two users saving at the same moment both see
+ * the number as free and both insert it. Transaction-scoped, so it is
+ * released automatically on commit/rollback.
+ */
+export async function lockDocumentNumbering(tx: NumberingTx, doc: NumberedDoc): Promise<void> {
+  const key = `numbering:${NUMBERED_DOCS[doc].table}`;
+  // $executeRaw, not $queryRaw: pg_advisory_xact_lock returns `void`, which
+  // Prisma can't deserialize as a result column.
+  await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${key}))`;
+}
+
+/** True if any document of this type (any customer), other than `excludeId`, already uses `number`. */
+export async function isDocumentNumberTaken(
+  tx: NumberingTx,
+  doc: NumberedDoc,
+  number: string,
+  excludeId?: string
+): Promise<boolean> {
+  const { table, column } = NUMBERED_DOCS[doc];
+  const rows = await tx.$queryRaw<{ id: string }[]>`
+    SELECT "id" FROM ${Prisma.raw(`"${table}"`)}
+    WHERE ${Prisma.raw(`"${column}"`)} = ${number}
+      AND "id" <> ${excludeId ?? ""}
+    LIMIT 1
+  `;
+  return rows.length > 0;
+}
+
+/**
+ * Atomically takes the next value off the persisted counter, skipping any
+ * number that's somehow already in use (e.g. a manually-set number from
+ * before the counter existed).
+ */
+async function takeNextFreeNumber(tx: NumberingTx, doc: NumberedDoc, prefix: string): Promise<string> {
+  const { field } = NUMBERED_DOCS[doc];
+  const columnIdent = Prisma.raw(`"${field}"`);
+  for (let attempt = 0; attempt < 1000; attempt++) {
+    const rows = await tx.$queryRaw<{ seq: number }[]>`
+      UPDATE "CompanyProfile" SET ${columnIdent} = ${columnIdent} + 1
+      WHERE "id" = 'default'
+      RETURNING ${columnIdent} - 1 AS "seq"
+    `;
+    if (rows.length === 0) {
+      // No settings row yet -- create it with schema defaults and retry.
+      await tx.$executeRaw`INSERT INTO "CompanyProfile" ("id", "updatedAt") VALUES ('default', NOW()) ON CONFLICT ("id") DO NOTHING`;
+      continue;
+    }
+    const candidate = formatSequenceNumber(Number(rows[0].seq), prefix);
+    if (!(await isDocumentNumberTaken(tx, doc, candidate))) return candidate;
+  }
+  throw new Error(`Could not find a free ${doc} number`);
+}
+
+export type ResolvedNumber = { number: string } | { conflict: string };
+
+/**
+ * Decides the number a new document is actually saved under. Must be
+ * called inside the same transaction as the insert (it takes the
+ * numbering lock, so the "is it free" check and the insert are atomic
+ * with respect to every other save).
+ *
+ * - No number requested -> the next free number from the counter.
+ * - Requested number is free company-wide -> used as-is.
+ * - Requested number is taken, and it's a system-format number
+ *   (`${prefix}<digits>`) -> it was the "next number" preview the New
+ *   Invoice/Estimate page showed when it loaded, which someone else has
+ *   since used. That preview was never a reservation, so the document just
+ *   gets the next free number instead of failing the save.
+ * - Requested number is taken and custom-formatted -> `{ conflict }`; the
+ *   caller must reject with a 409.
+ */
+export async function resolveNewDocumentNumber(
+  tx: NumberingTx,
+  doc: NumberedDoc,
+  requested: string | undefined,
+  prefix: string
+): Promise<ResolvedNumber> {
+  await lockDocumentNumbering(tx, doc);
+  if (requested) {
+    if (!(await isDocumentNumberTaken(tx, doc, requested))) return { number: requested };
+    if (parseSequenceFromNumber(requested, prefix) === null) return { conflict: requested };
+  }
+  return { number: await takeNextFreeNumber(tx, doc, prefix) };
+}
