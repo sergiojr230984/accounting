@@ -5,7 +5,7 @@ import { requireAuth, requireReadAccess, scopeInvoicesToOwnEmployee } from "@/li
 import { syncProductCatalog } from "@/lib/product-catalog";
 import { writeAuditLog, extractMeta, actorFromSession } from "@/lib/audit";
 import { computeLineTotals } from "@/lib/money";
-import { claimSequenceNumber } from "@/lib/next-number";
+import { claimSequenceNumber, resolveNewDocumentNumber } from "@/lib/next-number";
 import { ensurePurchaseRequestsForInvoice } from "@/lib/purchase-requests";
 import { z } from "zod";
 import Decimal from "decimal.js";
@@ -45,7 +45,11 @@ const appliedFeeSchema = z.object({
 
 const invoiceSchema = z.object({
   customerId: z.string().min(1),
-  invoiceNumber: z.string().min(1),
+  // Optional: omitted -> the server assigns the next number. The New
+  // Invoice page still sends the number it previewed on load; see
+  // lib/next-number.ts's resolveNewDocumentNumber for what happens when
+  // someone else used that number first.
+  invoiceNumber: z.string().min(1).optional(),
   invoiceDate: z.string(),
   dueDate: z.string(),
   items: z.array(itemSchema).min(1),
@@ -124,6 +128,12 @@ export async function GET(request: Request) {
   return NextResponse.json({ invoices, total, page, limit });
 }
 
+class InvoiceNumberTakenError extends Error {
+  constructor(readonly invoiceNumber: string) {
+    super(`Invoice number ${invoiceNumber} is already in use`);
+  }
+}
+
 export async function POST(request: Request) {
   const guard = await requireAuth();
   if (guard instanceof NextResponse) return guard;
@@ -136,7 +146,7 @@ export async function POST(request: Request) {
 
   const {
     customerId,
-    invoiceNumber,
+    invoiceNumber: requestedNumber,
     invoiceDate,
     dueDate,
     items,
@@ -199,20 +209,9 @@ export async function POST(request: Request) {
     }
   }
 
-  // Duplicate check -- a fast path only. Two requests for the same
-  // invoiceNumber/customerId can both pass this check before either has
-  // inserted (a classic check-then-act race), so it doesn't by itself
-  // guarantee uniqueness; the DB's own unique constraint on
-  // (invoiceNumber, customerId) is the real guard, enforced below.
-  const existing = await prisma.customerInvoice.findUnique({
-    where: { invoiceNumber_customerId: { invoiceNumber, customerId } },
-  });
-  if (existing) {
-    return NextResponse.json(
-      { error: "Invoice number already exists for this customer" },
-      { status: 409 }
-    );
-  }
+  // Invoice-number uniqueness is enforced company-wide (not just per
+  // customer) inside the create transaction below -- see
+  // resolveNewDocumentNumber in lib/next-number.ts.
 
   const { lines: lineTotals, subtotal, taxAmount } = computeLineTotals(
     items.map((item) => ({ quantity: item.quantity, price: item.unitPrice, taxRate: item.taxRate }))
@@ -297,6 +296,9 @@ export async function POST(request: Request) {
   let invoice;
   try {
     invoice = await prisma.$transaction(async (tx) => {
+      const resolved = await resolveNewDocumentNumber(tx, "customerInvoice", requestedNumber, invoicePrefix);
+      if ("conflict" in resolved) throw new InvoiceNumberTakenError(resolved.conflict);
+      const invoiceNumber = resolved.number;
       const created = await tx.customerInvoice.create({
         data: {
           customerId,
@@ -342,12 +344,16 @@ export async function POST(request: Request) {
       return created;
     });
   } catch (err) {
-    // The findUnique check above is only a fast path -- it can't stop two
-    // concurrent requests for the same invoiceNumber/customerId from both
-    // passing it before either has inserted. When that happens, the DB's
-    // own unique constraint on (invoiceNumber, customerId) rejects the
-    // second insert with a P2002 error. Without this catch that surfaced as
-    // an unhandled 500 instead of the same clean 409 the fast path returns.
+    if (err instanceof InvoiceNumberTakenError) {
+      return NextResponse.json(
+        { error: `Invoice number ${err.invoiceNumber} is already used by another invoice` },
+        { status: 409 }
+      );
+    }
+    // Backstop only: resolveNewDocumentNumber's lock already serializes
+    // number assignment, but if the DB's own unique constraint on
+    // (invoiceNumber, customerId) ever does reject an insert (P2002), it
+    // must be a clean 409, not an unhandled 500.
     if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002") {
       return NextResponse.json(
         { error: "Invoice number already exists for this customer" },

@@ -4,7 +4,8 @@ import { requireReadAccess } from "@/lib/api";
 import { prisma } from "@/lib/prisma";
 import { initializeDatabase } from "@/lib/init-db";
 import { computeLineTotals } from "@/lib/money";
-import { claimSequenceNumber } from "@/lib/next-number";
+import { claimSequenceNumber, resolveNewDocumentNumber } from "@/lib/next-number";
+import { Prisma } from "@prisma/client";
 import { z } from "zod";
 import Decimal from "decimal.js";
 
@@ -33,7 +34,9 @@ const appliedFeeSchema = z.object({
 
 const estimateSchema = z.object({
   customerId: z.string().min(1),
-  estimateNumber: z.string().min(1),
+  // Optional: omitted -> the server assigns the next number. See
+  // lib/next-number.ts's resolveNewDocumentNumber.
+  estimateNumber: z.string().min(1).optional(),
   estimateDate: z.string(),
   expiryDate: z.string().optional().nullable(),
   items: z.array(itemSchema).min(1),
@@ -105,7 +108,7 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
   }
 
-  const { customerId, estimateNumber, estimateDate, expiryDate, items, notes, appliedFees } = parsed.data;
+  const { customerId, estimateNumber: requestedNumber, estimateDate, expiryDate, items, notes, appliedFees } = parsed.data;
 
   // customerId is a foreign key the DB will reject with a raw constraint-
   // violation error if it references a row that doesn't exist -- checked
@@ -115,15 +118,9 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Selected customer no longer exists." }, { status: 404 });
   }
 
-  const existing = await prisma.estimate.findUnique({
-    where: { estimateNumber_customerId: { estimateNumber, customerId } },
-  });
-  if (existing) {
-    return NextResponse.json(
-      { error: "Estimate number already exists for this customer" },
-      { status: 409 }
-    );
-  }
+  // Estimate-number uniqueness is enforced company-wide (not just per
+  // customer) inside the create transaction below -- see
+  // resolveNewDocumentNumber in lib/next-number.ts.
 
   const { lines: lineTotals, subtotal, taxAmount } = computeLineTotals(
     items.map((item) => ({ quantity: item.quantity, price: item.unitPrice, taxRate: item.taxRate }))
@@ -182,34 +179,53 @@ export async function POST(request: Request) {
   // in one transaction -- see lib/next-number.ts's claimSequenceNumber doc
   // comment for why this is what actually guarantees a deleted estimate's
   // number is never reused.
-  const estimate = await prisma.$transaction(async (tx) => {
-    const created = await tx.estimate.create({
-      data: {
-        customerId,
-        estimateNumber,
-        estimateDate: new Date(estimateDate),
-        expiryDate: expiryDate ? new Date(expiryDate) : null,
-        subtotal: subtotal.toFixed(2),
-        taxAmount: taxAmount.toFixed(2),
-        totalAmount: totalAmount.toFixed(2),
-        appliedFees: appliedFees as unknown as object,
-        notes,
-        items: {
-          create: computedItems.map((item) => ({
-            description: item.description,
-            itemDescription: item.itemDescription ?? null,
-            quantity: item.quantity,
-            unitPrice: item.unitPrice,
-            taxRate: item.taxRate,
-            lineTotal: item.lineTotal,
-          })),
+  let estimate;
+  try {
+    estimate = await prisma.$transaction(async (tx) => {
+      const resolved = await resolveNewDocumentNumber(tx, "estimate", requestedNumber, ESTIMATE_PREFIX);
+      if ("conflict" in resolved) return null;
+      const estimateNumber = resolved.number;
+      const created = await tx.estimate.create({
+        data: {
+          customerId,
+          estimateNumber,
+          estimateDate: new Date(estimateDate),
+          expiryDate: expiryDate ? new Date(expiryDate) : null,
+          subtotal: subtotal.toFixed(2),
+          taxAmount: taxAmount.toFixed(2),
+          totalAmount: totalAmount.toFixed(2),
+          appliedFees: appliedFees as unknown as object,
+          notes,
+          items: {
+            create: computedItems.map((item) => ({
+              description: item.description,
+              itemDescription: item.itemDescription ?? null,
+              quantity: item.quantity,
+              unitPrice: item.unitPrice,
+              taxRate: item.taxRate,
+              lineTotal: item.lineTotal,
+            })),
+          },
         },
-      },
-      include: { customer: true, items: true },
+        include: { customer: true, items: true },
+      });
+      await claimSequenceNumber(tx, "estimateNextSeq", estimateNumber, ESTIMATE_PREFIX);
+      return created;
     });
-    await claimSequenceNumber(tx, "estimateNextSeq", estimateNumber, ESTIMATE_PREFIX);
-    return created;
-  });
+  } catch (err) {
+    // Backstop only (the numbering lock already serializes this) -- a
+    // unique-constraint hit must be a clean 409, never a 500.
+    if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002") {
+      return NextResponse.json({ error: "Estimate number already exists" }, { status: 409 });
+    }
+    throw err;
+  }
+  if (!estimate) {
+    return NextResponse.json(
+      { error: `Estimate number ${requestedNumber} is already used by another estimate` },
+      { status: 409 }
+    );
+  }
 
   return NextResponse.json(estimate, { status: 201 });
 }

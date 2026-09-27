@@ -553,6 +553,10 @@ export default function NewCustomerInvoicePage() {
                     broke that expectation. Always the system-assigned next
                     number now; see /api/invoices/customer/next-number. */}
                 <input className="input bg-gray-50 text-gray-500 cursor-not-allowed" value={invoiceNumber} readOnly />
+                {/* A preview, not a reservation: if someone else saves an invoice
+                    first, this one gets the next free number on save (see
+                    resolveNewDocumentNumber in lib/next-number.ts). */}
+                <p className="text-xs text-gray-400 mt-1">Final number is confirmed when you save.</p>
               </div>
 
               <div>

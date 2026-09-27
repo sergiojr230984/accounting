@@ -3,7 +3,7 @@ import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { initializeDatabase } from "@/lib/init-db";
 import { computeLineTotals } from "@/lib/money";
-import { claimSequenceNumber } from "@/lib/next-number";
+import { claimSequenceNumber, isDocumentNumberTaken, lockDocumentNumbering } from "@/lib/next-number";
 import { z } from "zod";
 import Decimal from "decimal.js";
 
@@ -192,8 +192,11 @@ export async function PATCH(
     updateData.taxAmount = taxAmount.toFixed(2);
     updateData.totalAmount = subtotal.plus(taxAmount).plus(feesSum).toFixed(2);
 
-    await prisma.estimateItem.deleteMany({ where: { estimateId: id } });
+    // Replaced as part of the update itself (nested deleteMany), not a
+    // separate delete beforehand -- so a rejected save (e.g. the 409 below)
+    // can't leave the estimate with its old items already deleted.
     updateData.items = {
+      deleteMany: {},
       create: computedItems.map((item) => ({
         description: item.description,
         itemDescription: item.itemDescription ?? null,
@@ -207,8 +210,15 @@ export async function PATCH(
 
   // If the estimate number is being changed here, the sequence counter
   // still needs to account for it -- see claimSequenceNumber's doc comment
-  // in lib/next-number.ts.
+  // in lib/next-number.ts. A *changed* number must also be free
+  // company-wide, not just for this customer -- same rule and reasoning as
+  // the customer-invoice PATCH (app/api/invoices/customer/[id]/route.ts).
+  const numberChanged = !!data.estimateNumber && data.estimateNumber !== existing.estimateNumber;
   const updated = await prisma.$transaction(async (tx) => {
+    if (numberChanged) {
+      await lockDocumentNumbering(tx, "estimate");
+      if (await isDocumentNumberTaken(tx, "estimate", data.estimateNumber!, id)) return null;
+    }
     const result = await tx.estimate.update({
       where: { id },
       data: updateData,
@@ -219,6 +229,12 @@ export async function PATCH(
     }
     return result;
   });
+  if (!updated) {
+    return NextResponse.json(
+      { error: `Estimate number ${data.estimateNumber} is already used by another estimate` },
+      { status: 409 }
+    );
+  }
 
   return NextResponse.json(updated);
 }

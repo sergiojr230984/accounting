@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { initializeDatabase } from "@/lib/init-db";
-import { formatSequenceNumber, claimSequenceNumber } from "@/lib/next-number";
+import { claimSequenceNumber, resolveNewDocumentNumber } from "@/lib/next-number";
 
 export async function POST(
   _request: Request,
@@ -34,8 +34,12 @@ export async function POST(
     // `||`, not `??` -- see the matching comment in
     // app/api/invoices/customer/next-number/route.ts.
     const prefix = profile?.customerInvoicePrefix || "INV-2026-";
-    const nextSeq = profile?.customerInvoiceNextSeq ?? 1001;
-    const invoiceNumber = formatSequenceNumber(nextSeq, prefix);
+    // Same company-wide numbering lock + next-free-number logic as a regular
+    // invoice create, so a conversion and a New Invoice save happening at
+    // the same moment can't both take the same number.
+    const resolved = await resolveNewDocumentNumber(tx, "customerInvoice", undefined, prefix);
+    if ("conflict" in resolved) throw new Error("unreachable: no number was requested");
+    const invoiceNumber = resolved.number;
 
     const today = new Date();
     const dueDate = new Date(today);

@@ -4,7 +4,7 @@ import { requireAuth, requireRole } from "@/lib/api";
 import { syncProductCatalog } from "@/lib/product-catalog";
 import { writeAuditLog, extractMeta, actorFromSession, diffChanges } from "@/lib/audit";
 import { computeLineTotals } from "@/lib/money";
-import { claimSequenceNumber } from "@/lib/next-number";
+import { claimSequenceNumber, isDocumentNumberTaken, lockDocumentNumbering } from "@/lib/next-number";
 import { ensurePurchaseRequestsForInvoice } from "@/lib/purchase-requests";
 import { z } from "zod";
 import Decimal from "decimal.js";
@@ -465,7 +465,19 @@ export async function PATCH(
   // POST), the sequence counter still needs to account for it -- otherwise
   // a manual bump-up during an edit wouldn't protect that number from ever
   // being suggested/reused later. See lib/next-number.ts's claimSequenceNumber.
+  //
+  // A *changed* number must also be free company-wide, not just for this
+  // customer (the DB constraint is per-customer only) -- checked under the
+  // same numbering lock creates take, so it can't race a concurrent create.
+  // An unchanged number is deliberately not re-checked: the edit page always
+  // resubmits it, and an invoice that already shares a number from before
+  // this check existed must still be editable.
+  const numberChanged = !!data.invoiceNumber && data.invoiceNumber !== existing.invoiceNumber;
   const updated = await prisma.$transaction(async (tx) => {
+    if (numberChanged) {
+      await lockDocumentNumbering(tx, "customerInvoice");
+      if (await isDocumentNumberTaken(tx, "customerInvoice", data.invoiceNumber!, id)) return null;
+    }
     const result = await tx.customerInvoice.update({
       where: { id },
       data: updateData,
@@ -492,6 +504,12 @@ export async function PATCH(
 
     return result;
   });
+  if (!updated) {
+    return NextResponse.json(
+      { error: `Invoice number ${data.invoiceNumber} is already used by another invoice` },
+      { status: 409 }
+    );
+  }
 
   await writeAuditLog({
     ...actorFromSession(guard),
