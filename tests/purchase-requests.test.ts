@@ -850,3 +850,109 @@ describe("Invoice Profitability report — line-level cost status", () => {
     expect(Number(afterRow?.grossProfit)).toBe(300); // 500 revenue - 200 cost
   });
 });
+
+// Real report (2026-09): after a payment was saved, the owner couldn't add
+// a clarifying detail to an existing line ("the dining set is black and
+// white", "the table is glass") -- not even after deleting the payment,
+// because the purchase_request the payment created still locks the line.
+// Text-only clarifications don't touch any money, so they're allowed on a
+// locked line; quantity/price/supplier/part number stay locked.
+describe("clarifying an existing line's wording after a payment", () => {
+  type Item = {
+    id: string;
+    description: string;
+    itemDescription: string | null;
+    quantity: string;
+    unitPrice: string;
+    taxRate: string;
+    supplierId: string | null;
+    partNumber: string | null;
+    purchaseRequest: { status: string } | null;
+  };
+
+  async function paidInvoice() {
+    const inv = await createInvoiceWithLines({ includeHouseLine: false });
+    const pay = await admin.postJson<{ payments: { id: string }[] }>(`/api/invoices/customer/${inv.id}/payments`, {
+      amount: "100",
+      paymentDate: "2026-01-05",
+    });
+    expect(pay.status).toBe(201);
+    const full = await admin.getJson<{ invoiceNumber: string; paymentStatus: string; totalAmount: string; items: Item[] }>(
+      `/api/invoices/customer/${inv.id}`
+    );
+    expect(full.body.items[0].purchaseRequest).not.toBeNull();
+    return { id: inv.id, paymentId: pay.body.payments[0].id, ...full.body };
+  }
+
+  const asSubmitted = (i: Item, overrides: Partial<Item> = {}) => {
+    const merged = { ...i, ...overrides };
+    return {
+      id: merged.id,
+      description: merged.description,
+      itemDescription: merged.itemDescription ?? "",
+      quantity: merged.quantity,
+      unitPrice: merged.unitPrice,
+      taxRate: merged.taxRate,
+      supplierId: merged.supplierId ?? undefined,
+      partNumber: merged.partNumber ?? undefined,
+    };
+  };
+
+  it("allows changing a paid line's description, keeps the same row, and updates its pending purchase request", async () => {
+    const inv = await paidInvoice();
+    const item = inv.items[0];
+    const clarified = `${item.description} -- NEGRO Y BLANCO`;
+
+    const patch = await admin.postJson(
+      `/api/invoices/customer/${inv.id}`,
+      { items: [asSubmitted(item, { description: clarified })] },
+      "PATCH"
+    );
+    expect(patch.status).toBe(200);
+
+    const after = await admin.getJson<{ totalAmount: string; items: Item[] }>(`/api/invoices/customer/${inv.id}`);
+    expect(after.body.items).toHaveLength(1);
+    expect(after.body.items[0].id).toBe(item.id);
+    expect(after.body.items[0].description).toBe(clarified);
+    expect(after.body.totalAmount).toBe(inv.totalAmount);
+
+    // Purchasing orders from the purchase request's own description, so the
+    // clarification has to reach it too while it's still pending.
+    const report = await admin.getJson<{ rows: { invoiceNumber: string; description: string }[] }>(
+      `/api/reports?type=items-ordered&status=PENDING`
+    );
+    const row = report.body.rows.find((r) => r.invoiceNumber === inv.invoiceNumber);
+    expect(row?.description).toBe(clarified);
+  });
+
+  it("allows it after the payment was deleted too (the purchase request still exists)", async () => {
+    const inv = await paidInvoice();
+    const del = await admin.postJson(`/api/invoices/customer/${inv.id}/payments/${inv.paymentId}`, {}, "DELETE");
+    expect(del.status).toBe(200);
+    const item = inv.items[0];
+
+    const patch = await admin.postJson(
+      `/api/invoices/customer/${inv.id}`,
+      { items: [asSubmitted(item, { description: `${item.description} -- MESA DE CRISTAL` })] },
+      "PATCH"
+    );
+    expect(patch.status).toBe(200);
+  });
+
+  it("still blocks changing a paid line's quantity or price", async () => {
+    const inv = await paidInvoice();
+    const item = inv.items[0];
+    const qty = await admin.postJson(
+      `/api/invoices/customer/${inv.id}`,
+      { items: [asSubmitted(item, { quantity: "2" })] },
+      "PATCH"
+    );
+    expect(qty.status).toBe(409);
+    const price = await admin.postJson(
+      `/api/invoices/customer/${inv.id}`,
+      { items: [asSubmitted(item, { unitPrice: "1" })] },
+      "PATCH"
+    );
+    expect(price.status).toBe(409);
+  });
+});

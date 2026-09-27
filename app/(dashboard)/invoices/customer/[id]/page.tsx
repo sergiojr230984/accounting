@@ -89,6 +89,17 @@ interface InvoiceDetail {
 }
 
 interface EmployeeOpt { id: string; name: string; commissionRate: string }
+
+// `XX/PARTNUMBER`, or just `XX` when a line has a supplier but no part
+// number -- previously such a line printed nothing at all, so the
+// warehouse (Coaster, Stanza, ...) picked for it looked like it was never
+// saved. Used by both the on-screen table and the PDF so they can't drift.
+function formatItemCode(item: { supplier: { code: string | null } | null; partNumber: string | null }): string | null {
+  const code = item.supplier?.code;
+  if (!code) return null;
+  const part = item.partNumber?.trim();
+  return part ? `${code}/${part}` : code;
+}
 interface FeeOption { id: string; label: string; rate: number }
 interface SupplierCodeOpt { id: string; name: string; code: string | null; active: boolean }
 
@@ -246,6 +257,18 @@ export default function CustomerInvoiceDetailPage() {
   }, [watchedPaid, watchedDown, editing, invoice, setValue]);
 
   async function onSave(data: EditForm) {
+    // Same rule the New Invoice page enforces (invoices/customer/new): a
+    // line needs BOTH a supplier and a part number. Without this, a line
+    // added here with just a supplier saved fine but showed no item code
+    // on the invoice/PDF, and -- on a paid invoice -- never got a purchase
+    // request, since ensurePurchaseRequestsForInvoice skips lines missing
+    // either. Only lines added in this edit (no id) are checked; older
+    // lines predating item codes stay editable as-is.
+    const missingCode = data.items.find((i) => !i.id && (!i.supplierId || !i.partNumber?.trim()));
+    if (missingCode) {
+      setError(`"${missingCode.description || "New item"}" is missing a supplier or part number.`);
+      return;
+    }
     setSaving(true);
     setError("");
     try {
@@ -425,7 +448,7 @@ export default function CustomerInvoiceDetailPage() {
       customer: { ...invoice.customer, address: invoice.customerAddress ?? invoice.customer.address },
       items: invoice.items.map((i) => ({
         ...i,
-        itemCode: i.supplier?.code && i.partNumber ? `${i.supplier.code}/${i.partNumber}` : null,
+        itemCode: formatItemCode(i),
       })),
     };
   }
@@ -673,7 +696,17 @@ export default function CustomerInvoiceDetailPage() {
                     !!f.id && f.rate !== undefined
                 )}
                 onFeesChange={setComputedAppliedFees}
-                lockedCount={invoice.paymentStatus !== "UNPAID" ? invoice.items.length : 0}
+                // Same two conditions as the server's itemsLocked (see
+                // app/api/invoices/customer/[id]/route.ts): a recorded
+                // payment, OR a purchase request that outlived a deleted
+                // payment. Checking only paymentStatus showed those rows as
+                // editable and then the save was rejected.
+                lockedCount={
+                  invoice.paymentStatus !== "UNPAID" || invoice.items.some((i) => i.purchaseRequest)
+                    ? invoice.items.length
+                    : 0
+                }
+                allowLockedTextEdits
                 showItemCode
                 supplierOptions={suppliers}
               />
@@ -792,9 +825,9 @@ export default function CustomerInvoiceDetailPage() {
                   {invoice.items.map((item) => (
                     <tr key={item.id}>
                       <td className="py-2 text-gray-500">
-                        {item.supplier?.code && item.partNumber ? (
-                          <span className={`inline-block px-1.5 py-0.5 rounded text-xs font-mono ${item.supplier.isHouse ? "bg-amber-50 text-amber-700" : "bg-gray-100 text-gray-600"}`}>
-                            {item.supplier.code}/{item.partNumber}
+                        {formatItemCode(item) ? (
+                          <span className={`inline-block px-1.5 py-0.5 rounded text-xs font-mono ${item.supplier?.isHouse ? "bg-amber-50 text-amber-700" : "bg-gray-100 text-gray-600"}`}>
+                            {formatItemCode(item)}
                           </span>
                         ) : (
                           <span className="text-gray-300">—</span>
