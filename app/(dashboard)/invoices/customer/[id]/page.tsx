@@ -125,6 +125,7 @@ export default function CustomerInvoiceDetailPage() {
   const [paymentForm, setPaymentForm] = useState({ amount: "", paymentDate: new Date().toISOString().split("T")[0], notes: "" });
   const [paymentSubmitting, setPaymentSubmitting] = useState(false);
   const [paymentError, setPaymentError] = useState("");
+  const [deletePaymentError, setDeletePaymentError] = useState("");
 
   // Edit existing payment
   const [editingPaymentId, setEditingPaymentId] = useState<string | null>(null);
@@ -404,12 +405,20 @@ export default function CustomerInvoiceDetailPage() {
 
   async function handleDeletePayment(paymentId: string) {
     setDeletingPaymentId(paymentId);
+    setDeletePaymentError("");
     try {
       const res = await fetch(`/api/invoices/customer/${id}/payments/${paymentId}`, { method: "DELETE" });
       if (res.ok) {
         setConfirmDeletePaymentId(null);
         await load();
+      } else {
+        // Used to do nothing at all on failure -- same silent-failure shape
+        // CLAUDE.md warns about for Save. Body may not be JSON.
+        const d = await res.json().catch(() => ({}));
+        setDeletePaymentError(typeof d.error === "string" ? d.error : "Couldn't remove the payment");
       }
+    } catch {
+      setDeletePaymentError("Couldn't remove the payment");
     } finally {
       setDeletingPaymentId(null);
     }
@@ -1042,7 +1051,23 @@ export default function CustomerInvoiceDetailPage() {
                           <div className="text-xs text-gray-500 flex items-center gap-1 shrink-0">
                             {confirmDeletePaymentId === p.id ? (
                               <>
-                                <span className="text-red-600">Remove payment?</span>
+                                <span className="text-red-600">
+                                  Remove payment?
+                                  {/* Removing the last money on the invoice cancels its
+                                      pending purchase orders (server-side, see
+                                      cancelPendingPurchaseRequestsIfUnpaid) -- say so
+                                      before the click, not after. */}
+                                  {(() => {
+                                    const pending = invoice.items.filter((i) => i.purchaseRequest?.status === "PENDING").length;
+                                    let leavesZero = false;
+                                    try {
+                                      leavesZero = new Decimal(invoice.paidAmount || "0").minus(p.amount || "0").lte(0);
+                                    } catch {}
+                                    return pending > 0 && leavesZero
+                                      ? ` This also cancels ${pending} pending purchase order${pending !== 1 ? "s" : ""}.`
+                                      : "";
+                                  })()}
+                                </span>
                                 <button
                                   onClick={() => handleDeletePayment(p.id)}
                                   disabled={deletingPaymentId === p.id}
@@ -1075,6 +1100,7 @@ export default function CustomerInvoiceDetailPage() {
                       )}
                     </div>
                   ))}
+                  {deletePaymentError && <p className="text-red-600 text-sm mt-2">{deletePaymentError}</p>}
                 </div>
               ) : (
                 <p className="text-sm text-gray-400 text-center py-4">No payments recorded yet — click &ldquo;Record payment&rdquo; above to add one</p>

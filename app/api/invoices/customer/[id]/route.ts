@@ -6,7 +6,7 @@ import { syncProductCatalog } from "@/lib/product-catalog";
 import { writeAuditLog, extractMeta, actorFromSession, diffChanges } from "@/lib/audit";
 import { computeLineTotals } from "@/lib/money";
 import { claimSequenceNumber, isDocumentNumberTaken, lockDocumentNumbering } from "@/lib/next-number";
-import { ensurePurchaseRequestsForInvoice } from "@/lib/purchase-requests";
+import { cancelPendingPurchaseRequestsIfUnpaid, ensurePurchaseRequestsForInvoice } from "@/lib/purchase-requests";
 import { z } from "zod";
 import Decimal from "decimal.js";
 
@@ -562,6 +562,13 @@ export async function PATCH(
       // on every qualifying save (not just the one that crossed zero) is safe.
       if (new Decimal(result.paidAmount.toString()).gt(0)) {
         await ensurePurchaseRequestsForInvoice(tx, id);
+      } else if (data.paidAmount !== undefined && new Decimal(existing.paidAmount.toString()).gt(0)) {
+        // This save is what took Amount Paid to $0 -- same rule as deleting
+        // the last payment (see cancelPendingPurchaseRequestsIfUnpaid).
+        // Deliberately only on that transition, not on every save of an
+        // already-$0 invoice, so an unrelated edit never silently cancels
+        // anything.
+        await cancelPendingPurchaseRequestsIfUnpaid(tx, id);
       }
 
       return result;

@@ -323,15 +323,16 @@ describe("editing an invoice whose payment (and purchase_request) was later reve
     expect(patch.status).toBe(200);
     expect(patch.body.items?.length).toBe(2);
 
-    // The original item must still be the exact same row (same id) -- not
-    // deleted and recreated -- since the purchase_request still points at
-    // it by that id.
+    // Behavior change (owner decision 2026-09-28): correcting the payment
+    // back to $0 now cancels the pending purchase_request it created
+    // (cancelPendingPurchaseRequestsIfUnpaid), so the line is no longer
+    // pinned -- the edit goes through the normal unlocked path and neither
+    // line carries a purchase_request. Previously this asserted the
+    // original row survived with its purchase_request still attached.
     const afterEdit = await admin.getJson<{
       items: { id: string; description: string; purchaseRequest: { status: string } | null }[];
     }>(`/api/invoices/customer/${inv.id}`);
-    const stillThere = afterEdit.body.items.find((i) => i.id === originalItem.id);
-    expect(stillThere).toBeDefined();
-    expect(stillThere?.purchaseRequest).not.toBeNull();
+    expect(afterEdit.body.items.every((i) => i.purchaseRequest === null)).toBe(true);
     expect(afterEdit.body.items.some((i) => i.description === "Delivery")).toBe(true);
   });
 });
@@ -344,6 +345,11 @@ describe("deleting an invoice whose payment (and purchase_request) was later rev
   // failure shown to the user. DELETE's guard only checked paymentStatus, so
   // it walked straight into Postgres rejecting the delete via
   // PurchaseRequest's ON DELETE RESTRICT FK -- an uncaught, non-JSON 500.
+  // Since 2026-09-28 a reverted payment cancels PENDING purchase requests,
+  // so the one kind that still outlives it -- and still needs the
+  // forceable-delete path -- is a request purchasing already FULFILLED
+  // with a (not yet paid) supplier bill. That's what this builds now; it
+  // used to leave a PENDING request behind instead.
   async function invoiceWithRevertedPaymentAndPendingRequest() {
     const inv = await createInvoiceWithLines({ includeHouseLine: false });
     const pay = await admin.postJson<{ payments: { id: string }[] }>(`/api/invoices/customer/${inv.id}/payments`, {
@@ -351,6 +357,21 @@ describe("deleting an invoice whose payment (and purchase_request) was later rev
       paymentDate: "2026-01-05",
     });
     const paymentId = pay.body.payments[0].id;
+    const full = await admin.getJson<{ invoiceNumber: string }>(`/api/invoices/customer/${inv.id}`);
+    const report = await admin.getJson<{ rows: { id: string; invoiceNumber: string; quantity: string }[] }>(
+      `/api/reports?type=items-ordered&status=PENDING`
+    );
+    const row = report.body.rows.find((r) => r.invoiceNumber === full.body.invoiceNumber);
+    if (!row) throw new Error("expected a pending purchase request row");
+    const bill = await admin.postJson("/api/invoices/supplier", {
+      supplierId: realSupplierId,
+      invoiceNumber: `BILL-REV-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+      invoiceDate: "2026-01-06",
+      category: "COGS",
+      items: [{ description: "Sofa, brown leather", quantity: row.quantity, unitCost: "300", taxRate: "0" }],
+      purchaseRequestId: row.id,
+    });
+    expect(bill.status).toBe(201);
     await admin.postJson(
       `/api/invoices/customer/${inv.id}/payments/${paymentId}`,
       { amount: "0", paymentDate: "2026-01-05" },
@@ -383,6 +404,21 @@ describe("deleting an invoice whose payment (and purchase_request) was later rev
 
     const stillThere = await admin.getJson(`/api/invoices/customer/${id}`);
     expect(stillThere.status).toBe(200);
+  });
+
+  it("a reverted payment with only PENDING purchase requests leaves nothing behind, so a plain DELETE just works", async () => {
+    const inv = await createInvoiceWithLines({ includeHouseLine: false });
+    const pay = await admin.postJson<{ payments: { id: string }[] }>(`/api/invoices/customer/${inv.id}/payments`, {
+      amount: "500",
+      paymentDate: "2026-01-05",
+    });
+    await admin.postJson(
+      `/api/invoices/customer/${inv.id}/payments/${pay.body.payments[0].id}`,
+      { amount: "0", paymentDate: "2026-01-05" },
+      "PATCH"
+    );
+    const { status } = await admin.postJson(`/api/invoices/customer/${inv.id}`, {}, "DELETE");
+    expect(status).toBe(200);
   });
 
   it("force=true as an admin deletes the invoice and its dangling purchase_request", async () => {
@@ -925,7 +961,7 @@ describe("clarifying an existing line's wording after a payment", () => {
     expect(row?.description).toBe(clarified);
   });
 
-  it("allows it after the payment was deleted too (the purchase request still exists)", async () => {
+  it("allows it after the payment was deleted too", async () => {
     const inv = await paidInvoice();
     const del = await admin.postJson(`/api/invoices/customer/${inv.id}/payments/${inv.paymentId}`, {}, "DELETE");
     expect(del.status).toBe(200);
@@ -954,5 +990,106 @@ describe("clarifying an existing line's wording after a payment", () => {
       "PATCH"
     );
     expect(price.status).toBe(409);
+  });
+});
+
+// Owner decision (2026-09-28): removing the money from an invoice cancels
+// the purchase requests that money triggered, as long as purchasing hasn't
+// closed them with a supplier bill yet. "Removing the money" means the
+// invoice's paidAmount ends up at $0 by ANY path -- deleting the payment,
+// editing it down to $0, or the edit screen's own Amount Paid field -- so
+// the rule can't be sidestepped by using a different screen.
+describe("removing all payment cancels pending purchase requests", () => {
+  type Inv = {
+    invoiceNumber: string;
+    paidAmount: string;
+    items: { id: string; description: string; quantity: string; unitPrice: string; taxRate: string; supplierId: string | null; partNumber: string | null; purchaseRequest: { status: string } | null }[];
+    payments: { id: string }[];
+  };
+  const getInv = async (id: string) => (await admin.getJson<Inv>(`/api/invoices/customer/${id}`)).body;
+  const pendingRowFor = async (invoiceNumber: string) => {
+    const report = await admin.getJson<{ rows: { invoiceNumber: string }[] }>(`/api/reports?type=items-ordered&status=PENDING`);
+    return report.body.rows.find((r) => r.invoiceNumber === invoiceNumber);
+  };
+  async function paid(amount = "100") {
+    const inv = await createInvoiceWithLines({ includeHouseLine: false });
+    const pay = await admin.postJson<{ payments: { id: string }[] }>(`/api/invoices/customer/${inv.id}/payments`, {
+      amount,
+      paymentDate: "2026-01-05",
+    });
+    expect(pay.status).toBe(201);
+    const full = await getInv(inv.id);
+    expect(full.items[0].purchaseRequest?.status).toBe("PENDING");
+    return { id: inv.id, ...full };
+  }
+
+  it("deleting the only payment cancels the pending purchase request and unlocks the items", async () => {
+    const inv = await paid();
+    const del = await admin.postJson(`/api/invoices/customer/${inv.id}/payments/${inv.payments[0].id}`, {}, "DELETE");
+    expect(del.status).toBe(200);
+
+    const after = await getInv(inv.id);
+    expect(after.items[0].purchaseRequest).toBeNull();
+    expect(await pendingRowFor(inv.invoiceNumber)).toBeUndefined();
+
+    // Fully editable again -- quantity, not just wording.
+    const item = after.items[0];
+    const patch = await admin.postJson(
+      `/api/invoices/customer/${inv.id}`,
+      { items: [{ id: item.id, description: item.description, quantity: "2", unitPrice: item.unitPrice, taxRate: item.taxRate, supplierId: item.supplierId ?? undefined, partNumber: item.partNumber ?? undefined }] },
+      "PATCH"
+    );
+    expect(patch.status).toBe(200);
+  });
+
+  it("deleting one of two payments keeps the purchase request (money is still on the invoice)", async () => {
+    const inv = await paid("100");
+    const second = await admin.postJson(`/api/invoices/customer/${inv.id}/payments`, { amount: "50", paymentDate: "2026-01-06" });
+    expect(second.status).toBe(201);
+    const del = await admin.postJson(`/api/invoices/customer/${inv.id}/payments/${inv.payments[0].id}`, {}, "DELETE");
+    expect(del.status).toBe(200);
+    expect((await getInv(inv.id)).items[0].purchaseRequest?.status).toBe("PENDING");
+  });
+
+  it("editing the only payment down to $0 cancels it too", async () => {
+    const inv = await paid();
+    const edit = await admin.postJson(
+      `/api/invoices/customer/${inv.id}/payments/${inv.payments[0].id}`,
+      { amount: "0", paymentDate: "2026-01-05" },
+      "PATCH"
+    );
+    expect(edit.status).toBe(200);
+    expect((await getInv(inv.id)).items[0].purchaseRequest).toBeNull();
+  });
+
+  it("setting the invoice's Amount Paid back to 0 on the edit screen cancels it too", async () => {
+    const inv = await createInvoiceWithLines({ includeHouseLine: false });
+    const up = await admin.postJson(`/api/invoices/customer/${inv.id}`, { paidAmount: "100" }, "PATCH");
+    expect(up.status).toBe(200);
+    expect((await getInv(inv.id)).items[0].purchaseRequest?.status).toBe("PENDING");
+    const down = await admin.postJson(`/api/invoices/customer/${inv.id}`, { paidAmount: "0" }, "PATCH");
+    expect(down.status).toBe(200);
+    expect((await getInv(inv.id)).items[0].purchaseRequest).toBeNull();
+  });
+
+  it("never cancels a purchase request purchasing already closed with a supplier bill", async () => {
+    const inv = await paid("500");
+    const report = await admin.getJson<{ rows: { id: string; invoiceNumber: string; quantity: string }[] }>(
+      `/api/reports?type=items-ordered&status=PENDING`
+    );
+    const row = report.body.rows.find((r) => r.invoiceNumber === inv.invoiceNumber)!;
+    const bill = await admin.postJson("/api/invoices/supplier", {
+      supplierId: realSupplierId,
+      invoiceNumber: `BILL-KEEP-${Date.now()}`,
+      invoiceDate: "2026-01-06",
+      category: "COGS",
+      items: [{ description: "Sofa, brown leather", quantity: row.quantity, unitCost: "300", taxRate: "0" }],
+      purchaseRequestId: row.id,
+    });
+    expect(bill.status).toBe(201);
+
+    const del = await admin.postJson(`/api/invoices/customer/${inv.id}/payments/${inv.payments[0].id}`, {}, "DELETE");
+    expect(del.status).toBe(200);
+    expect((await getInv(inv.id)).items[0].purchaseRequest?.status).toBe("FULFILLED");
   });
 });
