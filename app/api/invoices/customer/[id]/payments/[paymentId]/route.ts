@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { writeAuditLog, extractMeta, actorFromSession, diffChanges } from "@/lib/audit";
+import { cancelPendingPurchaseRequestsIfUnpaid } from "@/lib/purchase-requests";
 import { z } from "zod";
 import Decimal from "decimal.js";
 
@@ -49,10 +50,6 @@ export async function PATCH(
     ? new Date(`${paymentDate}T12:00:00Z`)
     : new Date(paymentDate);
 
-  await prisma.payment.update({
-    where: { id: paymentId },
-    data: { amount, paymentDate: parsedDate, notes: notes || null },
-  });
 
   // Recompute paidAmount from all payments (other payments + updated amount)
   const otherPayments = invoice.payments.filter((p) => p.id !== paymentId);
@@ -72,16 +69,30 @@ export async function PATCH(
     paymentStatus = "PARTIALLY_PAID";
   }
 
-  const updated = await prisma.customerInvoice.update({
-    where: { id },
-    data: { paidAmount: newPaidAmount.toFixed(2), paymentStatus },
-    include: {
-      customer: true,
-      items: true,
-      payments: { orderBy: { paymentDate: "desc" } },
-      files: true,
-      employee: { select: { id: true, name: true } },
-    },
+  // One transaction: the payment, the invoice's recomputed totals, and --
+  // if this brought the invoice to $0 -- cancelling its pending purchase
+  // requests (see cancelPendingPurchaseRequestsIfUnpaid).
+  const { updated, cancelledPurchaseRequests } = await prisma.$transaction(async (tx) => {
+    await tx.payment.update({
+      where: { id: paymentId },
+      data: { amount, paymentDate: parsedDate, notes: notes || null },
+    });
+    await tx.customerInvoice.update({
+      where: { id },
+      data: { paidAmount: newPaidAmount.toFixed(2), paymentStatus },
+    });
+    const cancelledPurchaseRequests = await cancelPendingPurchaseRequestsIfUnpaid(tx, id);
+    const updated = await tx.customerInvoice.findUniqueOrThrow({
+      where: { id },
+      include: {
+        customer: true,
+        items: true,
+        payments: { orderBy: { paymentDate: "desc" } },
+        files: true,
+        employee: { select: { id: true, name: true } },
+      },
+    });
+    return { updated, cancelledPurchaseRequests };
   });
 
   await writeAuditLog({
@@ -90,10 +101,15 @@ export async function PATCH(
     entityType: "payment",
     entityId: paymentId,
     entityLabel: `Payment on Invoice #${updated.invoiceNumber}`,
-    changes: diffChanges(
-      { amount: payment.amount.toString(), paymentDate: payment.paymentDate.toISOString(), notes: payment.notes },
-      { amount, paymentDate: parsedDate.toISOString(), notes: notes || null }
-    ),
+    changes: {
+      ...diffChanges(
+        { amount: payment.amount.toString(), paymentDate: payment.paymentDate.toISOString(), notes: payment.notes },
+        { amount, paymentDate: parsedDate.toISOString(), notes: notes || null }
+      ),
+      ...(cancelledPurchaseRequests > 0
+        ? { cancelledPurchaseRequests: { old: null, new: cancelledPurchaseRequests } }
+        : {}),
+    },
     ...extractMeta(request),
   });
 
@@ -117,7 +133,6 @@ export async function DELETE(
   const invoice = await prisma.customerInvoice.findUnique({ where: { id } });
   if (!invoice) return NextResponse.json({ error: "Invoice not found" }, { status: 404 });
 
-  await prisma.payment.delete({ where: { id: paymentId } });
 
   const newPaidAmount = Decimal.max(
     new Decimal(invoice.paidAmount.toString()).minus(new Decimal(payment.amount.toString())),
@@ -134,16 +149,27 @@ export async function DELETE(
     paymentStatus = "PARTIALLY_PAID";
   }
 
-  const updated = await prisma.customerInvoice.update({
-    where: { id },
-    data: { paidAmount: newPaidAmount.toFixed(2), paymentStatus },
-    include: {
-      customer: true,
-      items: true,
-      payments: { orderBy: { paymentDate: "desc" } },
-      files: true,
-      employee: { select: { id: true, name: true } },
-    },
+  // One transaction: deleting the payment, the invoice's recomputed totals, and --
+  // if this brought the invoice to $0 -- cancelling its pending purchase
+  // requests (see cancelPendingPurchaseRequestsIfUnpaid).
+  const { updated, cancelledPurchaseRequests } = await prisma.$transaction(async (tx) => {
+    await tx.payment.delete({ where: { id: paymentId } });
+    await tx.customerInvoice.update({
+      where: { id },
+      data: { paidAmount: newPaidAmount.toFixed(2), paymentStatus },
+    });
+    const cancelledPurchaseRequests = await cancelPendingPurchaseRequestsIfUnpaid(tx, id);
+    const updated = await tx.customerInvoice.findUniqueOrThrow({
+      where: { id },
+      include: {
+        customer: true,
+        items: true,
+        payments: { orderBy: { paymentDate: "desc" } },
+        files: true,
+        employee: { select: { id: true, name: true } },
+      },
+    });
+    return { updated, cancelledPurchaseRequests };
   });
 
   await writeAuditLog({
@@ -152,6 +178,9 @@ export async function DELETE(
     entityType: "payment",
     entityId: paymentId,
     entityLabel: `Payment of $${payment.amount.toString()} on Invoice #${updated.invoiceNumber}`,
+    ...(cancelledPurchaseRequests > 0
+      ? { changes: { cancelledPurchaseRequests: { old: null, new: cancelledPurchaseRequests } } }
+      : {}),
     ...extractMeta(request),
   });
 

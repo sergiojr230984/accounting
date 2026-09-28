@@ -89,6 +89,17 @@ interface InvoiceDetail {
 }
 
 interface EmployeeOpt { id: string; name: string; commissionRate: string }
+
+// `XX/PARTNUMBER`, or just `XX` when a line has a supplier but no part
+// number -- previously such a line printed nothing at all, so the
+// warehouse (Coaster, Stanza, ...) picked for it looked like it was never
+// saved. Used by both the on-screen table and the PDF so they can't drift.
+function formatItemCode(item: { supplier: { code: string | null } | null; partNumber: string | null }): string | null {
+  const code = item.supplier?.code;
+  if (!code) return null;
+  const part = item.partNumber?.trim();
+  return part ? `${code}/${part}` : code;
+}
 interface FeeOption { id: string; label: string; rate: number }
 interface SupplierCodeOpt { id: string; name: string; code: string | null; active: boolean }
 
@@ -114,6 +125,7 @@ export default function CustomerInvoiceDetailPage() {
   const [paymentForm, setPaymentForm] = useState({ amount: "", paymentDate: new Date().toISOString().split("T")[0], notes: "" });
   const [paymentSubmitting, setPaymentSubmitting] = useState(false);
   const [paymentError, setPaymentError] = useState("");
+  const [deletePaymentError, setDeletePaymentError] = useState("");
 
   // Edit existing payment
   const [editingPaymentId, setEditingPaymentId] = useState<string | null>(null);
@@ -246,6 +258,30 @@ export default function CustomerInvoiceDetailPage() {
   }, [watchedPaid, watchedDown, editing, invoice, setValue]);
 
   async function onSave(data: EditForm) {
+    // Same rule the New Invoice page enforces (invoices/customer/new): a
+    // line needs BOTH a supplier and a part number. Without this, a line
+    // added here with just a supplier saved fine but showed no item code
+    // on the invoice/PDF, and -- on a paid invoice -- never got a purchase
+    // request, since ensurePurchaseRequestsForInvoice skips lines missing
+    // either. Only lines added in this edit (no id) are checked; older
+    // lines predating item codes stay editable as-is.
+    // Also applies to an existing line that had no item code and is getting
+    // one now (filling in only the supplier, or only the part number, would
+    // still leave it without a code on the invoice and out of purchasing).
+    const originalById = new Map((invoice?.items ?? []).map((i) => [i.id, i]));
+    const missingCode = data.items.find((i) => {
+      const hasBoth = !!i.supplierId && !!i.partNumber?.trim();
+      if (hasBoth) return false;
+      if (!i.id) return true;
+      const orig = originalById.get(i.id);
+      const hadCode = !!orig?.supplier && !!orig?.partNumber?.trim();
+      const touched = (i.supplierId ?? "") !== (orig?.supplier?.id ?? "") || (i.partNumber ?? "") !== (orig?.partNumber ?? "");
+      return !hadCode && touched;
+    });
+    if (missingCode) {
+      setError(`"${missingCode.description || "New item"}" is missing a supplier or part number.`);
+      return;
+    }
     setSaving(true);
     setError("");
     try {
@@ -381,12 +417,20 @@ export default function CustomerInvoiceDetailPage() {
 
   async function handleDeletePayment(paymentId: string) {
     setDeletingPaymentId(paymentId);
+    setDeletePaymentError("");
     try {
       const res = await fetch(`/api/invoices/customer/${id}/payments/${paymentId}`, { method: "DELETE" });
       if (res.ok) {
         setConfirmDeletePaymentId(null);
         await load();
+      } else {
+        // Used to do nothing at all on failure -- same silent-failure shape
+        // CLAUDE.md warns about for Save. Body may not be JSON.
+        const d = await res.json().catch(() => ({}));
+        setDeletePaymentError(typeof d.error === "string" ? d.error : "Couldn't remove the payment");
       }
+    } catch {
+      setDeletePaymentError("Couldn't remove the payment");
     } finally {
       setDeletingPaymentId(null);
     }
@@ -425,7 +469,7 @@ export default function CustomerInvoiceDetailPage() {
       customer: { ...invoice.customer, address: invoice.customerAddress ?? invoice.customer.address },
       items: invoice.items.map((i) => ({
         ...i,
-        itemCode: i.supplier?.code && i.partNumber ? `${i.supplier.code}/${i.partNumber}` : null,
+        itemCode: formatItemCode(i),
       })),
     };
   }
@@ -673,7 +717,25 @@ export default function CustomerInvoiceDetailPage() {
                     !!f.id && f.rate !== undefined
                 )}
                 onFeesChange={setComputedAppliedFees}
-                lockedCount={invoice.paymentStatus !== "UNPAID" ? invoice.items.length : 0}
+                // Same two conditions as the server's itemsLocked (see
+                // app/api/invoices/customer/[id]/route.ts): a recorded
+                // payment, OR a purchase request that outlived a deleted
+                // payment. Checking only paymentStatus showed those rows as
+                // editable and then the save was rejected.
+                lockedCount={
+                  invoice.paymentStatus !== "UNPAID" || invoice.items.some((i) => i.purchaseRequest)
+                    ? invoice.items.length
+                    : 0
+                }
+                allowLockedTextEdits
+                // A locked line whose supplier / part number was never set
+                // (e.g. converted from an estimate) can still have it filled
+                // in -- the server allows filling a missing value, not
+                // changing an existing one.
+                lockedFillableCodes={invoice.items.map((i) => ({
+                  supplierId: !i.supplier,
+                  partNumber: !i.partNumber?.trim(),
+                }))}
                 showItemCode
                 supplierOptions={suppliers}
               />
@@ -792,9 +854,9 @@ export default function CustomerInvoiceDetailPage() {
                   {invoice.items.map((item) => (
                     <tr key={item.id}>
                       <td className="py-2 text-gray-500">
-                        {item.supplier?.code && item.partNumber ? (
-                          <span className={`inline-block px-1.5 py-0.5 rounded text-xs font-mono ${item.supplier.isHouse ? "bg-amber-50 text-amber-700" : "bg-gray-100 text-gray-600"}`}>
-                            {item.supplier.code}/{item.partNumber}
+                        {formatItemCode(item) ? (
+                          <span className={`inline-block px-1.5 py-0.5 rounded text-xs font-mono ${item.supplier?.isHouse ? "bg-amber-50 text-amber-700" : "bg-gray-100 text-gray-600"}`}>
+                            {formatItemCode(item)}
                           </span>
                         ) : (
                           <span className="text-gray-300">—</span>
@@ -1009,7 +1071,23 @@ export default function CustomerInvoiceDetailPage() {
                           <div className="text-xs text-gray-500 flex items-center gap-1 shrink-0">
                             {confirmDeletePaymentId === p.id ? (
                               <>
-                                <span className="text-red-600">Remove payment?</span>
+                                <span className="text-red-600">
+                                  Remove payment?
+                                  {/* Removing the last money on the invoice cancels its
+                                      pending purchase orders (server-side, see
+                                      cancelPendingPurchaseRequestsIfUnpaid) -- say so
+                                      before the click, not after. */}
+                                  {(() => {
+                                    const pending = invoice.items.filter((i) => i.purchaseRequest?.status === "PENDING").length;
+                                    let leavesZero = false;
+                                    try {
+                                      leavesZero = new Decimal(invoice.paidAmount || "0").minus(p.amount || "0").lte(0);
+                                    } catch {}
+                                    return pending > 0 && leavesZero
+                                      ? ` This also cancels ${pending} pending purchase order${pending !== 1 ? "s" : ""}.`
+                                      : "";
+                                  })()}
+                                </span>
                                 <button
                                   onClick={() => handleDeletePayment(p.id)}
                                   disabled={deletingPaymentId === p.id}
@@ -1042,6 +1120,7 @@ export default function CustomerInvoiceDetailPage() {
                       )}
                     </div>
                   ))}
+                  {deletePaymentError && <p className="text-red-600 text-sm mt-2">{deletePaymentError}</p>}
                 </div>
               ) : (
                 <p className="text-sm text-gray-400 text-center py-4">No payments recorded yet — click &ldquo;Record payment&rdquo; above to add one</p>

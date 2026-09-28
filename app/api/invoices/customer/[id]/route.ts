@@ -6,7 +6,7 @@ import { syncProductCatalog } from "@/lib/product-catalog";
 import { writeAuditLog, extractMeta, actorFromSession, diffChanges } from "@/lib/audit";
 import { computeLineTotals } from "@/lib/money";
 import { claimSequenceNumber, isDocumentNumberTaken, lockDocumentNumbering } from "@/lib/next-number";
-import { ensurePurchaseRequestsForInvoice } from "@/lib/purchase-requests";
+import { cancelPendingPurchaseRequestsIfUnpaid, ensurePurchaseRequestsForInvoice } from "@/lib/purchase-requests";
 import { z } from "zod";
 import Decimal from "decimal.js";
 
@@ -120,6 +120,11 @@ export async function GET(
           supplier: { select: { id: true, name: true, code: true, isHouse: true } },
           purchaseRequest: { select: { status: true } },
         },
+        // Explicit, not left to Postgres' physical row order: the edit page
+        // locks the first N rows by position, and an in-place wording edit
+        // (see PATCH) can move a row physically, which would otherwise
+        // reshuffle which row shows as locked.
+        orderBy: [{ createdAt: "asc" }, { id: "asc" }],
       },
       payments: { orderBy: { paymentDate: "desc" } },
       files: true,
@@ -180,6 +185,19 @@ export async function PATCH(
   // with a restrict-violation -- an uncaught, non-JSON 500 that looked to
   // the user like Save silently doing nothing.
   const itemsLocked = existing.paymentStatus !== "UNPAID" || existing.items.some((it) => it.purchaseRequest);
+  const lockReason =
+    existing.paymentStatus !== "UNPAID"
+      ? "This invoice has a recorded payment"
+      : "This invoice's items were already sent to purchasing (a payment was recorded earlier)";
+
+  // Wording-only clarifications to a locked line (e.g. adding "black and
+  // white" or "glass top" to a description) are collected here instead of
+  // rejected -- see the description/itemDescription comparison below.
+  const textEdits: { id: string; description: string; itemDescription: string | null }[] = [];
+  // Filling in a MISSING supplier/part number on a locked line (e.g. a line
+  // converted from an estimate, which carries no supplier) -- see the
+  // supplierId/partNumber comparison below.
+  const codeFills: { id: string; supplierId?: string; partNumber?: string }[] = [];
 
   // Once locked, existing line items (and the totals derived from them) are
   // financial history -- rewriting or removing them should go through a
@@ -212,18 +230,42 @@ export async function PATCH(
       // this guard (correctly, by its literal rules, but not by intent)
       // treated as a changed line and blocked an otherwise-untouched save.
       // A leading/trailing space is not a meaningful edit to a line item.
+      //
+      // description/itemDescription are NOT part of the lock: they're the
+      // line's wording, not its money. A salesperson clarifying a paid line
+      // after the fact ("MESA" -> "MESA DE CRISTAL") changes no amount, no
+      // supplier and no part number, and used to be impossible even after
+      // deleting the payment (the purchase_request keeps the line locked).
+      // Applied in place further below, never as a delete+recreate.
       const mismatches: string[] = [];
-      if (match.description.trim() !== item.description.trim()) mismatches.push("description");
-      if ((match.itemDescription ?? "").trim() !== (item.itemDescription ?? "").trim()) mismatches.push("itemDescription");
+      const newDescription = item.description.trim();
+      const newItemDescription = (item.itemDescription ?? "").trim();
+      if (match.description.trim() !== newDescription || (match.itemDescription ?? "").trim() !== newItemDescription) {
+        textEdits.push({ id: match.id, description: newDescription, itemDescription: newItemDescription || null });
+      }
       if (!new Decimal(match.quantity.toString()).equals(new Decimal(item.quantity || "0"))) mismatches.push("quantity");
       if (!new Decimal(match.unitPrice.toString()).equals(new Decimal(item.unitPrice || "0"))) mismatches.push("unitPrice");
       if (!new Decimal(match.taxRate.toString()).equals(new Decimal(item.taxRate || "0"))) mismatches.push("taxRate");
-      if ((match.supplierId ?? "") !== (item.supplierId ?? "")) mismatches.push("supplierId");
-      if ((match.partNumber ?? "") !== (item.partNumber ?? "")) mismatches.push("partNumber");
+      // A supplier/part number that was never set can be filled in once:
+      // before this, a paid line without one (a converted estimate, or a
+      // line saved before item codes existed) could never get one, and so
+      // never reached purchasing either. Changing or clearing one that IS
+      // set stays locked -- that's what the purchase request is keyed on.
+      const supplierFill = !match.supplierId && !!item.supplierId;
+      const partFill = !(match.partNumber ?? "").trim() && !!(item.partNumber ?? "").trim();
+      if (!supplierFill && (match.supplierId ?? "") !== (item.supplierId ?? "")) mismatches.push("supplierId");
+      if (!partFill && (match.partNumber ?? "") !== (item.partNumber ?? "")) mismatches.push("partNumber");
+      if (supplierFill || partFill) {
+        codeFills.push({
+          id: match.id,
+          ...(supplierFill ? { supplierId: item.supplierId } : {}),
+          ...(partFill ? { partNumber: item.partNumber!.trim() } : {}),
+        });
+      }
       if (mismatches.length > 0) {
         return NextResponse.json(
           {
-            error: `This invoice has a recorded payment -- existing line items can't be changed or removed. You can still add new items. (Field${mismatches.length > 1 ? "s" : ""} that differ on "${match.description}": ${mismatches.join(", ")}.)`,
+            error: `${lockReason} -- existing line items' quantity, price, supplier and part number can't be changed, and items can't be removed. You can still edit an item's wording and add new items. (Field${mismatches.length > 1 ? "s" : ""} that differ on "${match.description}": ${mismatches.join(", ")}.)`,
           },
           { status: 409 }
         );
@@ -233,7 +275,7 @@ export async function PATCH(
       if (!seenIds.has(existingItem.id)) {
         return NextResponse.json(
           {
-            error: `This invoice has a recorded payment -- existing line items can't be changed or removed. You can still add new items. ("${existingItem.description}" was removed or its id wasn't submitted.)`,
+            error: `${lockReason} -- existing line items can't be removed. You can still edit an item's wording and add new items. ("${existingItem.description}" was removed or its id wasn't submitted.)`,
           },
           { status: 409 }
         );
@@ -426,8 +468,26 @@ export async function PATCH(
         .filter(({ id }) => !id || !existingIds.has(id))
         .map(({ computed }) => computed);
 
-      if (newItems.length > 0) {
+      if (newItems.length > 0 || textEdits.length > 0 || codeFills.length > 0) {
+        // Wording edits and missing-code fill-ins to existing (locked)
+        // lines, merged per row -- updated in place, so the row keeps its id
+        // and any purchase_request that references it (ON DELETE RESTRICT)
+        // stays attached. A line that now has both a supplier and a part
+        // number gets its purchase_request from the
+        // ensurePurchaseRequestsForInvoice call in the transaction below.
+        const inPlace = new Map<string, Record<string, string | null>>();
+        for (const e of textEdits) {
+          inPlace.set(e.id, { description: e.description, itemDescription: e.itemDescription });
+        }
+        for (const f of codeFills) {
+          inPlace.set(f.id, {
+            ...(inPlace.get(f.id) ?? {}),
+            ...(f.supplierId ? { supplierId: f.supplierId } : {}),
+            ...(f.partNumber ? { partNumber: f.partNumber } : {}),
+          });
+        }
         updateData.items = {
+          update: Array.from(inPlace, ([itemId, fields]) => ({ where: { id: itemId }, data: fields })),
           create: newItems.map((item) => ({
             description: item.description,
             itemDescription: item.itemDescription ?? null,
@@ -510,6 +570,17 @@ export async function PATCH(
         await claimSequenceNumber(tx, "customerInvoiceNextSeq", data.invoiceNumber, prefix);
       }
 
+      // Purchasing orders from the purchase_request's own snapshot of the
+      // description, so a clarified line must reach it too -- but only while
+      // it's still PENDING; a FULFILLED one already matches the bill that
+      // closed it and is left as the historical record.
+      for (const e of textEdits) {
+        await tx.purchaseRequest.updateMany({
+          where: { customerInvoiceItemId: e.id, status: "PENDING" },
+          data: { description: e.description },
+        });
+      }
+
       // Second write path (besides the payments POST route) that can move
       // paidAmount off zero -- the edit screen's own "Amount Paid" field. Also
       // covers a new line item added to an invoice that's already paid (an
@@ -520,6 +591,13 @@ export async function PATCH(
       // on every qualifying save (not just the one that crossed zero) is safe.
       if (new Decimal(result.paidAmount.toString()).gt(0)) {
         await ensurePurchaseRequestsForInvoice(tx, id);
+      } else if (data.paidAmount !== undefined && new Decimal(existing.paidAmount.toString()).gt(0)) {
+        // This save is what took Amount Paid to $0 -- same rule as deleting
+        // the last payment (see cancelPendingPurchaseRequestsIfUnpaid).
+        // Deliberately only on that transition, not on every save of an
+        // already-$0 invoice, so an unrelated edit never silently cancels
+        // anything.
+        await cancelPendingPurchaseRequestsIfUnpaid(tx, id);
       }
 
       return result;
@@ -543,14 +621,40 @@ export async function PATCH(
     entityType: "customer_invoice",
     entityId: id,
     entityLabel: `Invoice #${updated.invoiceNumber}`,
-    changes: diffChanges(beforeSnapshot, {
-      invoiceNumber: updated.invoiceNumber,
-      paymentStatus: updated.paymentStatus,
-      paidAmount: updated.paidAmount.toString(),
-      totalAmount: updated.totalAmount.toString(),
-      notes: updated.notes,
-      customerAddress: updated.customerAddress,
-    }),
+    changes: {
+      ...diffChanges(beforeSnapshot, {
+        invoiceNumber: updated.invoiceNumber,
+        paymentStatus: updated.paymentStatus,
+        paidAmount: updated.paidAmount.toString(),
+        totalAmount: updated.totalAmount.toString(),
+        notes: updated.notes,
+        customerAddress: updated.customerAddress,
+      }),
+      // Wording edits to locked (paid / sent-to-purchasing) lines are the
+      // one change allowed there, so they're recorded explicitly.
+      ...(textEdits.length > 0
+        ? {
+            lockedItemWording: {
+              old: textEdits.map((e) => {
+                const before = existing.items.find((it) => it.id === e.id);
+                return [before?.description, before?.itemDescription].filter(Boolean).join(" / ");
+              }),
+              new: textEdits.map((e) => [e.description, e.itemDescription].filter(Boolean).join(" / ")),
+            },
+          }
+        : {}),
+      ...(codeFills.length > 0
+        ? {
+            lockedItemCodeFilled: {
+              old: null,
+              new: codeFills.map((f) => {
+                const before = existing.items.find((it) => it.id === f.id);
+                return `${before?.description ?? f.id}: ${[f.supplierId && `supplier ${f.supplierId}`, f.partNumber && `part ${f.partNumber}`].filter(Boolean).join(", ")}`;
+              }),
+            },
+          }
+        : {}),
+    },
     ...extractMeta(request),
   });
 

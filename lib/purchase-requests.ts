@@ -53,3 +53,35 @@ export async function ensurePurchaseRequestsForInvoice(
 
   await tx.purchaseRequest.createMany({ data: toCreate, skipDuplicates: true });
 }
+
+/**
+ * The reverse of ensurePurchaseRequestsForInvoice: once an invoice has no
+ * money on it any more (paidAmount back to $0 -- the same field whose move
+ * OFF zero created the requests), its still-PENDING purchase requests are
+ * cancelled (deleted). Owner decision 2026-09-28: removing the payment
+ * means the sale isn't confirmed, so purchasing shouldn't order for it.
+ *
+ * Only PENDING requests with no supplier bill are touched. A FULFILLED one
+ * (purchasing already entered the supplier's bill and cost) is real
+ * purchasing history and is always kept -- undoing that goes through the
+ * bill's own delete flow, not this.
+ *
+ * Call it inside the same transaction as the write that brought
+ * paidAmount to $0, on EVERY such path (payment delete, payment edit, the
+ * invoice edit screen's Amount Paid) -- see the matching note on
+ * ensurePurchaseRequestsForInvoice. Returns how many were cancelled.
+ */
+export async function cancelPendingPurchaseRequestsIfUnpaid(
+  tx: Pick<PrismaClient, "customerInvoice" | "purchaseRequest">,
+  customerInvoiceId: string
+): Promise<number> {
+  const invoice = await tx.customerInvoice.findUnique({
+    where: { id: customerInvoiceId },
+    select: { paidAmount: true },
+  });
+  if (!invoice || Number(invoice.paidAmount) > 0) return 0;
+  const { count } = await tx.purchaseRequest.deleteMany({
+    where: { customerInvoiceId, status: "PENDING", supplierInvoice: null },
+  });
+  return count;
+}

@@ -86,6 +86,18 @@ interface InvoiceItemsEditorProps<T extends FieldValues> {
   // -- only app/(dashboard)/invoices/customer/[id]/page.tsx passes true.
   showItemCode?: boolean;
   supplierOptions?: SupplierCodeOption[];
+  // Opt-in, customer-invoice-only: a locked row's item name/description
+  // stays editable (wording only -- picking a catalog product on a locked
+  // row fills in just the name, never price/tax). The customer-invoice
+  // PATCH route accepts these as in-place text edits. Other callers leave
+  // it off: the supplier-bill route still rejects any change to a locked
+  // row.
+  allowLockedTextEdits?: boolean;
+  // Per locked row (by position): whether its supplier / part number is
+  // still EMPTY and may therefore be filled in once. The customer-invoice
+  // PATCH route accepts filling a missing value on a locked line but not
+  // changing one that's already set. Omitted -> nothing fillable.
+  lockedFillableCodes?: { supplierId: boolean; partNumber: boolean }[];
 }
 
 function LinePreview({ quantity, price, taxRate }: { quantity: string; price: string; taxRate: string }) {
@@ -119,6 +131,8 @@ export default function InvoiceItemsEditor<T extends FieldValues = any>({
   setValue,
   showItemCode = false,
   supplierOptions = [],
+  allowLockedTextEdits = false,
+  lockedFillableCodes = [],
 }: InvoiceItemsEditorProps<T>) {
   const { fields, append, remove } = useFieldArray({ control, name: fieldName as Path<T> as never });
   const items = useWatch({ control, name: fieldName as Path<T> as never }) as unknown as ItemRow[];
@@ -282,7 +296,9 @@ export default function InvoiceItemsEditor<T extends FieldValues = any>({
           <h3 className="text-sm font-semibold text-gray-700">Line Items</h3>
           {lockedCount > 0 && (
             <p className="text-xs text-gray-400 mt-0.5">
-              A payment has been recorded — existing items are locked, but you can still add new ones.
+              {allowLockedTextEdits
+                ? "Existing items are locked (payment recorded or already sent to purchasing) — you can still edit their wording and add new items."
+                : "A payment has been recorded — existing items are locked, but you can still add new ones."}
             </p>
           )}
         </div>
@@ -335,7 +351,7 @@ export default function InvoiceItemsEditor<T extends FieldValues = any>({
                       className="input text-sm"
                       products={products}
                       value={items?.[index]?.description ?? ""}
-                      disabled={locked}
+                      disabled={locked && !allowLockedTextEdits}
                       onChange={(v) => {
                         if (!setValue) return;
                         setValue(`${fieldName}.${index}.description` as Path<T>, v as never, { shouldDirty: true });
@@ -352,6 +368,8 @@ export default function InvoiceItemsEditor<T extends FieldValues = any>({
                           ? `${product.name} — ${product.description}`
                           : product.name;
                         setValue(`${fieldName}.${index}.description` as Path<T>, name as never, { shouldDirty: true });
+                        // Locked row: wording only -- never touch its price/tax.
+                        if (locked) return;
                         if (!showItemCode) {
                           setValue(
                             `${fieldName}.${index}.itemDescription` as Path<T>,
@@ -379,7 +397,7 @@ export default function InvoiceItemsEditor<T extends FieldValues = any>({
                     <div className="flex gap-1">
                       <select
                         className="input text-sm w-24 shrink-0 px-1.5"
-                        disabled={locked}
+                        disabled={locked && !lockedFillableCodes[index]?.supplierId}
                         {...register(`${fieldName}.${index}.supplierId` as Path<T>)}
                       >
                         <option value="">Supplier…</option>
@@ -395,7 +413,7 @@ export default function InvoiceItemsEditor<T extends FieldValues = any>({
                       <input
                         className="input text-sm flex-1 min-w-0"
                         placeholder="Part number"
-                        disabled={locked}
+                        disabled={locked && !lockedFillableCodes[index]?.partNumber}
                         {...register(`${fieldName}.${index}.partNumber` as Path<T>)}
                       />
                     </div>

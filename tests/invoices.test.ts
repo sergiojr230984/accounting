@@ -245,12 +245,12 @@ describe("locked line items -- diagnosable mismatch, not a mystery 409", () => {
     const id = created.body.id;
     const itemId = created.body.items[0].id;
 
-    // Record a payment (locks the item via a purchase_request), then
-    // correct it back to $0 -- paymentStatus reads UNPAID again, but the
-    // purchase_request (and therefore the lock) persists, exactly as
-    // documented on the PATCH route's itemsLocked comment.
-    await admin.postJson(`/api/invoices/customer/${id}`, { paidAmount: "401.25" }, "PATCH");
-    await admin.postJson(`/api/invoices/customer/${id}`, { paidAmount: "0" }, "PATCH");
+    // Record a payment to lock the item. (This used to also correct the
+    // payment back to $0, relying on the purchase_request outliving it to
+    // keep the lock -- since 2026-09-28 taking Amount Paid back to $0
+    // cancels pending purchase requests and unlocks the items, so the
+    // payment is left in place here to keep the item locked.)
+    await admin.postJson(`/api/invoices/customer/${id}`, { paidAmount: "100" }, "PATCH");
 
     return {
       id,
