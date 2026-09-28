@@ -342,11 +342,16 @@ export default function NewCustomerInvoicePage() {
     }
   }
 
-  function buildPdfData(company: unknown) {
+  // `savedNumber` is the number the server actually assigned on save -- not
+  // the `invoiceNumber` previewed when this page loaded. If someone else
+  // saved first, the server gives this invoice the next free number (see
+  // resolveNewDocumentNumber in lib/next-number.ts); printing the preview
+  // would put the OTHER invoice's number on this customer's paper copy.
+  function buildPdfData(company: unknown, savedNumber: string) {
     const customer = customers.find((c) => c.id === customerId);
     const real = items.filter((i) => i.description.trim() !== "");
     return {
-      invoiceNumber,
+      invoiceNumber: savedNumber,
       invoiceDate,
       dueDate,
       subtotal: totals.subtotal.toFixed(2),
@@ -454,7 +459,7 @@ export default function NewCustomerInvoicePage() {
       }
       if (action === "print") {
         const company = await fetch("/api/settings").then((r) => (r.ok ? r.json() : null)).catch(() => null);
-        const doc = generateInvoicePDF(buildPdfData(company));
+        const doc = generateInvoicePDF(buildPdfData(company, inv.invoiceNumber ?? invoiceNumber));
         const url = doc.output("bloburl");
         window.open(url, "_blank");
       }
