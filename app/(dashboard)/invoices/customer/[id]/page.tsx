@@ -265,7 +265,19 @@ export default function CustomerInvoiceDetailPage() {
     // request, since ensurePurchaseRequestsForInvoice skips lines missing
     // either. Only lines added in this edit (no id) are checked; older
     // lines predating item codes stay editable as-is.
-    const missingCode = data.items.find((i) => !i.id && (!i.supplierId || !i.partNumber?.trim()));
+    // Also applies to an existing line that had no item code and is getting
+    // one now (filling in only the supplier, or only the part number, would
+    // still leave it without a code on the invoice and out of purchasing).
+    const originalById = new Map((invoice?.items ?? []).map((i) => [i.id, i]));
+    const missingCode = data.items.find((i) => {
+      const hasBoth = !!i.supplierId && !!i.partNumber?.trim();
+      if (hasBoth) return false;
+      if (!i.id) return true;
+      const orig = originalById.get(i.id);
+      const hadCode = !!orig?.supplier && !!orig?.partNumber?.trim();
+      const touched = (i.supplierId ?? "") !== (orig?.supplier?.id ?? "") || (i.partNumber ?? "") !== (orig?.partNumber ?? "");
+      return !hadCode && touched;
+    });
     if (missingCode) {
       setError(`"${missingCode.description || "New item"}" is missing a supplier or part number.`);
       return;
@@ -716,6 +728,14 @@ export default function CustomerInvoiceDetailPage() {
                     : 0
                 }
                 allowLockedTextEdits
+                // A locked line whose supplier / part number was never set
+                // (e.g. converted from an estimate) can still have it filled
+                // in -- the server allows filling a missing value, not
+                // changing an existing one.
+                lockedFillableCodes={invoice.items.map((i) => ({
+                  supplierId: !i.supplier,
+                  partNumber: !i.partNumber?.trim(),
+                }))}
                 showItemCode
                 supplierOptions={suppliers}
               />

@@ -194,6 +194,10 @@ export async function PATCH(
   // white" or "glass top" to a description) are collected here instead of
   // rejected -- see the description/itemDescription comparison below.
   const textEdits: { id: string; description: string; itemDescription: string | null }[] = [];
+  // Filling in a MISSING supplier/part number on a locked line (e.g. a line
+  // converted from an estimate, which carries no supplier) -- see the
+  // supplierId/partNumber comparison below.
+  const codeFills: { id: string; supplierId?: string; partNumber?: string }[] = [];
 
   // Once locked, existing line items (and the totals derived from them) are
   // financial history -- rewriting or removing them should go through a
@@ -242,8 +246,22 @@ export async function PATCH(
       if (!new Decimal(match.quantity.toString()).equals(new Decimal(item.quantity || "0"))) mismatches.push("quantity");
       if (!new Decimal(match.unitPrice.toString()).equals(new Decimal(item.unitPrice || "0"))) mismatches.push("unitPrice");
       if (!new Decimal(match.taxRate.toString()).equals(new Decimal(item.taxRate || "0"))) mismatches.push("taxRate");
-      if ((match.supplierId ?? "") !== (item.supplierId ?? "")) mismatches.push("supplierId");
-      if ((match.partNumber ?? "") !== (item.partNumber ?? "")) mismatches.push("partNumber");
+      // A supplier/part number that was never set can be filled in once:
+      // before this, a paid line without one (a converted estimate, or a
+      // line saved before item codes existed) could never get one, and so
+      // never reached purchasing either. Changing or clearing one that IS
+      // set stays locked -- that's what the purchase request is keyed on.
+      const supplierFill = !match.supplierId && !!item.supplierId;
+      const partFill = !(match.partNumber ?? "").trim() && !!(item.partNumber ?? "").trim();
+      if (!supplierFill && (match.supplierId ?? "") !== (item.supplierId ?? "")) mismatches.push("supplierId");
+      if (!partFill && (match.partNumber ?? "") !== (item.partNumber ?? "")) mismatches.push("partNumber");
+      if (supplierFill || partFill) {
+        codeFills.push({
+          id: match.id,
+          ...(supplierFill ? { supplierId: item.supplierId } : {}),
+          ...(partFill ? { partNumber: item.partNumber!.trim() } : {}),
+        });
+      }
       if (mismatches.length > 0) {
         return NextResponse.json(
           {
@@ -450,15 +468,26 @@ export async function PATCH(
         .filter(({ id }) => !id || !existingIds.has(id))
         .map(({ computed }) => computed);
 
-      if (newItems.length > 0 || textEdits.length > 0) {
+      if (newItems.length > 0 || textEdits.length > 0 || codeFills.length > 0) {
+        // Wording edits and missing-code fill-ins to existing (locked)
+        // lines, merged per row -- updated in place, so the row keeps its id
+        // and any purchase_request that references it (ON DELETE RESTRICT)
+        // stays attached. A line that now has both a supplier and a part
+        // number gets its purchase_request from the
+        // ensurePurchaseRequestsForInvoice call in the transaction below.
+        const inPlace = new Map<string, Record<string, string | null>>();
+        for (const e of textEdits) {
+          inPlace.set(e.id, { description: e.description, itemDescription: e.itemDescription });
+        }
+        for (const f of codeFills) {
+          inPlace.set(f.id, {
+            ...(inPlace.get(f.id) ?? {}),
+            ...(f.supplierId ? { supplierId: f.supplierId } : {}),
+            ...(f.partNumber ? { partNumber: f.partNumber } : {}),
+          });
+        }
         updateData.items = {
-          // Wording-only edits to existing (locked) lines -- updated in
-          // place, so the row keeps its id and any purchase_request that
-          // references it (ON DELETE RESTRICT) stays attached.
-          update: textEdits.map((e) => ({
-            where: { id: e.id },
-            data: { description: e.description, itemDescription: e.itemDescription },
-          })),
+          update: Array.from(inPlace, ([itemId, fields]) => ({ where: { id: itemId }, data: fields })),
           create: newItems.map((item) => ({
             description: item.description,
             itemDescription: item.itemDescription ?? null,
@@ -611,6 +640,17 @@ export async function PATCH(
                 return [before?.description, before?.itemDescription].filter(Boolean).join(" / ");
               }),
               new: textEdits.map((e) => [e.description, e.itemDescription].filter(Boolean).join(" / ")),
+            },
+          }
+        : {}),
+      ...(codeFills.length > 0
+        ? {
+            lockedItemCodeFilled: {
+              old: null,
+              new: codeFills.map((f) => {
+                const before = existing.items.find((it) => it.id === f.id);
+                return `${before?.description ?? f.id}: ${[f.supplierId && `supplier ${f.supplierId}`, f.partNumber && `part ${f.partNumber}`].filter(Boolean).join(", ")}`;
+              }),
             },
           }
         : {}),

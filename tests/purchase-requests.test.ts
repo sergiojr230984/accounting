@@ -1093,3 +1093,69 @@ describe("removing all payment cancels pending purchase requests", () => {
     expect((await getInv(inv.id)).items[0].purchaseRequest?.status).toBe("FULFILLED");
   });
 });
+
+// Real report (2026-09-28): on a saved invoice that already has a payment,
+// a line with no supplier (e.g. converted from an estimate -- estimates
+// carry no supplier -- or saved before item codes existed) could never get
+// one: the payment lock froze the empty supplier/part number too. Such a
+// line also never reaches purchasing, since a purchase request needs both.
+// Filling in a MISSING supplier/part number is now allowed on a locked
+// line; changing one that's already set stays locked.
+describe("filling in a missing supplier on a paid invoice's line", () => {
+  type Item = { id: string; description: string; quantity: string; unitPrice: string; taxRate: string; supplierId: string | null; partNumber: string | null; supplier: { code: string | null } | null; purchaseRequest: { status: string } | null };
+
+  async function paidInvoiceFromEstimate() {
+    const est = await admin.postJson<{ id: string }>("/api/estimates", {
+      customerId,
+      estimateDate: "2026-01-01",
+      items: [{ description: "SOFA GRIS", quantity: "1", unitPrice: "800" }],
+    });
+    expect(est.status).toBe(201);
+    const conv = await admin.postJson<{ invoiceId: string }>(`/api/estimates/${est.body.id}/convert`, {});
+    expect(conv.status).toBe(200);
+    const id = conv.body.invoiceId;
+    const pay = await admin.postJson(`/api/invoices/customer/${id}/payments`, { amount: "100", paymentDate: "2026-01-05" });
+    expect(pay.status).toBe(201);
+    const full = await admin.getJson<{ items: Item[] }>(`/api/invoices/customer/${id}`);
+    expect(full.body.items[0].supplierId ?? null).toBeNull();
+    return { id, item: full.body.items[0] };
+  }
+  const submit = (i: Item, o: Record<string, string | undefined>) => ({
+    id: i.id, description: i.description, quantity: i.quantity, unitPrice: i.unitPrice, taxRate: i.taxRate,
+    supplierId: i.supplierId ?? undefined, partNumber: i.partNumber ?? undefined, ...o,
+  });
+
+  it("allows adding supplier + part number to a paid line that has none, and sends it to purchasing", async () => {
+    const { id, item } = await paidInvoiceFromEstimate();
+    const patch = await admin.postJson(
+      `/api/invoices/customer/${id}`,
+      { items: [submit(item, { supplierId: realSupplierId, partNumber: "SG-100" })] },
+      "PATCH"
+    );
+    expect(patch.status, JSON.stringify(patch.body)).toBe(200);
+    const after = await admin.getJson<{ items: Item[] }>(`/api/invoices/customer/${id}`);
+    expect(after.body.items[0].id).toBe(item.id);
+    expect(after.body.items[0].supplier?.code).toBe(realSupplierCode);
+    expect(after.body.items[0].partNumber).toBe("SG-100");
+    expect(after.body.items[0].purchaseRequest?.status).toBe("PENDING");
+  });
+
+  it("still blocks changing a supplier that's already set on a paid line", async () => {
+    const { id, item } = await paidInvoiceFromEstimate();
+    await admin.postJson(`/api/invoices/customer/${id}`, { items: [submit(item, { supplierId: realSupplierId, partNumber: "SG-200" })] }, "PATCH");
+    const other = await admin.postJson<{ id: string }>("/api/suppliers", { name: `Other Sup ${Date.now()}` });
+    const refreshed = (await admin.getJson<{ items: Item[] }>(`/api/invoices/customer/${id}`)).body.items[0];
+    const change = await admin.postJson(
+      `/api/invoices/customer/${id}`,
+      { items: [submit(refreshed, { supplierId: other.body.id })] },
+      "PATCH"
+    );
+    expect(change.status).toBe(409);
+    const partChange = await admin.postJson(
+      `/api/invoices/customer/${id}`,
+      { items: [submit(refreshed, { partNumber: "DIFFERENT" })] },
+      "PATCH"
+    );
+    expect(partChange.status).toBe(409);
+  });
+});

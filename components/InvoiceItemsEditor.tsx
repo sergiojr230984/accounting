@@ -93,6 +93,11 @@ interface InvoiceItemsEditorProps<T extends FieldValues> {
   // it off: the supplier-bill route still rejects any change to a locked
   // row.
   allowLockedTextEdits?: boolean;
+  // Per locked row (by position): whether its supplier / part number is
+  // still EMPTY and may therefore be filled in once. The customer-invoice
+  // PATCH route accepts filling a missing value on a locked line but not
+  // changing one that's already set. Omitted -> nothing fillable.
+  lockedFillableCodes?: { supplierId: boolean; partNumber: boolean }[];
 }
 
 function LinePreview({ quantity, price, taxRate }: { quantity: string; price: string; taxRate: string }) {
@@ -127,6 +132,7 @@ export default function InvoiceItemsEditor<T extends FieldValues = any>({
   showItemCode = false,
   supplierOptions = [],
   allowLockedTextEdits = false,
+  lockedFillableCodes = [],
 }: InvoiceItemsEditorProps<T>) {
   const { fields, append, remove } = useFieldArray({ control, name: fieldName as Path<T> as never });
   const items = useWatch({ control, name: fieldName as Path<T> as never }) as unknown as ItemRow[];
@@ -391,7 +397,7 @@ export default function InvoiceItemsEditor<T extends FieldValues = any>({
                     <div className="flex gap-1">
                       <select
                         className="input text-sm w-24 shrink-0 px-1.5"
-                        disabled={locked}
+                        disabled={locked && !lockedFillableCodes[index]?.supplierId}
                         {...register(`${fieldName}.${index}.supplierId` as Path<T>)}
                       >
                         <option value="">Supplier…</option>
@@ -407,7 +413,7 @@ export default function InvoiceItemsEditor<T extends FieldValues = any>({
                       <input
                         className="input text-sm flex-1 min-w-0"
                         placeholder="Part number"
-                        disabled={locked}
+                        disabled={locked && !lockedFillableCodes[index]?.partNumber}
                         {...register(`${fieldName}.${index}.partNumber` as Path<T>)}
                       />
                     </div>
