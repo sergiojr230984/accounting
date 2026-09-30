@@ -10,6 +10,14 @@ import Link from "next/link";
 import InvoiceItemsEditor from "@/components/InvoiceItemsEditor";
 import InvoiceExtractor from "@/components/InvoiceExtractor";
 import InvoiceDocumentPreview from "@/components/InvoiceDocumentPreview";
+import { computeLineTotals, formatCurrency } from "@/lib/money";
+
+// Today as YYYY-MM-DD in the browser's own timezone -- not
+// toISOString(), which is UTC and would date an evening bill tomorrow.
+function todayLocal(): string {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
 
 const schema = z.object({
   supplierId: z.string().min(1, "Select a supplier"),
@@ -66,7 +74,20 @@ export default function NewSupplierInvoicePage() {
   const [prError, setPrError] = useState("");
   const [prQuantity, setPrQuantity] = useState("");
   const [prCost, setPrCost] = useState("");
+  // A bill created from the Purchasing queue is normally for something
+  // already paid for, so it defaults to "paid in full": the amount paid is
+  // the bill's own total (quantity x actual cost), not a second number to
+  // type. Unticking it brings back the manual Payment Status / Amount Paid.
+  const [prPaidInFull, setPrPaidInFull] = useState(true);
   const fulfillingPR = Boolean(purchaseRequest);
+  // Same rounding the server applies to the bill's total (lib/money.ts),
+  // so "paid in full" can never land a cent off it. Guarded because a
+  // half-typed number can briefly be something Decimal won't parse.
+  let prTotal = "0.00";
+  try {
+    prTotal = computeLineTotals([{ quantity: prQuantity, price: prCost, taxRate: "0" }]).subtotal.toFixed(2);
+  } catch {}
+  const autoPaid = fulfillingPR && prPaidInFull;
 
   const { register, handleSubmit, control, watch, setValue, formState: { errors } } = useForm<FormData>({
     resolver: zodResolver(schema),
@@ -126,6 +147,10 @@ export default function NewSupplierInvoicePage() {
           setValue("purchaseRequestId", pr.id);
           setValue("supplierId", pr.supplierId);
           setValue("category", "COGS");
+          // Dated the day the bill is created -- editable, but no longer
+          // two blank required-ish fields on every Create Bill.
+          setValue("invoiceDate", todayLocal());
+          setValue("dueDate", todayLocal());
           setValue("items", [
             { description: pr.description, quantity: pr.quantity, unitCost: "0", taxRate: "0" },
           ]);
@@ -213,6 +238,7 @@ export default function NewSupplierInvoicePage() {
       const payload = fulfillingPR && purchaseRequest
         ? {
             ...data,
+            ...(prPaidInFull ? { paymentStatus: "PAID" as const, paidAmount: prTotal } : {}),
             items: [
               { description: purchaseRequest.description, quantity: prQuantity, unitCost: prCost, taxRate: "0" },
             ],
@@ -224,7 +250,7 @@ export default function NewSupplierInvoicePage() {
         body: JSON.stringify(payload),
       });
       if (!res.ok) {
-        const d = await res.json();
+        const d = await res.json().catch(() => ({}));
         setError(d.error?.formErrors?.[0] ?? d.error ?? "Failed to create invoice");
         return;
       }
@@ -349,19 +375,36 @@ export default function NewSupplierInvoicePage() {
               {errors.category && <p className="text-red-500 text-xs mt-1">{errors.category.message}</p>}
             </div>
 
-            <div>
-              <label className="label">Payment Status</label>
-              <select className="input" {...register("paymentStatus")}>
-                <option value="UNPAID">Unpaid</option>
-                <option value="PARTIALLY_PAID">Partially Paid</option>
-                <option value="PAID">Paid</option>
-              </select>
-            </div>
+            {fulfillingPR && (
+              <div className="col-span-2">
+                <label className="flex items-center gap-2 text-sm text-gray-700">
+                  <input
+                    type="checkbox"
+                    checked={prPaidInFull}
+                    onChange={(e) => setPrPaidInFull(e.target.checked)}
+                  />
+                  Paid in full to supplier (amount paid = actual cost)
+                </label>
+              </div>
+            )}
 
-            <div>
-              <label className="label">Amount Paid ($)</label>
-              <input type="number" step="0.01" min="0" className="input" {...register("paidAmount")} />
-            </div>
+            {!autoPaid && (
+              <>
+                <div>
+                  <label className="label">Payment Status</label>
+                  <select className="input" {...register("paymentStatus")}>
+                    <option value="UNPAID">Unpaid</option>
+                    <option value="PARTIALLY_PAID">Partially Paid</option>
+                    <option value="PAID">Paid</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="label">Amount Paid ($)</label>
+                  <input type="number" step="0.01" min="0" className="input" {...register("paidAmount")} />
+                </div>
+              </>
+            )}
 
             {!fulfillingPR && (
               <div>
@@ -414,6 +457,11 @@ export default function NewSupplierInvoicePage() {
                   value={prCost}
                   onChange={(e) => setPrCost(e.target.value)}
                 />
+                {prPaidInFull && (
+                  <p className="text-xs text-gray-500 mt-1">
+                    Recorded as paid: {formatCurrency(prTotal)}
+                  </p>
+                )}
               </div>
             </div>
           </div>
@@ -445,8 +493,8 @@ export default function NewSupplierInvoicePage() {
                 }))
           }
           notes={watchedNotes}
-          paymentStatus={watchedPaymentStatus}
-          paidAmount={watchedPaidAmount}
+          paymentStatus={autoPaid ? "PAID" : watchedPaymentStatus}
+          paidAmount={autoPaid ? prTotal : watchedPaidAmount}
         />
 
         {error && (
