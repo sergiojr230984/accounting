@@ -20,7 +20,7 @@ export async function GET(
   const pr = await prisma.purchaseRequest.findUnique({
     where: { id },
     include: {
-      supplier: { select: { id: true, name: true, code: true } },
+      supplier: { select: { id: true, name: true, code: true, isHouse: true } },
       customerInvoice: { select: { id: true, invoiceNumber: true } },
     },
   });
