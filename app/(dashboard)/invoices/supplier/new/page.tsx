@@ -12,6 +12,18 @@ import InvoiceExtractor from "@/components/InvoiceExtractor";
 import InvoiceDocumentPreview from "@/components/InvoiceDocumentPreview";
 import { computeLineTotals, formatCurrency } from "@/lib/money";
 
+// Items coded to La Cuevita's own stock (the HOUSE supplier, item code
+// "HS/...") default to a flat $50 per unit on Create Bill (still editable).
+// Matched on the isHouse flag OR the HS code: HOUSE lines only reach the
+// Purchasing queue at all when that supplier isn't flagged isHouse (see
+// lib/purchase-requests.ts), so the code is what actually identifies it.
+const HOUSE_SUPPLIER_CODE = "HS";
+const HOUSE_UNIT_COST = "50.00";
+
+function isHouseSupplier(s: { code: string | null; isHouse?: boolean }): boolean {
+  return Boolean(s.isHouse) || s.code?.toUpperCase() === HOUSE_SUPPLIER_CODE;
+}
+
 // Today as YYYY-MM-DD in the browser's own timezone -- not
 // toISOString(), which is UTC and would date an evening bill tomorrow.
 function todayLocal(): string {
@@ -52,7 +64,7 @@ interface PurchaseRequestDetail {
   description: string;
   quantity: string;
   supplierId: string;
-  supplier: { id: string; name: string; code: string | null };
+  supplier: { id: string; name: string; code: string | null; isHouse?: boolean };
   customerInvoice: { id: string; invoiceNumber: string };
 }
 
@@ -155,7 +167,7 @@ export default function NewSupplierInvoicePage() {
             { description: pr.description, quantity: pr.quantity, unitCost: "0", taxRate: "0" },
           ]);
           setPrQuantity(pr.quantity);
-          setPrCost("0");
+          setPrCost(isHouseSupplier(pr.supplier) ? HOUSE_UNIT_COST : "0");
         })
         .catch(async (r) => {
           const d = await (r as Response).json?.().catch(() => ({})) ?? {};
@@ -457,6 +469,9 @@ export default function NewSupplierInvoicePage() {
                   value={prCost}
                   onChange={(e) => setPrCost(e.target.value)}
                 />
+                {isHouseSupplier(purchaseRequest.supplier) && (
+                  <p className="text-xs text-gray-500 mt-1">La Cuevita (HOUSE) items default to ${HOUSE_UNIT_COST} per unit.</p>
+                )}
                 {prPaidInFull && (
                   <p className="text-xs text-gray-500 mt-1">
                     Recorded as paid: {formatCurrency(prTotal)}
