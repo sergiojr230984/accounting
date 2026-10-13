@@ -198,6 +198,18 @@ export async function PATCH(
   // converted from an estimate, which carries no supplier) -- see the
   // supplierId/partNumber comparison below.
   const codeFills: { id: string; supplierId?: string; partNumber?: string }[] = [];
+  // Quantity / price / tax changes on a locked line. Owner decision
+  // (2026-10-12): amounts on a saved invoice can be corrected at any time,
+  // by any role, paid or not -- totals, balance and payment status are
+  // recomputed from the lines below like any other item edit. Applied in
+  // place (same row id) so purchasing stays attached; recorded in the audit
+  // log (lockedItemAmounts).
+  const amountEdits: {
+    id: string;
+    description: string;
+    old: { quantity: string; unitPrice: string; taxRate: string };
+    quantityChanged: boolean;
+  }[] = [];
 
   // Once locked, existing line items (and the totals derived from them) are
   // financial history -- rewriting or removing them should go through a
@@ -243,9 +255,33 @@ export async function PATCH(
       if (match.description.trim() !== newDescription || (match.itemDescription ?? "").trim() !== newItemDescription) {
         textEdits.push({ id: match.id, description: newDescription, itemDescription: newItemDescription || null });
       }
-      if (!new Decimal(match.quantity.toString()).equals(new Decimal(item.quantity || "0"))) mismatches.push("quantity");
-      if (!new Decimal(match.unitPrice.toString()).equals(new Decimal(item.unitPrice || "0"))) mismatches.push("unitPrice");
-      if (!new Decimal(match.taxRate.toString()).equals(new Decimal(item.taxRate || "0"))) mismatches.push("taxRate");
+      // Amounts are NOT part of the lock either (see amountEdits above).
+      let quantityChanged = false;
+      let amountChanged = false;
+      try {
+        quantityChanged = !new Decimal(match.quantity.toString()).equals(new Decimal(item.quantity || "0"));
+        amountChanged =
+          quantityChanged ||
+          !new Decimal(match.unitPrice.toString()).equals(new Decimal(item.unitPrice || "0")) ||
+          !new Decimal(match.taxRate.toString()).equals(new Decimal(item.taxRate || "0"));
+      } catch {
+        return NextResponse.json(
+          { error: "Invalid item values — please check quantities and prices" },
+          { status: 400 }
+        );
+      }
+      if (amountChanged) {
+        amountEdits.push({
+          id: match.id,
+          description: match.description,
+          old: {
+            quantity: match.quantity.toString(),
+            unitPrice: match.unitPrice.toString(),
+            taxRate: match.taxRate.toString(),
+          },
+          quantityChanged,
+        });
+      }
       // A supplier/part number that was never set can be filled in once:
       // before this, a paid line without one (a converted estimate, or a
       // line saved before item codes existed) could never get one, and so
@@ -265,7 +301,7 @@ export async function PATCH(
       if (mismatches.length > 0) {
         return NextResponse.json(
           {
-            error: `${lockReason} -- existing line items' quantity, price, supplier and part number can't be changed, and items can't be removed. You can still edit an item's wording and add new items. (Field${mismatches.length > 1 ? "s" : ""} that differ on "${match.description}": ${mismatches.join(", ")}.)`,
+            error: `${lockReason} -- an existing line's supplier and part number can't be changed once set, and items can't be removed. You can still change wording, quantity, price and tax, and add new items. (Field${mismatches.length > 1 ? "s" : ""} that differ on "${match.description}": ${mismatches.join(", ")}.)`,
           },
           { status: 409 }
         );
@@ -275,7 +311,7 @@ export async function PATCH(
       if (!seenIds.has(existingItem.id)) {
         return NextResponse.json(
           {
-            error: `${lockReason} -- existing line items can't be removed. You can still edit an item's wording and add new items. ("${existingItem.description}" was removed or its id wasn't submitted.)`,
+            error: `${lockReason} -- existing line items can't be removed. You can still change wording, quantity, price and tax, and add new items. ("${existingItem.description}" was removed or its id wasn't submitted.)`,
           },
           { status: 409 }
         );
@@ -468,7 +504,7 @@ export async function PATCH(
         .filter(({ id }) => !id || !existingIds.has(id))
         .map(({ computed }) => computed);
 
-      if (newItems.length > 0 || textEdits.length > 0 || codeFills.length > 0) {
+      if (newItems.length > 0 || textEdits.length > 0 || codeFills.length > 0 || amountEdits.length > 0) {
         // Wording edits and missing-code fill-ins to existing (locked)
         // lines, merged per row -- updated in place, so the row keeps its id
         // and any purchase_request that references it (ON DELETE RESTRICT)
@@ -484,6 +520,23 @@ export async function PATCH(
             ...(inPlace.get(f.id) ?? {}),
             ...(f.supplierId ? { supplierId: f.supplierId } : {}),
             ...(f.partNumber ? { partNumber: f.partNumber } : {}),
+          });
+        }
+        // Amount edits take their new values (and the line total) from
+        // computedItems -- the same computeLineTotals() results the invoice's
+        // subtotal/tax/total above were built from, so they can't disagree.
+        const computedById = new Map(
+          data.items.map((item, idx) => [item.id ?? "", computedItems[idx]] as const).filter(([itemId]) => itemId)
+        );
+        for (const a of amountEdits) {
+          const c = computedById.get(a.id);
+          if (!c) continue;
+          inPlace.set(a.id, {
+            ...(inPlace.get(a.id) ?? {}),
+            quantity: c.quantity,
+            unitPrice: c.unitPrice,
+            taxRate: c.taxRate,
+            lineTotal: c.lineTotal,
           });
         }
         updateData.items = {
@@ -580,6 +633,18 @@ export async function PATCH(
           data: { description: e.description },
         });
       }
+      // Same for quantity: purchasing orders the request's own quantity, so
+      // a corrected quantity must reach a still-PENDING request. A FULFILLED
+      // one matches the supplier bill already entered and is left alone.
+      for (const a of amountEdits) {
+        if (!a.quantityChanged) continue;
+        const newQty = data.items?.find((i) => i.id === a.id)?.quantity;
+        if (!newQty) continue;
+        await tx.purchaseRequest.updateMany({
+          where: { customerInvoiceItemId: a.id, status: "PENDING" },
+          data: { quantity: newQty },
+        });
+      }
 
       // Second write path (besides the payments POST route) that can move
       // paidAmount off zero -- the edit screen's own "Amount Paid" field. Also
@@ -640,6 +705,17 @@ export async function PATCH(
                 return [before?.description, before?.itemDescription].filter(Boolean).join(" / ");
               }),
               new: textEdits.map((e) => [e.description, e.itemDescription].filter(Boolean).join(" / ")),
+            },
+          }
+        : {}),
+      ...(amountEdits.length > 0
+        ? {
+            lockedItemAmounts: {
+              old: amountEdits.map((a) => `${a.description}: qty ${a.old.quantity} x $${a.old.unitPrice}, tax ${a.old.taxRate}`),
+              new: amountEdits.map((a) => {
+                const i = data.items?.find((x) => x.id === a.id);
+                return `${a.description}: qty ${i?.quantity} x $${i?.unitPrice}, tax ${i?.taxRate}`;
+              }),
             },
           }
         : {}),

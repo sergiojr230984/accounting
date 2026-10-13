@@ -98,6 +98,12 @@ interface InvoiceItemsEditorProps<T extends FieldValues> {
   // PATCH route accepts filling a missing value on a locked line but not
   // changing one that's already set. Omitted -> nothing fillable.
   lockedFillableCodes?: { supplierId: boolean; partNumber: boolean }[];
+  // Opt-in, customer-invoice-only: a locked row's quantity, price and tax
+  // stay editable (owner decision 2026-10-12 -- amounts on a saved invoice
+  // can be corrected at any time). The customer-invoice PATCH route accepts
+  // these in place. Off for every other caller: the supplier-bill route
+  // still rejects amount changes on a locked bill line.
+  allowLockedAmountEdits?: boolean;
 }
 
 function LinePreview({ quantity, price, taxRate }: { quantity: string; price: string; taxRate: string }) {
@@ -133,6 +139,7 @@ export default function InvoiceItemsEditor<T extends FieldValues = any>({
   supplierOptions = [],
   allowLockedTextEdits = false,
   lockedFillableCodes = [],
+  allowLockedAmountEdits = false,
 }: InvoiceItemsEditorProps<T>) {
   const { fields, append, remove } = useFieldArray({ control, name: fieldName as Path<T> as never });
   const items = useWatch({ control, name: fieldName as Path<T> as never }) as unknown as ItemRow[];
@@ -297,7 +304,9 @@ export default function InvoiceItemsEditor<T extends FieldValues = any>({
           {lockedCount > 0 && (
             <p className="text-xs text-gray-400 mt-0.5">
               {allowLockedTextEdits
-                ? "Existing items are locked (payment recorded or already sent to purchasing) — you can still edit their wording and add new items."
+                ? allowLockedAmountEdits
+                  ? "Payment recorded or already sent to purchasing — existing items can't be removed or have their supplier/part number changed, but you can still edit their wording, quantity, price and tax, and add new items."
+                  : "Existing items are locked (payment recorded or already sent to purchasing) — you can still edit their wording and add new items."
                 : "A payment has been recorded — existing items are locked, but you can still add new ones."}
             </p>
           )}
@@ -434,7 +443,7 @@ export default function InvoiceItemsEditor<T extends FieldValues = any>({
                     type="number"
                     step="0.0001"
                     min="0"
-                    disabled={locked}
+                    disabled={locked && !allowLockedAmountEdits}
                     {...register(`${fieldName}.${index}.quantity` as Path<T>)}
                   />
                 </div>
@@ -446,7 +455,7 @@ export default function InvoiceItemsEditor<T extends FieldValues = any>({
                     type="number"
                     step="0.01"
                     min="0"
-                    disabled={locked}
+                    disabled={locked && !allowLockedAmountEdits}
                     {...register(`${fieldName}.${index}.${priceField}` as Path<T>)}
                   />
                 </div>
@@ -455,7 +464,7 @@ export default function InvoiceItemsEditor<T extends FieldValues = any>({
                   {taxRates.length > 0 ? (
                     <select
                       className="input text-sm"
-                      disabled={locked}
+                      disabled={locked && !allowLockedAmountEdits}
                       {...register(`${fieldName}.${index}.taxRate` as Path<T>)}
                     >
                       <option value="0">No tax</option>
@@ -488,7 +497,7 @@ export default function InvoiceItemsEditor<T extends FieldValues = any>({
                       step="0.001"
                       min="0"
                       max="1"
-                      disabled={locked}
+                      disabled={locked && !allowLockedAmountEdits}
                       {...register(`${fieldName}.${index}.taxRate` as Path<T>)}
                     />
                   )}

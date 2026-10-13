@@ -15,7 +15,7 @@ import InvoiceItemsEditor from "@/components/InvoiceItemsEditor";
 import InvoiceDocumentPreview from "@/components/InvoiceDocumentPreview";
 import CustomerCreateModal from "@/components/CustomerCreateModal";
 import AddressAutocomplete from "@/components/AddressAutocomplete";
-import { formatCurrency } from "@/lib/money";
+import { computeLineTotals, formatCurrency } from "@/lib/money";
 import { formatDateOnly } from "@/lib/date";
 import Decimal from "decimal.js";
 
@@ -149,7 +149,7 @@ export default function CustomerInvoiceDetailPage() {
   >([]);
   const [suppliers, setSuppliers] = useState<SupplierCodeOpt[]>([]);
 
-  const { register, handleSubmit, control, reset, setValue, watch, formState: { errors } } = useForm<EditForm>({
+  const { register, handleSubmit, control, reset, setValue, getValues, watch, formState: { errors } } = useForm<EditForm>({
     resolver: zodResolver(editSchema),
   });
 
@@ -235,11 +235,20 @@ export default function CustomerInvoiceDetailPage() {
       .catch(() => {});
   }, []);
 
-  // Auto-update paymentStatus when paidAmount or downPayment changes in edit mode
+  // Auto-update paymentStatus when paidAmount, downPayment, or the line
+  // items change in edit mode. The total is computed live from the lines
+  // being edited (same computeLineTotals() the server uses, plus fees) --
+  // NOT the saved invoice.totalAmount: this status is sent with the save
+  // and the server keeps it as-is, so computing it from the old total left
+  // e.g. a fully paid invoice marked PAID after a line's price went up.
   useEffect(() => {
     if (!editing || !invoice) return;
     try {
-      const total = new Decimal(invoice.totalAmount || "0");
+      const { subtotal, taxAmount } = computeLineTotals(
+        (watchedItems ?? []).map((i) => ({ quantity: i.quantity || "0", price: i.unitPrice || "0", taxRate: i.taxRate || "0" }))
+      );
+      const fees = computedAppliedFees.reduce((sum, f) => sum.plus(f.amount || "0"), new Decimal(0));
+      const total = subtotal.plus(taxAmount).plus(fees);
       const paid = new Decimal(watchedPaid || "0");
       const down = new Decimal(watchedDown || "0");
       const balance = total.minus(paid).minus(down);
@@ -251,11 +260,15 @@ export default function CustomerInvoiceDetailPage() {
       } else {
         status = "UNPAID";
       }
-      setValue("paymentStatus", status, { shouldValidate: false });
+      // Only write when it actually changes -- this effect now re-runs on
+      // every line-item keystroke.
+      if (getValues("paymentStatus") !== status) {
+        setValue("paymentStatus", status, { shouldValidate: false });
+      }
     } catch {
       // Ignore Decimal parse errors on incomplete / empty input
     }
-  }, [watchedPaid, watchedDown, editing, invoice, setValue]);
+  }, [watchedPaid, watchedDown, watchedItems, computedAppliedFees, editing, invoice, setValue, getValues]);
 
   async function onSave(data: EditForm) {
     // Same rule the New Invoice page enforces (invoices/customer/new): a
@@ -728,6 +741,10 @@ export default function CustomerInvoiceDetailPage() {
                     : 0
                 }
                 allowLockedTextEdits
+                // Quantity / price / tax stay editable on saved lines, paid
+                // or not (owner decision 2026-10-12); the server recomputes
+                // totals, balance and payment status.
+                allowLockedAmountEdits
                 // A locked line whose supplier / part number was never set
                 // (e.g. converted from an estimate) can still have it filled
                 // in -- the server allows filling a missing value, not

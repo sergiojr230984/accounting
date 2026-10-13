@@ -975,21 +975,56 @@ describe("clarifying an existing line's wording after a payment", () => {
     expect(patch.status).toBe(200);
   });
 
-  it("still blocks changing a paid line's quantity or price", async () => {
+  // Behavior change (owner decision 2026-10-12): quantity, price and tax
+  // on a saved invoice's lines can be changed at any time, by any role --
+  // paid or not. This test used to assert both edits were rejected (409).
+  it("allows changing a paid line's price -- totals and balance recalculate, same row stays attached to purchasing", async () => {
     const inv = await paidInvoice();
     const item = inv.items[0];
-    const qty = await admin.postJson(
+    const patch = await manager.postJson(
+      `/api/invoices/customer/${inv.id}`,
+      { items: [asSubmitted(item, { unitPrice: "450" })] },
+      "PATCH"
+    );
+    expect(patch.status, JSON.stringify(patch.body)).toBe(200);
+    const after = await admin.getJson<{ totalAmount: string; paymentStatus: string; items: (Item & { lineTotal: string })[] }>(
+      `/api/invoices/customer/${inv.id}`
+    );
+    expect(after.body.items).toHaveLength(1);
+    expect(after.body.items[0].id).toBe(item.id);
+    expect(Number(after.body.items[0].unitPrice)).toBe(450);
+    expect(Number(after.body.items[0].lineTotal)).toBe(450);
+    expect(Number(after.body.totalAmount)).toBe(450);
+    expect(after.body.paymentStatus).toBe("PARTIALLY_PAID");
+    expect(after.body.items[0].purchaseRequest?.status).toBe("PENDING");
+  });
+
+  it("allows changing a paid line's quantity and keeps its pending purchase request's quantity in step", async () => {
+    const inv = await paidInvoice();
+    const item = inv.items[0];
+    const patch = await manager.postJson(
       `/api/invoices/customer/${inv.id}`,
       { items: [asSubmitted(item, { quantity: "2" })] },
       "PATCH"
     );
-    expect(qty.status).toBe(409);
-    const price = await admin.postJson(
+    expect(patch.status, JSON.stringify(patch.body)).toBe(200);
+    const after = await admin.getJson<{ totalAmount: string }>(`/api/invoices/customer/${inv.id}`);
+    expect(Number(after.body.totalAmount)).toBe(Number(inv.totalAmount) * 2);
+    const report = await admin.getJson<{ rows: { invoiceNumber: string; quantity: string }[] }>(
+      `/api/reports?type=items-ordered&status=PENDING`
+    );
+    const row = report.body.rows.find((r) => r.invoiceNumber === inv.invoiceNumber);
+    expect(Number(row?.quantity)).toBe(2);
+  });
+
+  it("still blocks removing a line from a paid invoice", async () => {
+    const inv = await paidInvoice();
+    const removed = await admin.postJson(
       `/api/invoices/customer/${inv.id}`,
-      { items: [asSubmitted(item, { unitPrice: "1" })] },
+      { items: [{ description: "Replacement", quantity: "1", unitPrice: "1" }] },
       "PATCH"
     );
-    expect(price.status).toBe(409);
+    expect(removed.status).toBe(409);
   });
 });
 
