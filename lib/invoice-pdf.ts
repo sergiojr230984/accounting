@@ -90,28 +90,31 @@ export interface InvoicePDFData {
   kind?: "customer" | "supplier" | "estimate";
 }
 
-// Brand colors
-const ORANGE: [number, number, number] = [242, 106, 0]; // #F26A00
-const BRAND_DARK: [number, number, number] = [124, 45, 18]; // brand-900
-const TEXT_DARK: [number, number, number] = [31, 41, 55]; // gray-800
-const TEXT_MID: [number, number, number] = [75, 85, 99]; // gray-600
-const TEXT_LIGHT: [number, number, number] = [156, 163, 175]; // gray-400
-const BG_GRAY: [number, number, number] = [243, 244, 246]; // gray-100
-const RULE_GRAY: [number, number, number] = [229, 231, 235]; // gray-200
+// Brand colors -- exported so the packing list (lib/packing-list-pdf.ts)
+// prints in the same house style without a second copy of these values.
+export const ORANGE: [number, number, number] = [242, 106, 0]; // #F26A00
+export const BRAND_DARK: [number, number, number] = [124, 45, 18]; // brand-900
+export const TEXT_DARK: [number, number, number] = [31, 41, 55]; // gray-800
+export const TEXT_MID: [number, number, number] = [75, 85, 99]; // gray-600
+export const TEXT_LIGHT: [number, number, number] = [156, 163, 175]; // gray-400
+export const BG_GRAY: [number, number, number] = [243, 244, 246]; // gray-100
+export const RULE_GRAY: [number, number, number] = [229, 231, 235]; // gray-200
 
-export function generateInvoicePDF(invoice: InvoicePDFData): jsPDF {
-  const doc = new jsPDF({ unit: "pt", format: "letter" });
+/**
+ * Orange top bar + company logo (or company name when there's no logo),
+ * top-left. Returns the y coordinate just below it. Shared by the invoice /
+ * estimate / purchase-order PDF and the packing list so their headers can't
+ * drift apart.
+ */
+export function drawCompanyHeader(
+  doc: jsPDF,
+  company: InvoicePDFData["company"],
+  margin: number
+): number {
   const pageWidth = doc.internal.pageSize.getWidth();
-  const pageHeight = doc.internal.pageSize.getHeight();
-  const margin = 48;
-  const isPO = invoice.kind === "supplier";
-  const isEstimate = invoice.kind === "estimate";
-
-  // ─── HEADER ────────────────────────────────────
   doc.setFillColor(...ORANGE);
   doc.rect(0, 0, pageWidth, 8, "F");
 
-  const company = invoice.company ?? null;
   const hasLogo = Boolean(company?.logo);
   const companyName = company?.name?.trim() || "La Cuevita";
 
@@ -147,6 +150,20 @@ export function generateInvoicePDF(invoice: InvoicePDFData): jsPDF {
     doc.text(companyName, margin, 56);
     headerBottom = 64;
   }
+  return headerBottom;
+}
+
+export function generateInvoicePDF(invoice: InvoicePDFData): jsPDF {
+  const doc = new jsPDF({ unit: "pt", format: "letter" });
+  const pageWidth = doc.internal.pageSize.getWidth();
+  const pageHeight = doc.internal.pageSize.getHeight();
+  const margin = 48;
+  const isPO = invoice.kind === "supplier";
+  const isEstimate = invoice.kind === "estimate";
+
+  // ─── HEADER ────────────────────────────────────
+  const company = invoice.company ?? null;
+  const headerBottom = drawCompanyHeader(doc, company, margin);
 
   doc.setFont("helvetica", "bold");
   doc.setFontSize(isPO ? 28 : isEstimate ? 32 : 36);

@@ -6,8 +6,9 @@ import { useForm, Controller } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import Link from "next/link";
-import { ArrowLeft, Edit2, Save, X, Trash2, Loader2, Send, Copy, Check, Printer, Plus, Pencil } from "lucide-react";
+import { ArrowLeft, Edit2, Save, X, Trash2, Loader2, Send, Copy, Check, Printer, Plus, Pencil, Truck } from "lucide-react";
 import { generateInvoicePDF } from "@/lib/invoice-pdf";
+import { generatePackingListPDF } from "@/lib/packing-list-pdf";
 import { format } from "date-fns";
 import PaymentBadge from "@/components/PaymentBadge";
 import FileUpload from "@/components/FileUpload";
@@ -506,6 +507,36 @@ export default function CustomerInvoiceDetailPage() {
     window.open(url, "_blank");
   }
 
+  // Packing list for the delivery department -- no prices. Fields are
+  // picked one by one (never `...invoice`) so nothing money-related is even
+  // handed to the generator; see lib/packing-list-pdf.ts.
+  async function printPackingList() {
+    if (!invoice) return;
+    const company = await fetchCompany();
+    const doc = generatePackingListPDF({
+      invoiceNumber: invoice.invoiceNumber,
+      invoiceDate: invoice.invoiceDate,
+      notes: invoice.notes,
+      customer: {
+        name: invoice.customer.name,
+        phone: invoice.customer.phone,
+        // Same delivery-address resolution as the invoice PDF above.
+        address: invoice.customerAddress ?? invoice.customer.address,
+        emergencyContactName: invoice.customer.emergencyContactName,
+        emergencyContactPhone: invoice.customer.emergencyContactPhone,
+      },
+      items: invoice.items.map((i) => ({
+        description: i.description,
+        itemDescription: i.itemDescription,
+        itemCode: formatItemCode(i),
+        quantity: i.quantity,
+      })),
+      company,
+      employee: invoice.employee ?? null,
+    });
+    window.open(doc.output("bloburl"), "_blank");
+  }
+
   if (!invoice) {
     return <div className="flex items-center justify-center h-48"><Loader2 className="w-6 h-6 animate-spin text-brand-500" /></div>;
   }
@@ -530,6 +561,10 @@ export default function CustomerInvoiceDetailPage() {
                 <button onClick={printPDF} className="btn-primary" title="Preview / print as PDF">
                   <Printer className="w-4 h-4" />
                   Print
+                </button>
+                <button onClick={printPackingList} className="btn-secondary" title="Print a packing list for delivery (no prices)">
+                  <Truck className="w-4 h-4" />
+                  Pack List
                 </button>
                 <button onClick={downloadPDF} className="btn-secondary" title="Download PDF">
                   <Save className="w-4 h-4" />
