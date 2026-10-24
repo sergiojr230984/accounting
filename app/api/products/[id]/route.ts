@@ -11,6 +11,7 @@ const updateSchema = z.object({
   taxRate: z.string().regex(/^\d+(\.\d+)?$/).optional(),
   incomeAccount: z.string().optional().nullable(),
   active: z.boolean().optional(),
+  isDeliveryService: z.boolean().optional(),
 });
 
 export async function PATCH(
@@ -60,6 +61,7 @@ export async function PATCH(
         ...(d.taxRate !== undefined && { taxRate: d.taxRate }),
         ...(d.incomeAccount !== undefined && { incomeAccount: d.incomeAccount }),
         ...(d.active !== undefined && { active: d.active }),
+        ...(d.isDeliveryService !== undefined && { isDeliveryService: d.isDeliveryService }),
       },
     });
 

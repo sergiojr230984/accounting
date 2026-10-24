@@ -39,6 +39,55 @@ enum PurchaseRequestStatus {
   FULFILLED
 }
 
+// Module 1 (Deliveries).
+//
+// PENDING_SCHEDULE: Delivery exists (created the moment its invoice has a
+// line item whose Product is flagged isDeliveryService), but no date/window/
+// crew has been set yet -- no calendar event, no QR worth printing.
+// SCHEDULED: date/window + crew or subcontractor assigned, calendar event
+// created (or moved, for a reschedule -- same event id, never a new one).
+// DELIVERED: terminal success -- at least one photo exists, unless a manager
+// override was used (requires a typed reason, recorded in history).
+// EXCEPTION: the crew/subcontractor reported they could not deliver. Not
+// terminal -- the office can reschedule (SCHEDULED) after fixing whatever
+// blocked it; see lib/deliveries.ts.
+enum DeliveryStatus {
+  PENDING_SCHEDULE
+  SCHEDULED
+  DELIVERED
+  EXCEPTION
+}
+
+// Determines the upload link's lifetime -- see lib/deliveries.ts's
+// isTokenValid(). In-house crew links stay valid for as long as the
+// delivery is open; subcontractor links expire 24h after the scheduled
+// window ends (or can be revoked by the office at any time, either kind).
+enum DeliveryTokenKind {
+  CREW
+  SUBCONTRACTOR
+}
+
+// Fixed dropdown on the public upload page (§2 of the spec) -- never
+// free-typed, so the office board can filter/count by reason.
+enum DeliveryExceptionReason {
+  CLIENTE_AUSENTE
+  DIRECCION_INCORRECTA
+  ACCESO_IMPOSIBLE
+  PRODUCTO_DANADO
+  CLIENTE_RECHAZO
+  OTRO
+}
+
+// Who made a status-history entry -- an office user (session-authenticated)
+// or whoever opened the public link (no account; identified only by the
+// token's own assigned name). Recorded alongside actorLabel so "who" survives
+// even if the Employee/subcontractor-name field later changes.
+enum DeliveryActorType {
+  OFFICE_USER
+  CREW_LINK
+  SUBCONTRACTOR_LINK
+}
+
 model User {
   id        String    @id @default(cuid())
   name      String
@@ -140,6 +189,7 @@ model CustomerInvoice {
   payments         Payment[]
   files            UploadedFile[]
   purchaseRequests PurchaseRequest[]
+  delivery         Delivery?
 
   @@unique([invoiceNumber, customerId])
 }
@@ -343,27 +393,35 @@ model TaxRate {
 }
 
 model Product {
-  id            String   @id @default(cuid())
-  name          String
-  description   String?
-  price         Decimal  @default(0) @db.Decimal(15, 2)
-  taxRate       Decimal  @default(0) @db.Decimal(5, 4)
-  incomeAccount String?
-  active        Boolean  @default(true)
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
+  id                String   @id @default(cuid())
+  name              String
+  description       String?
+  price             Decimal  @default(0) @db.Decimal(15, 2)
+  taxRate           Decimal  @default(0) @db.Decimal(5, 4)
+  incomeAccount     String?
+  active            Boolean  @default(true)
+  // Admin-set (Settings -> Products, same screen that already locks catalog
+  // creation to admins to stop near-duplicate names). When an invoice line's
+  // description matches one of these product names, lib/deliveries.ts's
+  // ensureDeliveryForInvoice() auto-creates the invoice's Delivery record --
+  // see that file's doc comment for why matching happens by product name
+  // (free-typed description) rather than a line-item foreign key.
+  isDeliveryService Boolean  @default(false)
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
 }
 
 model Employee {
-  id             String            @id @default(cuid())
-  name           String
-  email          String?           @unique
-  phone          String?
-  commissionRate Decimal           @default(0) @db.Decimal(5, 4)
-  active         Boolean           @default(true)
-  createdAt      DateTime          @default(now())
-  updatedAt      DateTime          @updatedAt
-  invoices       CustomerInvoice[]
+  id                 String            @id @default(cuid())
+  name               String
+  email              String?           @unique
+  phone              String?
+  commissionRate     Decimal           @default(0) @db.Decimal(5, 4)
+  active             Boolean           @default(true)
+  createdAt          DateTime          @default(now())
+  updatedAt          DateTime          @updatedAt
+  invoices           CustomerInvoice[]
+  assignedDeliveries Delivery[]
 }
 
 model UploadedFile {
@@ -378,6 +436,137 @@ model UploadedFile {
   supplierInvoiceId String?
   supplierInvoice   SupplierInvoice? @relation(fields: [supplierInvoiceId], references: [id])
   createdAt         DateTime         @default(now())
+}
+
+// Module 1 (Deliveries). One row per CustomerInvoice -- keyed to the invoice
+// itself, deliberately NOT to a CustomerInvoiceItem row, because an
+// in-progress (UNPAID) invoice edit does a full deleteMany+recreate of its
+// items (see app/api/invoices/customer/[id]/route.ts), which would silently
+// orphan a hard foreign key to one specific item row on the very next save.
+// Keying to the invoice sidesteps that entirely: the invoice row itself is
+// never deleted/recreated on edit, only its children. "Items" shown on the
+// public upload page is read live through this relation at request time, so
+// it's never stale and never needs its own snapshot/copy of the line items.
+//
+// This also means: one delivery run per invoice in this build (an order with
+// two genuinely separate delivery stops is out of scope -- not asked for,
+// and the one-event-per-delivery Calendar write-back in lib/google-calendar.ts
+// assumes the same 1:1 shape).
+model Delivery {
+  id                String          @id @default(cuid())
+  customerInvoiceId String          @unique
+  customerInvoice   CustomerInvoice @relation(fields: [customerInvoiceId], references: [id], onDelete: Cascade)
+
+  // Unique, unguessable link token -- crypto-random 256 bits (32 bytes),
+  // base64url-encoded by lib/deliveries.ts's generateDeliveryToken(). Never
+  // derived from the invoice number or any sequential value (spec §6).
+  token          String            @unique
+  tokenKind      DeliveryTokenKind @default(CREW)
+  // Office-initiated revoke, independent of the kind-based expiry rule --
+  // see lib/deliveries.ts's isTokenValid().
+  tokenRevokedAt DateTime?
+
+  status DeliveryStatus @default(PENDING_SCHEDULE)
+
+  scheduledDate DateTime?
+  windowStart   DateTime?
+  windowEnd     DateTime?
+
+  assignedCrewEmployeeId    String?
+  assignedCrewEmployee      Employee? @relation(fields: [assignedCrewEmployeeId], references: [id])
+  // Subcontractors have no User/Employee account (spec §5: "same link, same
+  // flow, no account") -- free-typed, same as Supplier.name elsewhere in
+  // this app for non-catalog parties.
+  assignedSubcontractorName String?
+  subcontractorCost         Decimal?  @db.Decimal(15, 2)
+  // Gated in app/api/deliveries/[id]/payable/route.ts: can only be set true
+  // once proof (>=1 DeliveryPhoto, or a manager override) exists -- spec §5
+  // "office sees proof BEFORE the subcontractor is marked payable".
+  subcontractorPayable      Boolean   @default(false)
+  subcontractorPayableAt    DateTime?
+
+  // Same Google Calendar event id reused across every reschedule -- a
+  // reschedule calls events.patch on this id, never events.insert again.
+  // See lib/google-calendar.ts.
+  calendarEventId String?
+
+  deliveredAt    DateTime?
+  // Manager override (§3: "mark delivered without a photo requires a typed
+  // reason"). Null on every normal Entregado-with-photo submission; the
+  // matching DeliveryStatusHistory row is what acceptance criterion #3 checks.
+  overrideReason String?
+
+  exceptionReason        DeliveryExceptionReason?
+  exceptionNote          String?
+  // Optional voice note in place of typing a note (spec §2) -- stored the
+  // same way as a photo (local disk + best-effort Drive copy), but kept as
+  // its own field rather than a DeliveryPhoto row since it isn't a photo and
+  // never gets attached to the calendar event.
+  exceptionVoiceNotePath String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  photos        DeliveryPhoto[]
+  statusHistory DeliveryStatusHistory[]
+
+  @@index([status])
+  @@index([tokenKind])
+}
+
+model DeliveryPhoto {
+  id         String   @id @default(cuid())
+  deliveryId String
+  delivery   Delivery @relation(fields: [deliveryId], references: [id], onDelete: Cascade)
+
+  originalName String
+  storedName   String
+  mimeType     String
+  size         Int
+  path         String
+
+  // Set once the best-effort Google Drive upload succeeds (lib/google-drive.ts).
+  // Null means the local copy (path, above) is still the only one -- per spec
+  // §3, a Drive failure must never lose the photo, only the Drive mirror of it.
+  driveFileId      String?
+  driveWebViewLink String?
+
+  // Browser geolocation, only when the crew granted permission -- never
+  // required to submit (spec §2.3).
+  gpsLat Float?
+  gpsLng Float?
+
+  createdAt DateTime @default(now())
+
+  @@index([deliveryId])
+}
+
+// Append-only -- rows are only ever inserted, never updated or deleted, so
+// this is the one place "who did what and when" for a delivery can always be
+// trusted, the same role AuditLog plays for the rest of the app. Kept as its
+// own model (not folded into AuditLog) because it needs delivery-specific
+// shape AuditLog doesn't: fromStatus/toStatus, and an actor that is often NOT
+// an authenticated User at all (a crew/subcontractor link has no account --
+// actorType + actorLabel identify them by name instead of a User row).
+model DeliveryStatusHistory {
+  id         String   @id @default(cuid())
+  deliveryId String
+  delivery   Delivery @relation(fields: [deliveryId], references: [id], onDelete: Cascade)
+
+  fromStatus DeliveryStatus
+  toStatus   DeliveryStatus
+
+  actorType  DeliveryActorType
+  // Crew/subcontractor name (from the token's assignment at the moment of
+  // submission) or the office User's name -- never client-supplied free
+  // text, so a public-link submission can't spoof a different identity.
+  actorLabel String
+
+  reason String?
+
+  createdAt DateTime @default(now())
+
+  @@index([deliveryId])
 }
 
 // Admin-only ledger of who did what (invoice/customer/supplier/product/user
