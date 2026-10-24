@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useState, use as usePromise } from "react";
+import { useEffect, useState } from "react";
+import { useParams } from "next/navigation";
 import QRCode from "qrcode";
 import {
   Truck, Copy, Check, Calendar, Camera, RefreshCw, Ban, ShieldAlert, DollarSign, Mic,
@@ -74,8 +75,8 @@ function toLocalInput(iso: string | null): string {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
-export default function DeliveryDetailPage({ params }: { params: Promise<{ id: string }> }) {
-  const { id } = usePromise(params);
+export default function DeliveryDetailPage() {
+  const { id } = useParams<{ id: string }>();
 
   const [delivery, setDelivery] = useState<DeliveryDetail | null>(null);
   const [employees, setEmployees] = useState<Employee[]>([]);
@@ -187,7 +188,13 @@ export default function DeliveryDetailPage({ params }: { params: Promise<{ id: s
     });
   }
 
-  if (loading) return <div className="text-gray-400 text-sm">Loading…</div>;
+  // Only blank the page on the very first load -- a post-action refresh
+  // (e.g. after scheduling) re-fetches with the same loading flag, and
+  // wiping the whole page to "Loading…" on every action is jarring. The
+  // Schedule button's own "Saving…" state already signals an in-flight
+  // request; once `delivery` has loaded once, keep the page visible while
+  // it refreshes underneath.
+  if (loading && !delivery) return <div className="text-gray-400 text-sm">Loading…</div>;
   if (!delivery) return <div className="text-gray-400 text-sm">Not found.</div>;
 
   return (
