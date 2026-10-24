@@ -1,7 +1,7 @@
 "use client";
 
 import { Fragment, useEffect, useState } from "react";
-import { Plus, Package, Loader2, Search, Pencil, X, Check } from "lucide-react";
+import { Plus, Package, Loader2, Search, Pencil, X, Check, Truck } from "lucide-react";
 import { formatCurrency } from "@/lib/money";
 
 const INCOME_ACCOUNTS = ["Sales", "Services", "Materials", "Other Revenue"];
@@ -14,6 +14,7 @@ interface Product {
   taxRate: string;
   incomeAccount: string | null;
   active: boolean;
+  isDeliveryService: boolean;
 }
 
 interface FormState {
@@ -23,6 +24,7 @@ interface FormState {
   taxRate: string;
   incomeAccount: string;
   active: boolean;
+  isDeliveryService: boolean;
 }
 
 const emptyForm = (): FormState => ({
@@ -32,6 +34,7 @@ const emptyForm = (): FormState => ({
   taxRate: "0",
   incomeAccount: "Sales",
   active: true,
+  isDeliveryService: false,
 });
 
 interface TaxRate {
@@ -153,6 +156,19 @@ function ProductForm({
             onChange={(e) => set("active", e.target.checked)}
           />
           <label htmlFor="product-active" className="text-sm text-gray-700">Active (visible in invoice picker)</label>
+        </div>
+        <div className="flex items-center gap-2 sm:col-span-2">
+          <input
+            id="product-delivery-service"
+            type="checkbox"
+            className="w-4 h-4 accent-brand-600"
+            checked={form.isDeliveryService}
+            onChange={(e) => set("isDeliveryService", e.target.checked)}
+          />
+          <label htmlFor="product-delivery-service" className="text-sm text-gray-700">
+            This is a delivery service — invoices with this line item get a Delivery record
+            (photo-upload link, Calendar scheduling) under <strong>Deliveries</strong>
+          </label>
         </div>
       </div>
 
@@ -342,7 +358,14 @@ export default function ProductsPage() {
               filtered.map((p) => (
                 <Fragment key={p.id}>
                   <tr className={`hover:bg-gray-50 transition-colors ${!p.active ? "opacity-50" : ""}`}>
-                    <td className="px-5 py-3 font-medium text-gray-900">{p.name}</td>
+                    <td className="px-5 py-3 font-medium text-gray-900">
+                      <span className="inline-flex items-center gap-1.5">
+                        {p.name}
+                        {p.isDeliveryService && (
+                          <Truck className="w-3.5 h-3.5 text-brand-600" aria-label="Delivery service" />
+                        )}
+                      </span>
+                    </td>
                     <td className="px-5 py-3 text-gray-500 max-w-xs truncate">{p.description ?? "—"}</td>
                     <td className="px-5 py-3 text-gray-500">{p.incomeAccount ?? "—"}</td>
                     <td className="px-5 py-3 text-gray-700 text-right font-medium">{formatCurrency(p.price)}</td>
@@ -385,6 +408,7 @@ export default function ProductsPage() {
                             taxRate: p.taxRate,
                             incomeAccount: p.incomeAccount ?? "Sales",
                             active: p.active,
+                            isDeliveryService: p.isDeliveryService,
                           }}
                           taxRates={taxRates}
                           submitLabel="Save changes"

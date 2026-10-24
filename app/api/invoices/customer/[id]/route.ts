@@ -7,6 +7,7 @@ import { writeAuditLog, extractMeta, actorFromSession, diffChanges } from "@/lib
 import { computeLineTotals } from "@/lib/money";
 import { claimSequenceNumber, isDocumentNumberTaken, lockDocumentNumbering } from "@/lib/next-number";
 import { cancelPendingPurchaseRequestsIfUnpaid, ensurePurchaseRequestsForInvoice } from "@/lib/purchase-requests";
+import { ensureDeliveryForInvoice } from "@/lib/deliveries";
 import { z } from "zod";
 import Decimal from "decimal.js";
 
@@ -664,6 +665,10 @@ export async function PATCH(
         // anything.
         await cancelPendingPurchaseRequestsIfUnpaid(tx, id);
       }
+
+      // Module 1 (Deliveries) -- idempotent; covers a delivery-service line
+      // added on an edit that didn't have one at creation.
+      await ensureDeliveryForInvoice(tx, id);
 
       return result;
     });

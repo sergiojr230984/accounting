@@ -7,6 +7,7 @@ import { writeAuditLog, extractMeta, actorFromSession } from "@/lib/audit";
 import { computeLineTotals } from "@/lib/money";
 import { claimSequenceNumber, resolveNewDocumentNumber } from "@/lib/next-number";
 import { ensurePurchaseRequestsForInvoice } from "@/lib/purchase-requests";
+import { ensureDeliveryForInvoice } from "@/lib/deliveries";
 import { z } from "zod";
 import Decimal from "decimal.js";
 
@@ -340,6 +341,10 @@ export async function POST(request: Request) {
       if (new Decimal(created.paidAmount.toString()).gt(0)) {
         await ensurePurchaseRequestsForInvoice(tx, created.id);
       }
+
+      // Module 1 (Deliveries) -- unlike purchase requests this is NOT
+      // gated on payment; "PAID != delivered" is the whole point.
+      await ensureDeliveryForInvoice(tx, created.id);
 
       return created;
     });
