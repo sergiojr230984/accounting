@@ -58,6 +58,11 @@ export const API_KEY_SCOPES = [
     label: "Sales performance",
     description: "Per-employee sales totals and commission leaderboard.",
   },
+  {
+    key: "deliveries",
+    label: "Deliveries",
+    description: "Delivery status, schedule, crew/subcontractor assignment, and photo-proof metadata. Never the public upload link itself.",
+  },
 ] as const;
 
 export type ApiScope = (typeof API_KEY_SCOPES)[number]["key"];

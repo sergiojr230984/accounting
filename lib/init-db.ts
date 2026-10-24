@@ -325,6 +325,73 @@ const SCHEMA_STATEMENTS: string[] = [
   // which reproduces today's behavior exactly until someone edits an
   // invoice's address for the first time.
   `ALTER TABLE "CustomerInvoice" ADD COLUMN IF NOT EXISTS "customerAddress" TEXT;`,
+
+  // Module 1 (Deliveries) -- per-delivery photo-upload link + Calendar/Drive
+  // write-back. See prisma/schema.prisma's doc comment on the Delivery model
+  // for why it's keyed 1:1 to CustomerInvoice rather than to a line item.
+  `ALTER TABLE "Product" ADD COLUMN IF NOT EXISTS "isDeliveryService" BOOLEAN NOT NULL DEFAULT false;`,
+  `DO $$ BEGIN CREATE TYPE "DeliveryStatus" AS ENUM ('PENDING_SCHEDULE', 'SCHEDULED', 'DELIVERED', 'EXCEPTION'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;`,
+  `DO $$ BEGIN CREATE TYPE "DeliveryTokenKind" AS ENUM ('CREW', 'SUBCONTRACTOR'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;`,
+  `DO $$ BEGIN CREATE TYPE "DeliveryExceptionReason" AS ENUM ('CLIENTE_AUSENTE', 'DIRECCION_INCORRECTA', 'ACCESO_IMPOSIBLE', 'PRODUCTO_DANADO', 'CLIENTE_RECHAZO', 'OTRO'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;`,
+  `DO $$ BEGIN CREATE TYPE "DeliveryActorType" AS ENUM ('OFFICE_USER', 'CREW_LINK', 'SUBCONTRACTOR_LINK'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;`,
+  `CREATE TABLE IF NOT EXISTS "Delivery" (
+    "id" TEXT NOT NULL PRIMARY KEY,
+    "customerInvoiceId" TEXT NOT NULL,
+    "token" TEXT NOT NULL,
+    "tokenKind" "DeliveryTokenKind" NOT NULL DEFAULT 'CREW',
+    "tokenRevokedAt" TIMESTAMP(3),
+    "status" "DeliveryStatus" NOT NULL DEFAULT 'PENDING_SCHEDULE',
+    "scheduledDate" TIMESTAMP(3),
+    "windowStart" TIMESTAMP(3),
+    "windowEnd" TIMESTAMP(3),
+    "assignedCrewEmployeeId" TEXT,
+    "assignedSubcontractorName" TEXT,
+    "subcontractorCost" DECIMAL(15,2),
+    "subcontractorPayable" BOOLEAN NOT NULL DEFAULT false,
+    "subcontractorPayableAt" TIMESTAMP(3),
+    "calendarEventId" TEXT,
+    "deliveredAt" TIMESTAMP(3),
+    "overrideReason" TEXT,
+    "exceptionReason" "DeliveryExceptionReason",
+    "exceptionNote" TEXT,
+    "exceptionVoiceNotePath" TEXT,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT "Delivery_customerInvoiceId_fkey" FOREIGN KEY ("customerInvoiceId") REFERENCES "CustomerInvoice"("id") ON DELETE CASCADE ON UPDATE CASCADE,
+    CONSTRAINT "Delivery_assignedCrewEmployeeId_fkey" FOREIGN KEY ("assignedCrewEmployeeId") REFERENCES "Employee"("id") ON DELETE SET NULL ON UPDATE CASCADE
+  );`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS "Delivery_customerInvoiceId_key" ON "Delivery"("customerInvoiceId");`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS "Delivery_token_key" ON "Delivery"("token");`,
+  `CREATE INDEX IF NOT EXISTS "Delivery_status_idx" ON "Delivery" ("status");`,
+  `CREATE INDEX IF NOT EXISTS "Delivery_tokenKind_idx" ON "Delivery" ("tokenKind");`,
+  `CREATE TABLE IF NOT EXISTS "DeliveryPhoto" (
+    "id" TEXT NOT NULL PRIMARY KEY,
+    "deliveryId" TEXT NOT NULL,
+    "originalName" TEXT NOT NULL,
+    "storedName" TEXT NOT NULL,
+    "mimeType" TEXT NOT NULL,
+    "size" INTEGER NOT NULL,
+    "path" TEXT NOT NULL,
+    "driveFileId" TEXT,
+    "driveWebViewLink" TEXT,
+    "gpsLat" DOUBLE PRECISION,
+    "gpsLng" DOUBLE PRECISION,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT "DeliveryPhoto_deliveryId_fkey" FOREIGN KEY ("deliveryId") REFERENCES "Delivery"("id") ON DELETE CASCADE ON UPDATE CASCADE
+  );`,
+  `CREATE INDEX IF NOT EXISTS "DeliveryPhoto_deliveryId_idx" ON "DeliveryPhoto" ("deliveryId");`,
+  `CREATE TABLE IF NOT EXISTS "DeliveryStatusHistory" (
+    "id" TEXT NOT NULL PRIMARY KEY,
+    "deliveryId" TEXT NOT NULL,
+    "fromStatus" "DeliveryStatus" NOT NULL,
+    "toStatus" "DeliveryStatus" NOT NULL,
+    "actorType" "DeliveryActorType" NOT NULL,
+    "actorLabel" TEXT NOT NULL,
+    "reason" TEXT,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT "DeliveryStatusHistory_deliveryId_fkey" FOREIGN KEY ("deliveryId") REFERENCES "Delivery"("id") ON DELETE CASCADE ON UPDATE CASCADE
+  );`,
+  `CREATE INDEX IF NOT EXISTS "DeliveryStatusHistory_deliveryId_idx" ON "DeliveryStatusHistory" ("deliveryId");`,
 ];
 
 export function initializeDatabase(): Promise<void> {
