@@ -12,6 +12,7 @@ const schema = z.object({
   taxRate: z.string().regex(/^\d+(\.\d+)?$/).default("0"),
   incomeAccount: z.string().optional(),
   active: z.boolean().default(true),
+  isDeliveryService: z.boolean().default(false),
 });
 
 export async function GET(request: Request) {
@@ -71,6 +72,7 @@ export async function POST(request: Request) {
         taxRate: parsed.data.taxRate,
         incomeAccount: parsed.data.incomeAccount || null,
         active: parsed.data.active,
+        isDeliveryService: parsed.data.isDeliveryService,
       },
     });
 

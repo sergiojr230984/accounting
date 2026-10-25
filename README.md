@@ -62,6 +62,60 @@ Verified directly against the route handlers (`app/api/`), pages (`app/`), and d
 - **No delete** — a product can only be deactivated (`active: false`), because past invoices reference it by name with no foreign key, and deleting one would orphan the frequency report's grouping for every historical invoice that used it.
 - Also auto-populated by invoice line items (see Customer Invoices above).
 - A `TaxRate` catalog (name + rate) is managed from Settings and offered as a dropdown on invoice line items.
+- A product can be flagged **"This is a delivery service"** (`isDeliveryService`) — see Module 1: Deliveries below.
+
+### Module 1: Deliveries (`/deliveries`)
+
+Closes the gap between "an invoice was paid" and "the furniture actually
+arrived." Previously a delivery was only a line item on an invoice, with no
+tracking, no photo proof, and no link to the office's manual Google Calendar
+scheduling.
+
+- **Auto-created**: the moment a customer invoice has a line item whose
+  description matches a Product flagged `isDeliveryService`, a `Delivery`
+  record is created — one per invoice (`lib/deliveries.ts`'s
+  `ensureDeliveryForInvoice`, called from both the invoice create and edit
+  routes, fire-once/idempotent the same way `lib/purchase-requests.ts`
+  already works). It gets a cryptographically random, unguessable upload
+  link (`/d/<token>`, 256-bit) immediately, before it's even scheduled.
+- **Scheduling** (office, `/deliveries/[id]`): set a delivery window and
+  assign either an in-house crew member (`Employee`) or a free-typed
+  subcontractor name + cost. This creates (or, on a reschedule, moves —
+  same event id, never a duplicate) a Google Calendar event whose
+  description includes the upload link. Reassigning who's doing the job
+  (not the very first assignment) rotates the upload token, so a previous
+  holder loses access.
+- **The public upload page** (`/d/[token]`, no login, Spanish, mobile-first):
+  shows only customer first name / invoice # / items / address / window —
+  never price or balance. One big "Tomar foto" button (camera capture,
+  client-side compressed to a ~2000px JPEG before upload), then either
+  **Entregado** (requires ≥1 photo) or **No se pudo entregar** (a reason
+  from a fixed dropdown, optional note or recorded voice note). GPS is
+  attached only if the browser hands it over with permission already
+  granted — never blocks submission.
+- **On Entregado**: status → `DELIVERED`, appended to an append-only
+  `DeliveryStatusHistory` (actor = the crew/subcontractor's assigned name,
+  not free-typed), photos saved locally and best-effort mirrored to Google
+  Drive (`Delivery Photos/<year>/<week>/PO<invoice#>_<n>.jpg`), and the
+  calendar event gets a "✅ ENTREGADO ... — Fotos: <link>" line appended to
+  its description plus the photos as attachments. The description append
+  is the non-optional half — it still happens even if the Drive upload or
+  attachment step fails (logged, never silently lost).
+- **Manager override**: an ADMIN/MANAGER can mark a delivery Delivered
+  without a photo from `/deliveries/[id]` — requires a typed reason,
+  recorded in status history.
+- **Subcontractor links** expire 24h after the delivery window ends (crew
+  links stay valid while the delivery is open); the office can revoke or
+  regenerate either kind at any time. A subcontractor can only be marked
+  **payable** once proof exists (a photo, or a recorded override).
+- **Route sheet** (`/deliveries/route-sheet`): a printable page listing
+  every scheduled delivery with its QR code, for the printed sheet handed
+  to a driver.
+- See `GOOGLE_CALENDAR_DRIVE_SETUP.md` for the one-time service-account
+  setup. Without it configured, everything above still works end to end —
+  scheduling just won't create a calendar event, and photos stay
+  local-only (same fail-soft pattern as every other optional integration
+  in this app).
 
 ### Employees & Commissions
 - `Employee` records (name, email, phone, active flag, commission rate) optionally linked to a login account (`User`) by matching email.
@@ -382,6 +436,7 @@ There is no Balance Sheet or Cash Flow report in this codebase.
 - **OpenStreetMap Nominatim** — free, keyless address autocomplete on the customer address field (`components/AddressAutocomplete.tsx`), debounced client-side calls restricted to US results.
 - **Sentry** — error monitoring for server, client, and edge runtimes. Requires `SENTRY_DSN` / `NEXT_PUBLIC_SENTRY_DSN` (+ `SENTRY_ORG`/`SENTRY_PROJECT` for source-map upload at build time, which is otherwise disabled).
 - **Better Uptime** (or any HTTP monitor) — not code in this repo, but `DEPLOYMENT.md`/`SETUP_PRODUCTION.md` document pointing an external monitor at `/api/health/full`.
+- **Google Calendar + Drive** (service account) — Module 1's scheduling/photo write-back (`lib/google-calendar.ts`, `lib/google-drive.ts`). Requires `GOOGLE_SERVICE_ACCOUNT_JSON` + `GOOGLE_CALENDAR_ID` + `GOOGLE_DRIVE_ROOT_FOLDER_ID`; see `GOOGLE_CALENDAR_DRIVE_SETUP.md`. Without it, delivery tracking still works fully — scheduling just won't create a calendar event, and photos stay local-only.
 
 **Documented but not actually used:** `GOOGLE_MAPS_SETUP.md` and the `NEXT_PUBLIC_GOOGLE_MAPS_API_KEY` env var describe wiring up Google's Places API for address autocomplete — but the actual `AddressAutocomplete` component calls OpenStreetMap's Nominatim API instead, which needs no key at all. See [Known Limitations](#known-limitations).
 

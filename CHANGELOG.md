@@ -144,6 +144,22 @@ dedicated integration test and a full clean suite run before moving to
 the next. See `git log` on this range for the individual commit messages,
 which go into more detail than fits here.
 
+### Added
+
+- **Module 1: Deliveries** — per-delivery photo-upload link + Google
+  Calendar/Drive write-back. A delivery is no longer just an invoice line
+  item: every invoice with a delivery-service line gets a `Delivery`
+  record, an unguessable public upload link (`/d/<token>`, no login,
+  Spanish, mobile-first), and a two-way link to the office's Google
+  Calendar. "Entregado" requires a photo (or a reasoned manager override);
+  "No se pudo entregar" requires a reason from a fixed dropdown. Photos
+  mirror to Google Drive and attach to the calendar event automatically.
+  Subcontractor links expire 24h after the delivery window; a
+  subcontractor can only be marked payable once proof exists. See the new
+  "Module 1: Deliveries" section in `README.md` and
+  `GOOGLE_CALENDAR_DRIVE_SETUP.md` for the integration setup. 19 new
+  integration tests cover every acceptance criterion end to end.
+
 ### Security
 - Fixed a stored-XSS hole in file uploads (extension was derived from the
   client-submitted filename, not the actual MIME type).

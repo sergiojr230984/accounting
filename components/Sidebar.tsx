@@ -14,6 +14,7 @@ import {
   ChevronDown,
   Settings,
   Package,
+  Truck,
 } from "lucide-react";
 
 type Role = "ADMIN" | "MANAGER" | "SALES";
@@ -83,6 +84,7 @@ const navItems: NavItem[] = [
       { href: "/reports/frequency", label: "Product Frequency", roles: ["ADMIN"] },
     ],
   },
+  { href: "/deliveries", label: "Deliveries", icon: Truck },
   { href: "/settings", label: "Settings", icon: Settings, roles: ["ADMIN"] },
 ];
 
