@@ -102,31 +102,58 @@ describe("AC1: invoice creation auto-generates a Delivery with a link, and sched
     expect(delivery).toBeNull();
   });
 
-  it("matches a delivery product picked from the invoice item's own autocomplete, which combines name and description into one field", async () => {
-    // Regression test: the invoice item picker (applyProduct in
-    // app/(dashboard)/invoices/customer/new/page.tsx) writes
-    // "name — description" into the item's description field whenever the
-    // selected product has a description -- never the bare name alone. A
-    // delivery product with no description (the beforeAll fixture above)
-    // never exercises that path, which is exactly how this slipped through.
-    const name = `Test Delivery w/Desc ${Date.now()}`;
-    const product = await admin.postJson<{ id: string }>("/api/products", {
-      name,
-      description: "+Armada",
-      isDeliveryService: true,
+  describe("the trigger is a plain keyword match on the line's own text, not a flagged Product", () => {
+    it("triggers on a line whose description is exactly 'Delivery'", async () => {
+      const invoice = await admin.postJson<{ id: string }>("/api/invoices/customer", {
+        customerId,
+        invoiceNumber: `DEL-TEST-KW-PLAIN-${Date.now()}`,
+        invoiceDate: "2026-01-01",
+        dueDate: "2026-01-31",
+        items: [{ description: "Delivery", quantity: "1", unitPrice: "140" }],
+      });
+      expect(invoice.status).toBe(201);
+      const delivery = await prisma.delivery.findUnique({ where: { customerInvoiceId: invoice.body.id } });
+      expect(delivery).not.toBeNull();
     });
-    expect(product.status).toBe(201);
 
-    const invoice = await admin.postJson<{ id: string }>("/api/invoices/customer", {
-      customerId,
-      invoiceNumber: `DEL-TEST-COMBINED-${Date.now()}`,
-      invoiceDate: "2026-01-01",
-      dueDate: "2026-01-31",
-      items: [{ description: `${name} — +Armada`, quantity: "1", unitPrice: "140" }],
+    it("triggers on 'Delivery + Armada', case-insensitively, however the text got there (typed or picked from a product)", async () => {
+      const invoice = await admin.postJson<{ id: string }>("/api/invoices/customer", {
+        customerId,
+        invoiceNumber: `DEL-TEST-KW-ARMADA-${Date.now()}`,
+        invoiceDate: "2026-01-01",
+        dueDate: "2026-01-31",
+        items: [{ description: "delivery + Armada", quantity: "1", unitPrice: "140" }],
+      });
+      expect(invoice.status).toBe(201);
+      const delivery = await prisma.delivery.findUnique({ where: { customerInvoiceId: invoice.body.id } });
+      expect(delivery).not.toBeNull();
     });
-    expect(invoice.status).toBe(201);
-    const delivery = await prisma.delivery.findUnique({ where: { customerInvoiceId: invoice.body.id } });
-    expect(delivery).not.toBeNull();
+
+    it("does NOT trigger on 'Pick up in store'", async () => {
+      const invoice = await admin.postJson<{ id: string }>("/api/invoices/customer", {
+        customerId,
+        invoiceNumber: `DEL-TEST-KW-PICKUP-${Date.now()}`,
+        invoiceDate: "2026-01-01",
+        dueDate: "2026-01-31",
+        items: [{ description: "Pick up in store", quantity: "1", unitPrice: "0" }],
+      });
+      expect(invoice.status).toBe(201);
+      const delivery = await prisma.delivery.findUnique({ where: { customerInvoiceId: invoice.body.id } });
+      expect(delivery).toBeNull();
+    });
+
+    it("ignores the part number and supplier fields entirely -- only the line's own description is checked", async () => {
+      const invoice = await admin.postJson<{ id: string }>("/api/invoices/customer", {
+        customerId,
+        invoiceNumber: `DEL-TEST-KW-PARTNO-${Date.now()}`,
+        invoiceDate: "2026-01-01",
+        dueDate: "2026-01-31",
+        items: [{ description: "Sofa", partNumber: "DELIVERY-123", quantity: "1", unitPrice: "500" }],
+      });
+      expect(invoice.status).toBe(201);
+      const delivery = await prisma.delivery.findUnique({ where: { customerInvoiceId: invoice.body.id } });
+      expect(delivery).toBeNull();
+    });
   });
 
   it("creating/editing an invoice twice never creates two Delivery rows for the same invoice (fire-once)", async () => {

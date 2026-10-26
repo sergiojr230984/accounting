@@ -21,17 +21,25 @@ export const EXCEPTION_REASON_LABELS: Record<DeliveryExceptionReason, string> = 
 
 /**
  * Auto-creates this invoice's Delivery row the moment it has a line item
- * matching a Product flagged isDeliveryService -- fire-once, idempotent,
- * same pattern as lib/purchase-requests.ts's ensurePurchaseRequestsForInvoice
+ * whose own description mentions "delivery" -- fire-once, idempotent, same
+ * pattern as lib/purchase-requests.ts's ensurePurchaseRequestsForInvoice
  * (the @unique on customerInvoiceId is the actual guarantee, not this
  * existence check, which is only a fast path). Call from both the invoice
  * POST and PATCH routes, unconditionally -- unlike purchase requests this is
  * NOT gated on payment: "PAID != delivered" is the whole point of this
  * feature, so scheduling/tracking must work before any money has changed
  * hands.
+ *
+ * Deliberately a plain keyword match on the line's own free-typed
+ * description ("Delivery", "Delivery + Armada", ...), not tied to a
+ * specific Product or its isDeliveryService flag: staff pick/type whatever
+ * matches the furniture, and the line that represents the delivery itself
+ * is reliably the one that says so. The part number and supplier fields are
+ * never checked. "Pick up in store" or any line that doesn't say the word
+ * does not trigger it.
  */
 export async function ensureDeliveryForInvoice(
-  tx: Pick<PrismaClient, "customerInvoiceItem" | "product" | "delivery">,
+  tx: Pick<PrismaClient, "customerInvoiceItem" | "delivery">,
   customerInvoiceId: string
 ): Promise<void> {
   const existing = await tx.delivery.findUnique({ where: { customerInvoiceId }, select: { id: true } });
@@ -43,24 +51,7 @@ export async function ensureDeliveryForInvoice(
   });
   if (items.length === 0) return;
 
-  const deliveryProducts = await tx.product.findMany({
-    where: { isDeliveryService: true },
-    select: { name: true },
-  });
-  if (deliveryProducts.length === 0) return;
-  const deliveryNames = deliveryProducts.map((p) => p.name.trim().toLowerCase());
-
-  // Picking a product from the invoice item's own autocomplete (see
-  // applyProduct in app/(dashboard)/invoices/customer/new/page.tsx) writes
-  // "name — description" into this combined field whenever the product has
-  // a description, not the bare name -- so a plain equality check against
-  // the product name alone would silently never match for any delivery
-  // product that has one. A prefix match on "name" or "name — " catches
-  // both that case and the bare-name case (no description, or free-typed).
-  const hasDeliveryLine = items.some((item) => {
-    const desc = item.description.trim().toLowerCase();
-    return deliveryNames.some((name) => desc === name || desc.startsWith(`${name} — `));
-  });
+  const hasDeliveryLine = items.some((item) => item.description.toLowerCase().includes("delivery"));
   if (!hasDeliveryLine) return;
 
   try {
