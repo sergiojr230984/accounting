@@ -102,6 +102,33 @@ describe("AC1: invoice creation auto-generates a Delivery with a link, and sched
     expect(delivery).toBeNull();
   });
 
+  it("matches a delivery product picked from the invoice item's own autocomplete, which combines name and description into one field", async () => {
+    // Regression test: the invoice item picker (applyProduct in
+    // app/(dashboard)/invoices/customer/new/page.tsx) writes
+    // "name — description" into the item's description field whenever the
+    // selected product has a description -- never the bare name alone. A
+    // delivery product with no description (the beforeAll fixture above)
+    // never exercises that path, which is exactly how this slipped through.
+    const name = `Test Delivery w/Desc ${Date.now()}`;
+    const product = await admin.postJson<{ id: string }>("/api/products", {
+      name,
+      description: "+Armada",
+      isDeliveryService: true,
+    });
+    expect(product.status).toBe(201);
+
+    const invoice = await admin.postJson<{ id: string }>("/api/invoices/customer", {
+      customerId,
+      invoiceNumber: `DEL-TEST-COMBINED-${Date.now()}`,
+      invoiceDate: "2026-01-01",
+      dueDate: "2026-01-31",
+      items: [{ description: `${name} — +Armada`, quantity: "1", unitPrice: "140" }],
+    });
+    expect(invoice.status).toBe(201);
+    const delivery = await prisma.delivery.findUnique({ where: { customerInvoiceId: invoice.body.id } });
+    expect(delivery).not.toBeNull();
+  });
+
   it("creating/editing an invoice twice never creates two Delivery rows for the same invoice (fire-once)", async () => {
     const { invoiceId } = await createInvoiceWithDelivery();
     // A second, unrelated edit (e.g. notes) re-triggers ensureDeliveryForInvoice.

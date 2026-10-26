@@ -48,9 +48,19 @@ export async function ensureDeliveryForInvoice(
     select: { name: true },
   });
   if (deliveryProducts.length === 0) return;
-  const deliveryNames = new Set(deliveryProducts.map((p) => p.name.toLowerCase()));
+  const deliveryNames = deliveryProducts.map((p) => p.name.trim().toLowerCase());
 
-  const hasDeliveryLine = items.some((item) => deliveryNames.has(item.description.trim().toLowerCase()));
+  // Picking a product from the invoice item's own autocomplete (see
+  // applyProduct in app/(dashboard)/invoices/customer/new/page.tsx) writes
+  // "name — description" into this combined field whenever the product has
+  // a description, not the bare name -- so a plain equality check against
+  // the product name alone would silently never match for any delivery
+  // product that has one. A prefix match on "name" or "name — " catches
+  // both that case and the bare-name case (no description, or free-typed).
+  const hasDeliveryLine = items.some((item) => {
+    const desc = item.description.trim().toLowerCase();
+    return deliveryNames.some((name) => desc === name || desc.startsWith(`${name} — `));
+  });
   if (!hasDeliveryLine) return;
 
   try {
