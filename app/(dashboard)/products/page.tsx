@@ -166,8 +166,8 @@ function ProductForm({
             onChange={(e) => set("isDeliveryService", e.target.checked)}
           />
           <label htmlFor="product-delivery-service" className="text-sm text-gray-700">
-            This is a delivery service — invoices with this line item get a Delivery record
-            (photo-upload link, Calendar scheduling) under <strong>Deliveries</strong>
+            Delivery service (for your own reference — <strong>Deliveries</strong> now triggers
+            automatically from any invoice line whose description says "delivery")
           </label>
         </div>
       </div>
