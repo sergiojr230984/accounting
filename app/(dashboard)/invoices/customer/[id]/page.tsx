@@ -780,6 +780,18 @@ export default function CustomerInvoiceDetailPage() {
                 // or not (owner decision 2026-10-12); the server recomputes
                 // totals, balance and payment status.
                 allowLockedAmountEdits
+                // Removing a saved line is allowed while the invoice has no
+                // money on it (same rule as the server's invoiceHasNoMoney).
+                allowLockedRemoval={
+                  invoice.paymentStatus === "UNPAID" &&
+                  Number(invoice.paidAmount || 0) <= 0 &&
+                  Number(invoice.downPayment || 0) <= 0
+                }
+                lockedRemovalWarnings={invoice.items.map((i) =>
+                  i.purchaseRequest?.status === "FULFILLED"
+                    ? `"${i.description}" already has a supplier bill with its cost entered. Removing it from this invoice keeps that bill (the cost still counts in Bills) but unlinks it from this invoice. Remove it?`
+                    : null
+                )}
                 // A locked line whose supplier / part number was never set
                 // (e.g. converted from an estimate) can still have it filled
                 // in -- the server allows filling a missing value, not
