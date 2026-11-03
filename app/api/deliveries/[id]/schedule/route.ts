@@ -4,6 +4,7 @@ import { prisma } from "@/lib/prisma";
 import { requireAuth } from "@/lib/api";
 import { actorFromSession } from "@/lib/audit";
 import { scheduleDelivery } from "@/lib/deliveries";
+import { formatCustomerAddress } from "@/lib/address";
 
 const schema = z
   .object({
@@ -39,7 +40,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
 
   const delivery = await prisma.delivery.findUnique({
     where: { id },
-    include: { customerInvoice: { select: { invoiceNumber: true, customerAddress: true, customer: { select: { name: true, address: true } } } } },
+    include: { customerInvoice: { select: { invoiceNumber: true, customerAddress: true, customer: { select: { name: true, address: true, apartment: true } } } } },
   });
   if (!delivery) return NextResponse.json({ error: "Not found" }, { status: 404 });
 
@@ -62,7 +63,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
       subcontractorCost: parsed.data.subcontractorCost ?? null,
       invoiceNumber: delivery.customerInvoice.invoiceNumber,
       customerFirstName: delivery.customerInvoice.customer.name.split(" ")[0] || delivery.customerInvoice.customer.name,
-      deliveryAddress: delivery.customerInvoice.customerAddress ?? delivery.customerInvoice.customer.address ?? "",
+      deliveryAddress: delivery.customerInvoice.customerAddress ?? formatCustomerAddress(delivery.customerInvoice.customer) ?? "",
       publicLinkUrl: `${base}/d/${delivery.token}`,
       timeZone: process.env.DELIVERY_TIMEZONE || "America/New_York",
       actorLabel: actor.actorName,

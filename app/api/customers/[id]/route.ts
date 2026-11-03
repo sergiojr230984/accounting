@@ -10,6 +10,7 @@ const updateSchema = z.object({
   email: z.string().email("Invalid email").optional().or(z.literal("")).or(z.null()),
   phone: z.string().optional().or(z.null()),
   address: z.string().optional().or(z.null()),
+  apartment: z.string().optional().or(z.null()),
   emergencyContactName: z.string().optional().or(z.null()),
   emergencyContactPhone: z.string().optional().or(z.null()),
 });
@@ -38,6 +39,9 @@ export async function PATCH(
       email: parsed.data.email || null,
       phone: parsed.data.phone || null,
       address: parsed.data.address || null,
+      // Untouched when a caller doesn't send it (undefined is a no-op in
+      // Prisma); an empty string clears it.
+      apartment: parsed.data.apartment === undefined ? undefined : parsed.data.apartment?.trim() || null,
       emergencyContactName: parsed.data.emergencyContactName || null,
       emergencyContactPhone: parsed.data.emergencyContactPhone || null,
     },
@@ -50,8 +54,8 @@ export async function PATCH(
     entityId: id,
     entityLabel: customer.name,
     changes: diffChanges(
-      { name: existing.name, email: existing.email, phone: existing.phone, address: existing.address },
-      { name: customer.name, email: customer.email, phone: customer.phone, address: customer.address }
+      { name: existing.name, email: existing.email, phone: existing.phone, address: existing.address, apartment: existing.apartment },
+      { name: customer.name, email: customer.email, phone: customer.phone, address: customer.address, apartment: customer.apartment }
     ),
     ...extractMeta(request),
   });

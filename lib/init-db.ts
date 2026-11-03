@@ -128,6 +128,7 @@ const SCHEMA_STATEMENTS: string[] = [
   );`,
   `ALTER TABLE "Customer" ADD COLUMN IF NOT EXISTS "emergencyContactName" TEXT;`,
   `ALTER TABLE "Customer" ADD COLUMN IF NOT EXISTS "emergencyContactPhone" TEXT;`,
+  `ALTER TABLE "Customer" ADD COLUMN IF NOT EXISTS "apartment" TEXT;`,
   `ALTER TABLE "Supplier" ADD COLUMN IF NOT EXISTS "paymentTermsDays" INTEGER NOT NULL DEFAULT 30;`,
   `ALTER TABLE "Supplier" ADD COLUMN IF NOT EXISTS "defaultCategory" "SupplierCategory";`,
   `ALTER TABLE "Supplier" ADD COLUMN IF NOT EXISTS "bankName" TEXT;`,

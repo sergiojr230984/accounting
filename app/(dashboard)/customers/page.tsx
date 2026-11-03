@@ -7,12 +7,14 @@ import { z } from "zod";
 import { Plus, Users, Loader2, Search, Pencil, Trash2, X, Check } from "lucide-react";
 import Link from "next/link";
 import AddressAutocomplete from "@/components/AddressAutocomplete";
+import { formatCustomerAddress } from "@/lib/address";
 
 const schema = z.object({
   name: z.string().min(1, "Name is required"),
   email: z.string().email("Must be a valid email").optional().or(z.literal("")),
   phone: z.string().optional(),
   address: z.string().optional(),
+  apartment: z.string().optional(),
   emergencyContactName: z.string().optional(),
   emergencyContactPhone: z.string().optional(),
 });
@@ -24,6 +26,7 @@ interface Customer {
   email: string | null;
   phone: string | null;
   address: string | null;
+  apartment: string | null;
   emergencyContactName: string | null;
   emergencyContactPhone: string | null;
   _count: { invoices: number };
@@ -79,10 +82,6 @@ function CustomerForm({
           )}
         </div>
         <div>
-          <label className="label">Phone</label>
-          <input className="input" placeholder="+1-555-0100" {...register("phone")} />
-        </div>
-        <div>
           <label className="label">Address</label>
           <Controller
             control={control}
@@ -92,6 +91,16 @@ function CustomerForm({
             )}
           />
         </div>
+        <div>
+          <label className="label">Apt / Suite / Unit</label>
+          <input className="input" placeholder="e.g. 705 (optional)" {...register("apartment")} />
+        </div>
+        <div>
+          <label className="label">Phone</label>
+          <input className="input" placeholder="+1-555-0100" {...register("phone")} />
+        </div>
+        {/* keeps Address + Apt on one row and the emergency pair on the next */}
+        <div className="hidden sm:block" />
         <div>
           <label className="label">Emergency contact name</label>
           <input className="input" placeholder="Spouse, family member, etc." {...register("emergencyContactName")} />
@@ -287,7 +296,7 @@ export default function CustomersPage() {
                     <td className="px-5 py-3 font-medium text-gray-900">{c.name}</td>
                     <td className="px-5 py-3 text-gray-500">{c.email ?? "—"}</td>
                     <td className="px-5 py-3 text-gray-500">{c.phone ?? "—"}</td>
-                    <td className="px-5 py-3 text-gray-500 max-w-xs truncate">{c.address ?? "—"}</td>
+                    <td className="px-5 py-3 text-gray-500 max-w-xs truncate">{formatCustomerAddress(c) ?? "—"}</td>
                     <td className="px-5 py-3 text-center">
                       <Link
                         href={`/invoices/customer?customerId=${c.id}`}
@@ -332,6 +341,7 @@ export default function CustomersPage() {
                             email: c.email ?? "",
                             phone: c.phone ?? "",
                             address: c.address ?? "",
+                            apartment: c.apartment ?? "",
                             emergencyContactName: c.emergencyContactName ?? "",
                             emergencyContactPhone: c.emergencyContactPhone ?? "",
                           }}

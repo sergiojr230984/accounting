@@ -3,6 +3,7 @@ import { formatCurrency } from "@/lib/money";
 import { formatDateOnly } from "@/lib/date";
 import { notFound } from "next/navigation";
 import { BookOpen } from "lucide-react";
+import { formatCustomerAddress } from "@/lib/address";
 
 export default async function PublicInvoicePage({
   params,
@@ -72,9 +73,9 @@ export default async function PublicInvoicePage({
             <p className="font-medium text-gray-900">{invoice.customer.name}</p>
             {invoice.customer.email && <p className="text-sm text-gray-500">{invoice.customer.email}</p>}
             {invoice.customer.phone && <p className="text-sm text-gray-500">{invoice.customer.phone}</p>}
-            {(invoice.customerAddress ?? invoice.customer.address) && (
+            {(invoice.customerAddress ?? formatCustomerAddress(invoice.customer)) && (
               <p className="text-sm text-gray-500 whitespace-pre-line">
-                {invoice.customerAddress ?? invoice.customer.address}
+                {invoice.customerAddress ?? formatCustomerAddress(invoice.customer)}
               </p>
             )}
             {(invoice.customer.emergencyContactName || invoice.customer.emergencyContactPhone) && (

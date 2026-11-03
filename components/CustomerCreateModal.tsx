@@ -10,6 +10,7 @@ export interface SavedCustomer {
   email: string | null;
   phone?: string | null;
   address?: string | null;
+  apartment?: string | null;
   emergencyContactName?: string | null;
   emergencyContactPhone?: string | null;
 }
@@ -31,6 +32,7 @@ export default function CustomerCreateModal({ open, initialName = "", customer, 
   const [email, setEmail] = useState("");
   const [phone, setPhone] = useState("");
   const [address, setAddress] = useState("");
+  const [apartment, setApartment] = useState("");
   const [emergencyContactName, setEmergencyContactName] = useState("");
   const [emergencyContactPhone, setEmergencyContactPhone] = useState("");
   const [saving, setSaving] = useState(false);
@@ -42,6 +44,7 @@ export default function CustomerCreateModal({ open, initialName = "", customer, 
       setEmail(customer?.email ?? "");
       setPhone(customer?.phone ?? "");
       setAddress(customer?.address ?? "");
+      setApartment(customer?.apartment ?? "");
       setEmergencyContactName(customer?.emergencyContactName ?? "");
       setEmergencyContactPhone(customer?.emergencyContactPhone ?? "");
       setError("");
@@ -66,6 +69,8 @@ export default function CustomerCreateModal({ open, initialName = "", customer, 
           email: email || undefined,
           phone: phone || undefined,
           address: address || undefined,
+          // Always sent (even empty) so clearing the box on edit clears it.
+          apartment: apartment.trim(),
           emergencyContactName: emergencyContactName || undefined,
           emergencyContactPhone: emergencyContactPhone || undefined,
         }),
@@ -108,6 +113,10 @@ export default function CustomerCreateModal({ open, initialName = "", customer, 
           <div>
             <label className="label">Address</label>
             <AddressAutocomplete value={address} onChange={setAddress} />
+          </div>
+          <div>
+            <label className="label">Apt / Suite / Unit</label>
+            <input className="input" value={apartment} onChange={(e) => setApartment(e.target.value)} placeholder="e.g. 705 (optional)" />
           </div>
           <div className="grid grid-cols-2 gap-3">
             <div>
