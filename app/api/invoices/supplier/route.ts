@@ -201,7 +201,14 @@ export async function POST(request: Request) {
         // attempt gets a clean, specific 409 instead of a raw constraint
         // error.
         if (pr.status !== "PENDING") return { error: "pr_already_fulfilled" as const };
-        if (pr.supplierId !== supplierId) return { error: "pr_supplier_mismatch" as const };
+        // The bill's supplier is allowed to differ from the one on the
+        // invoice line: the item is sometimes actually sourced elsewhere,
+        // and purchasing needs to record who really supplied it. The
+        // request is re-pointed at the bill's supplier below (with the
+        // FULFILLED update) so the purchasing queue/reports show the real
+        // supplier. The customer invoice line itself is left untouched --
+        // it is locked once a payment exists (the request only exists
+        // because one does), and it's what the customer was sold.
         purchaseRequest = {
           id: pr.id,
           customerInvoiceItemId: pr.customerInvoiceItemId,
@@ -276,7 +283,7 @@ export async function POST(request: Request) {
         });
         await tx.purchaseRequest.update({
           where: { id: purchaseRequest.id },
-          data: { status: "FULFILLED", cost: actualCost, fulfilledAt: new Date() },
+          data: { status: "FULFILLED", cost: actualCost, fulfilledAt: new Date(), supplierId },
         });
       }
 
@@ -298,13 +305,6 @@ export async function POST(request: Request) {
   if (result.error === "pr_already_fulfilled") {
     return NextResponse.json({ error: "This purchase request already has a bill." }, { status: 409 });
   }
-  if (result.error === "pr_supplier_mismatch") {
-    return NextResponse.json(
-      { error: "Selected supplier doesn't match this purchase request's supplier." },
-      { status: 400 }
-    );
-  }
-
   const invoice = result.invoice!;
 
   await writeAuditLog({

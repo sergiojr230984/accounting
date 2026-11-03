@@ -767,6 +767,53 @@ describe("bill creation closes out a purchase_request", () => {
     expect(body.error).toContain("exactly one line item");
   });
 
+  // Intentional behavior change: this used to be rejected with a 400
+  // ("Selected supplier doesn't match this purchase request's supplier"),
+  // but the item is sometimes actually sourced from a different supplier
+  // than the one on the invoice line, and purchasing had no way to record
+  // that. The bill's supplier now wins and is written back to the request.
+  it("allows a bill from a different supplier and records that supplier on the request", async () => {
+    const { invoice, purchaseRequestId, quantity } = await paidInvoiceWithOnePendingRequest();
+    const other = await admin.postJson<{ id: string }>("/api/suppliers", {
+      name: `PR Alt Supplier ${Date.now()}`,
+      active: true,
+      isHouse: false,
+    });
+    expect(other.status).toBe(201);
+
+    const bill = await admin.postJson<{ id: string; supplierId: string }>("/api/invoices/supplier", {
+      supplierId: other.body.id,
+      invoiceNumber: `BILL-ALTSUP-${Date.now()}`,
+      invoiceDate: "2026-01-06",
+      category: "COGS",
+      items: [{ description: "Sofa, brown leather", quantity, unitCost: "275", taxRate: "0" }],
+      purchaseRequestId,
+    });
+    expect(bill.status).toBe(201);
+    expect(bill.body.supplierId).toBe(other.body.id);
+
+    // Closed out exactly like a same-supplier bill, under the new supplier.
+    const report = await admin.getJson<{ rows: { id: string; status: string; supplierId: string; invoiceNumber: string }[] }>(
+      `/api/reports?type=items-ordered`
+    );
+    const row = report.body.rows.find((r) => r.id === purchaseRequestId);
+    expect(row?.status).toBe("FULFILLED");
+    expect(row?.supplierId).toBe(other.body.id);
+    expect(row?.invoiceNumber).toBe(invoice.invoiceNumber);
+
+    // Force-deleting that bill is an undo: the request goes back to
+    // PENDING under the invoice line's ORIGINAL supplier, not the one the
+    // deleted bill used.
+    const del = await admin.postJson(`/api/invoices/supplier/${bill.body.id}?force=true`, {}, "DELETE");
+    expect(del.status).toBe(200);
+    const after = await admin.getJson<{ rows: { id: string; status: string; supplierId: string }[] }>(
+      `/api/reports?type=items-ordered`
+    );
+    const reopened = after.body.rows.find((r) => r.id === purchaseRequestId);
+    expect(reopened?.status).toBe("PENDING");
+    expect(reopened?.supplierId).toBe(realSupplierId);
+  });
+
   it("flags (but does not block) a quantity that differs from the invoice line's quantity", async () => {
     const { purchaseRequestId, quantity } = await paidInvoiceWithOnePendingRequest();
     const mismatchedQty = (Number(quantity) + 1).toString();

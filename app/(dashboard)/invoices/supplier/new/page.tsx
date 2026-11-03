@@ -56,7 +56,7 @@ const schema = z.object({
 });
 type FormData = z.infer<typeof schema>;
 
-interface Supplier { id: string; name: string; email?: string | null; phone?: string | null; address?: string | null }
+interface Supplier { id: string; name: string; email?: string | null; phone?: string | null; address?: string | null; code?: string | null; isHouse?: boolean }
 
 interface PurchaseRequestDetail {
   id: string;
@@ -101,7 +101,7 @@ export default function NewSupplierInvoicePage() {
   } catch {}
   const autoPaid = fulfillingPR && prPaidInFull;
 
-  const { register, handleSubmit, control, watch, setValue, formState: { errors } } = useForm<FormData>({
+  const { register, handleSubmit, control, watch, setValue, getValues, formState: { errors } } = useForm<FormData>({
     resolver: zodResolver(schema),
     defaultValues: {
       category: "COGS",
@@ -121,6 +121,20 @@ export default function NewSupplierInvoicePage() {
   const watchedPaymentStatus = watch("paymentStatus");
   const watchedPaidAmount = watch("paidAmount");
   const selectedSupplier = suppliers.find((s) => s.id === watchedSupplierId);
+
+  // The supplier list and the purchase request load in parallel. If the
+  // request arrives first, setValue("supplierId", ...) runs while the
+  // <select> has no matching <option> yet, so the browser silently shows
+  // "Select supplier..." even though the request's supplier (e.g. BE) was
+  // set -- and Save then fails with "Select a supplier". Re-apply the
+  // current choice once both are loaded so the DOM catches up. Uses the
+  // value already in the form (not always the request's) so a supplier the
+  // user picked by hand is kept.
+  useEffect(() => {
+    if (!purchaseRequest || suppliers.length === 0) return;
+    const current = getValues("supplierId") || purchaseRequest.supplierId;
+    setValue("supplierId", current, { shouldValidate: true });
+  }, [purchaseRequest, suppliers, getValues, setValue]);
 
   async function loadSuppliers() {
     const res = await fetch("/api/suppliers");
@@ -304,7 +318,8 @@ export default function NewSupplierInvoicePage() {
           <p className="text-xs text-brand-600 mt-0.5">
             {purchaseRequest.supplier.code ?? "??"}/{purchaseRequest.partNumber} — {purchaseRequest.description}.
             Enter the actual cost below and save -- this closes the request and writes the cost back to that
-            invoice line. Supplier, part number, and description are locked to match the request.
+            invoice line. The supplier is pre-filled from the invoice line and can be changed if the item was
+            sourced elsewhere; part number and description are locked to match the request.
           </p>
         </div>
       )}
@@ -347,16 +362,20 @@ export default function NewSupplierInvoicePage() {
           <div className="grid grid-cols-2 gap-4">
             <div>
               <label className="label">Supplier *</label>
-              <select className="input" disabled={fulfillingPR} {...register("supplierId")}>
+              <select className="input" {...register("supplierId")}>
                 <option value="">Select supplier…</option>
                 {suppliers.map((s) => (
                   <option key={s.id} value={s.id}>{s.name}</option>
                 ))}
               </select>
               {errors.supplierId && <p className="text-red-500 text-xs mt-1">{errors.supplierId.message}</p>}
-              {!fulfillingPR && (
-                <Link href="/suppliers" className="text-xs text-brand-600 mt-1 inline-block">+ Add new supplier</Link>
+              {fulfillingPR && purchaseRequest && watchedSupplierId && watchedSupplierId !== purchaseRequest.supplierId && (
+                <p className="text-xs text-yellow-600 mt-1">
+                  Different from the invoice line&apos;s supplier ({purchaseRequest.supplier.name}) -- allowed. The
+                  purchase request will be recorded under this supplier.
+                </p>
               )}
+              <Link href="/suppliers" className="text-xs text-brand-600 mt-1 inline-block">+ Add new supplier</Link>
             </div>
 
             <div>
@@ -447,7 +466,7 @@ export default function NewSupplierInvoicePage() {
             <div className="grid grid-cols-2 gap-4">
               <div className="col-span-2">
                 <label className="label">Item</label>
-                <input className="input bg-gray-50" disabled value={`${purchaseRequest.supplier.code ?? "??"}/${purchaseRequest.partNumber} — ${purchaseRequest.description}`} />
+                <input className="input bg-gray-50" disabled value={`${(selectedSupplier ?? purchaseRequest.supplier).code ?? "??"}/${purchaseRequest.partNumber} — ${purchaseRequest.description}`} />
               </div>
               <div>
                 <label className="label">Quantity</label>
@@ -469,7 +488,7 @@ export default function NewSupplierInvoicePage() {
                   value={prCost}
                   onChange={(e) => setPrCost(e.target.value)}
                 />
-                {isHouseSupplier(purchaseRequest.supplier) && (
+                {isHouseSupplier({ code: (selectedSupplier ?? purchaseRequest.supplier).code ?? null, isHouse: (selectedSupplier ?? purchaseRequest.supplier).isHouse }) && (
                   <p className="text-xs text-gray-500 mt-1">La Cuevita (HOUSE) items default to ${HOUSE_UNIT_COST} per unit.</p>
                 )}
                 {prPaidInFull && (

@@ -325,7 +325,11 @@ export async function DELETE(
 
   const existing = await prisma.supplierInvoice.findUnique({
     where: { id },
-    include: { purchaseRequest: { select: { id: true, customerInvoiceItemId: true } } },
+    include: {
+      purchaseRequest: {
+        select: { id: true, customerInvoiceItemId: true, customerInvoiceItem: { select: { supplierId: true } } },
+      },
+    },
   });
   if (!existing) return NextResponse.json({ error: "Not found" }, { status: 404 });
 
@@ -370,7 +374,18 @@ export async function DELETE(
       }),
       prisma.purchaseRequest.update({
         where: { id: purchaseRequestId },
-        data: { status: "PENDING", cost: null, fulfilledAt: null },
+        // Also restores the invoice line's own supplier: the bill may have
+        // re-pointed the request at a different supplier
+        // (app/api/invoices/supplier/route.ts), and "undo" means back to
+        // exactly the pre-bill state.
+        data: {
+          status: "PENDING",
+          cost: null,
+          fulfilledAt: null,
+          ...(existing.purchaseRequest.customerInvoiceItem.supplierId
+            ? { supplierId: existing.purchaseRequest.customerInvoiceItem.supplierId }
+            : {}),
+        },
       }),
       // UploadedFile.supplierInvoiceId has no ON DELETE action (NO ACTION,
       // i.e. effectively RESTRICT) -- an attached file must be cleared
