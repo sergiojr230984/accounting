@@ -87,3 +87,26 @@ describe("customer invoice PDF — PAID stamp", () => {
     expect(text).not.toContain("(PAID) Tj");
   });
 });
+
+describe("customer invoice PDF — delivery confirmation", () => {
+  // jsPDF writes Latin-1 text straight into the content stream, so the
+  // accented title shows up verbatim when the PDF is read as latin1.
+  const title = "(CONFIRMACIÓN DE ENTREGA DE MERCANCÍA) Tj";
+
+  it("prints the delivery confirmation on a customer invoice", () => {
+    const text = pdfText(base);
+    expect(text).toContain(title);
+    expect(text).toContain("La Cuevita Furniture no se responsabiliza");
+  });
+
+  it("prints it even when the invoice has its own notes", () => {
+    const text = pdfText({ ...base, notes: "Entrega el viernes" });
+    expect(text).toContain("(Entrega el viernes) Tj");
+    expect(text).toContain(title);
+  });
+
+  it("does not print it on an estimate or a purchase order", () => {
+    expect(pdfText({ ...base, kind: "estimate" })).not.toContain(title);
+    expect(pdfText({ ...base, kind: "supplier" })).not.toContain(title);
+  });
+});

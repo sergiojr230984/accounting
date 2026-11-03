@@ -205,6 +205,18 @@ export async function PATCH(
   // recomputed from the lines below like any other item edit. Applied in
   // place (same row id) so purchasing stays attached; recorded in the audit
   // log (lockedItemAmounts).
+  // Lines being removed from a locked invoice. Allowed only while the
+  // invoice has NO money on it (nothing paid, no down payment): owner report
+  // 2026-10-26 (Inv 1425) -- an invoice reading Unpaid / $0 paid couldn't
+  // drop a line because a since-removed payment had sent its items to
+  // purchasing and purchasing had already entered supplier bills (FULFILLED
+  // requests are kept when a payment is removed). See the removal handling
+  // in the transaction below for what happens to those bills.
+  const invoiceHasNoMoney =
+    existing.paymentStatus === "UNPAID" &&
+    new Decimal(existing.paidAmount.toString()).lte(0) &&
+    new Decimal(existing.downPayment.toString()).lte(0);
+  const removedItems: { id: string; description: string }[] = [];
   const amountEdits: {
     id: string;
     description: string;
@@ -310,9 +322,13 @@ export async function PATCH(
     }
     for (const existingItem of existing.items) {
       if (!seenIds.has(existingItem.id)) {
+        if (invoiceHasNoMoney) {
+          removedItems.push({ id: existingItem.id, description: existingItem.description });
+          continue;
+        }
         return NextResponse.json(
           {
-            error: `${lockReason} -- existing line items can't be removed. You can still change wording, quantity, price and tax, and add new items. ("${existingItem.description}" was removed or its id wasn't submitted.)`,
+            error: `${lockReason} -- existing line items can't be removed while the invoice has a payment or down payment on it. You can still change wording, quantity, price and tax, and add new items. ("${existingItem.description}" was removed or its id wasn't submitted.)`,
           },
           { status: 409 }
         );
@@ -505,7 +521,13 @@ export async function PATCH(
         .filter(({ id }) => !id || !existingIds.has(id))
         .map(({ computed }) => computed);
 
-      if (newItems.length > 0 || textEdits.length > 0 || codeFills.length > 0 || amountEdits.length > 0) {
+      if (
+        newItems.length > 0 ||
+        textEdits.length > 0 ||
+        codeFills.length > 0 ||
+        amountEdits.length > 0 ||
+        removedItems.length > 0
+      ) {
         // Wording edits and missing-code fill-ins to existing (locked)
         // lines, merged per row -- updated in place, so the row keeps its id
         // and any purchase_request that references it (ON DELETE RESTRICT)
@@ -541,6 +563,10 @@ export async function PATCH(
           });
         }
         updateData.items = {
+          // Their purchase requests are cleared first, in the same
+          // transaction (see removedItems there) -- the FK is ON DELETE
+          // RESTRICT.
+          ...(removedItems.length > 0 ? { deleteMany: { id: { in: removedItems.map((r) => r.id) } } } : {}),
           update: Array.from(inPlace, ([itemId, fields]) => ({ where: { id: itemId }, data: fields })),
           create: newItems.map((item) => ({
             description: item.description,
@@ -606,11 +632,36 @@ export async function PATCH(
   // global unique constraint couldn't be added yet (see lib/init-db.ts).
   const numberChanged = !!data.invoiceNumber && data.invoiceNumber !== existing.invoiceNumber;
   let updated;
+  let unlinkedBillNumbers: string[] = [];
   try {
     updated = await prisma.$transaction(async (tx) => {
       if (numberChanged) {
         await lockDocumentNumbering(tx, "customerInvoice");
         if (await isDocumentNumberTaken(tx, "customerInvoice", data.invoiceNumber!, id)) return null;
+      }
+
+      // Lines removed from a no-money invoice (see removedItems above): their
+      // purchase requests go with them. A supplier bill already entered
+      // against one is KEPT -- it's real cost owed to the supplier, and
+      // deleting it would erase that -- but unlinked from the request, so it
+      // stays in Bills as a standalone expense (its customerInvoiceRef still
+      // names this invoice for traceability).
+      if (removedItems.length > 0) {
+        const removedIds = removedItems.map((r) => r.id);
+        const prs = await tx.purchaseRequest.findMany({
+          where: { customerInvoiceItemId: { in: removedIds } },
+          select: { id: true, supplierInvoice: { select: { invoiceNumber: true } } },
+        });
+        unlinkedBillNumbers = prs
+          .map((pr) => pr.supplierInvoice?.invoiceNumber)
+          .filter((n): n is string => !!n);
+        if (prs.length > 0) {
+          await tx.supplierInvoice.updateMany({
+            where: { purchaseRequestId: { in: prs.map((pr) => pr.id) } },
+            data: { purchaseRequestId: null },
+          });
+          await tx.purchaseRequest.deleteMany({ where: { id: { in: prs.map((pr) => pr.id) } } });
+        }
       }
       const result = await tx.customerInvoice.update({
         where: { id },
@@ -710,6 +761,14 @@ export async function PATCH(
                 return [before?.description, before?.itemDescription].filter(Boolean).join(" / ");
               }),
               new: textEdits.map((e) => [e.description, e.itemDescription].filter(Boolean).join(" / ")),
+            },
+          }
+        : {}),
+      ...(removedItems.length > 0
+        ? {
+            removedItems: {
+              old: removedItems.map((r) => r.description),
+              new: unlinkedBillNumbers.length > 0 ? `supplier bill(s) kept but unlinked: ${unlinkedBillNumbers.join(", ")}` : null,
             },
           }
         : {}),

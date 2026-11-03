@@ -1194,3 +1194,76 @@ describe("filling in a missing supplier on a paid invoice's line", () => {
     expect(partChange.status).toBe(409);
   });
 });
+
+// Real report (2026-10-26, Inv 1425): an invoice reading "Unpaid" with $0
+// paid wouldn't let staff remove a line. A payment had been recorded and
+// later removed; in between, purchasing entered supplier bills for its
+// purchase requests (FULFILLED -- kept on payment removal by design), so
+// the lines stayed locked "already sent to purchasing". With no money on
+// the invoice, a line may now be removed; a supplier bill attached to it is
+// kept (it's real cost owed to the supplier) but unlinked from the line.
+describe("removing a line from an invoice with no money on it", () => {
+  type Item = { id: string; description: string; quantity: string; unitPrice: string; taxRate: string; supplierId: string | null; partNumber: string | null; purchaseRequest: { status: string } | null };
+  const submit = (i: Item) => ({
+    id: i.id, description: i.description, quantity: i.quantity, unitPrice: i.unitPrice, taxRate: i.taxRate,
+    supplierId: i.supplierId ?? undefined, partNumber: i.partNumber ?? undefined,
+  });
+
+  async function unpaidInvoiceWithBilledLine() {
+    const inv = await createInvoiceWithLines({ includeHouseLine: true });
+    const pay = await admin.postJson<{ payments: { id: string }[] }>(`/api/invoices/customer/${inv.id}/payments`, {
+      amount: "300",
+      paymentDate: "2026-10-10",
+    });
+    expect(pay.status).toBe(201);
+    const report = await admin.getJson<{ rows: { id: string; invoiceNumber: string; quantity: string }[] }>(
+      `/api/reports?type=items-ordered&status=PENDING`
+    );
+    const row = report.body.rows.find((r) => r.invoiceNumber === inv.invoiceNumber)!;
+    const bill = await admin.postJson<{ id: string }>("/api/invoices/supplier", {
+      supplierId: realSupplierId,
+      invoiceNumber: `BILL-RM-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+      invoiceDate: "2026-10-11",
+      category: "COGS",
+      items: [{ description: "Sofa, brown leather", quantity: row.quantity, unitCost: "150", taxRate: "0" }],
+      purchaseRequestId: row.id,
+    });
+    expect(bill.status).toBe(201);
+    const del = await admin.postJson(`/api/invoices/customer/${inv.id}/payments/${pay.body.payments[0].id}`, {}, "DELETE");
+    expect(del.status).toBe(200);
+    const full = await admin.getJson<{ paymentStatus: string; paidAmount: string; items: Item[] }>(`/api/invoices/customer/${inv.id}`);
+    expect(full.body.paymentStatus).toBe("UNPAID");
+    expect(full.body.items.find((i) => i.purchaseRequest)?.purchaseRequest?.status).toBe("FULFILLED");
+    return { id: inv.id, billId: bill.body.id, items: full.body.items };
+  }
+
+  it("removes a line that has no purchase request", async () => {
+    const { id, items } = await unpaidInvoiceWithBilledLine();
+    const keep = items.find((i) => i.purchaseRequest)!;
+    const patch = await manager.postJson(`/api/invoices/customer/${id}`, { items: [submit(keep)] }, "PATCH");
+    expect(patch.status, JSON.stringify(patch.body)).toBe(200);
+    const after = await admin.getJson<{ totalAmount: string; items: Item[] }>(`/api/invoices/customer/${id}`);
+    expect(after.body.items.map((i) => i.id)).toEqual([keep.id]);
+    expect(Number(after.body.totalAmount)).toBe(500);
+  });
+
+  it("removes a line whose purchase request already has a supplier bill, keeping the bill but unlinking it", async () => {
+    const { id, billId, items } = await unpaidInvoiceWithBilledLine();
+    const keep = items.find((i) => !i.purchaseRequest)!;
+    const patch = await admin.postJson(`/api/invoices/customer/${id}`, { items: [submit(keep)] }, "PATCH");
+    expect(patch.status, JSON.stringify(patch.body)).toBe(200);
+    const after = await admin.getJson<{ items: Item[] }>(`/api/invoices/customer/${id}`);
+    expect(after.body.items.map((i) => i.id)).toEqual([keep.id]);
+    const bill = await admin.getJson<{ id: string; purchaseRequestId: string | null }>(`/api/invoices/supplier/${billId}`);
+    expect(bill.status).toBe(200);
+    expect(bill.body.purchaseRequestId ?? null).toBeNull();
+  });
+
+  it("still blocks removing a line while the invoice has money on it", async () => {
+    const inv = await createInvoiceWithLines({ includeHouseLine: true });
+    await admin.postJson(`/api/invoices/customer/${inv.id}/payments`, { amount: "100", paymentDate: "2026-10-10" });
+    const full = await admin.getJson<{ items: Item[] }>(`/api/invoices/customer/${inv.id}`);
+    const patch = await admin.postJson(`/api/invoices/customer/${inv.id}`, { items: [submit(full.body.items[0])] }, "PATCH");
+    expect(patch.status).toBe(409);
+  });
+});

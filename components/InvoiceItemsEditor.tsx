@@ -104,6 +104,13 @@ interface InvoiceItemsEditorProps<T extends FieldValues> {
   // these in place. Off for every other caller: the supplier-bill route
   // still rejects amount changes on a locked bill line.
   allowLockedAmountEdits?: boolean;
+  // Opt-in, customer-invoice-only: locked rows can be removed (the
+  // customer-invoice PATCH route allows it while the invoice has no money
+  // on it). The caller only passes true in that state.
+  allowLockedRemoval?: boolean;
+  // Per locked row (by original position): a message to confirm before
+  // removing it, e.g. that a supplier bill is attached. null = no prompt.
+  lockedRemovalWarnings?: (string | null)[];
 }
 
 function LinePreview({ quantity, price, taxRate }: { quantity: string; price: string; taxRate: string }) {
@@ -140,6 +147,8 @@ export default function InvoiceItemsEditor<T extends FieldValues = any>({
   allowLockedTextEdits = false,
   lockedFillableCodes = [],
   allowLockedAmountEdits = false,
+  allowLockedRemoval = false,
+  lockedRemovalWarnings = [],
 }: InvoiceItemsEditorProps<T>) {
   const { fields, append, remove } = useFieldArray({ control, name: fieldName as Path<T> as never });
   const items = useWatch({ control, name: fieldName as Path<T> as never }) as unknown as ItemRow[];
@@ -168,6 +177,15 @@ export default function InvoiceItemsEditor<T extends FieldValues = any>({
 
   // Per-line fee selections, kept positionally in sync with `fields`.
   const [itemFeeSlots, setItemFeeSlots] = useState<(string | null)[][]>([]);
+  // Locked rows are the first `lockedCount` rows by position. Removing one
+  // (allowLockedRemoval) shifts every row after it up, so track which
+  // ORIGINAL locked positions are still present: row i is locked while
+  // i < survivingLocked.length, and its per-row props (lockedFillableCodes,
+  // lockedRemovalWarnings) are looked up by survivingLocked[i]. Without
+  // this, removing a locked row made the first newly added row render as
+  // locked.
+  const [removedLocked, setRemovedLocked] = useState<number[]>([]);
+  const survivingLocked = Array.from({ length: lockedCount }, (_, i) => i).filter((i) => !removedLocked.includes(i));
   const [feesSeeded, setFeesSeeded] = useState(false);
 
   // Whether the user has explicitly changed a fee selection (picked one,
@@ -336,7 +354,8 @@ export default function InvoiceItemsEditor<T extends FieldValues = any>({
             ? (itemFeeSlots[index] && itemFeeSlots[index].length > 0 ? itemFeeSlots[index] : [null])
             : [];
           const usedFeeIds = feeSlots.filter((fid): fid is string => fid !== null);
-          const locked = index < lockedCount;
+          const locked = index < survivingLocked.length;
+          const originalIndex = locked ? survivingLocked[index] : -1;
 
           return (
             // Keyed on position, not `field.id` -- react-hook-form regenerates
@@ -406,7 +425,7 @@ export default function InvoiceItemsEditor<T extends FieldValues = any>({
                     <div className="flex gap-1">
                       <select
                         className="input text-sm w-24 shrink-0 px-1.5"
-                        disabled={locked && !lockedFillableCodes[index]?.supplierId}
+                        disabled={locked && !lockedFillableCodes[originalIndex]?.supplierId}
                         {...register(`${fieldName}.${index}.supplierId` as Path<T>)}
                       >
                         <option value="">Supplier…</option>
@@ -422,7 +441,7 @@ export default function InvoiceItemsEditor<T extends FieldValues = any>({
                       <input
                         className="input text-sm flex-1 min-w-0"
                         placeholder="Part number"
-                        disabled={locked && !lockedFillableCodes[index]?.partNumber}
+                        disabled={locked && !lockedFillableCodes[originalIndex]?.partNumber}
                         {...register(`${fieldName}.${index}.partNumber` as Path<T>)}
                       />
                     </div>
@@ -512,10 +531,15 @@ export default function InvoiceItemsEditor<T extends FieldValues = any>({
                 </div>
                 {/* Delete */}
                 <div className="col-span-1 flex justify-end pt-1">
-                  {fields.length > 1 && !locked && (
+                  {fields.length > 1 && (!locked || allowLockedRemoval) && (
                     <button
                       type="button"
                       onClick={() => {
+                        if (locked) {
+                          const warning = lockedRemovalWarnings[originalIndex];
+                          if (warning && !window.confirm(warning)) return;
+                          setRemovedLocked((prev) => [...prev, originalIndex]);
+                        }
                         remove(index);
                         setItemFeeSlots((prev) => prev.filter((_, i) => i !== index));
                       }}
