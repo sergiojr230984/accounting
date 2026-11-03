@@ -15,6 +15,7 @@ import FileUpload from "@/components/FileUpload";
 import InvoiceItemsEditor from "@/components/InvoiceItemsEditor";
 import InvoiceDocumentPreview from "@/components/InvoiceDocumentPreview";
 import CustomerCreateModal from "@/components/CustomerCreateModal";
+import { formatCustomerAddress } from "@/lib/address";
 import AddressAutocomplete from "@/components/AddressAutocomplete";
 import { computeLineTotals, formatCurrency } from "@/lib/money";
 import { formatDateOnly } from "@/lib/date";
@@ -71,7 +72,7 @@ interface InvoiceDetail {
   // Per-invoice override -- null means "use customer.address below". See the
   // doc comment on CustomerInvoice.customerAddress in prisma/schema.prisma.
   customerAddress: string | null;
-  customer: { id: string; name: string; email: string | null; phone: string | null; address: string | null; emergencyContactName: string | null; emergencyContactPhone: string | null };
+  customer: { id: string; name: string; email: string | null; phone: string | null; address: string | null; apartment?: string | null; emergencyContactName: string | null; emergencyContactPhone: string | null };
   items: {
     id: string;
     description: string;
@@ -180,7 +181,7 @@ export default function CustomerInvoiceDetailPage() {
       employeeId: data.employeeId ?? "",
       commissionRate: data.commissionRate ?? "0",
       notes: data.notes ?? "",
-      customerAddress: data.customerAddress ?? data.customer.address ?? "",
+      customerAddress: data.customerAddress ?? formatCustomerAddress(data.customer) ?? "",
       items: data.items.map((item: InvoiceDetail["items"][0]) => ({
         id: item.id,
         description: item.description,
@@ -480,7 +481,7 @@ export default function CustomerInvoiceDetailPage() {
       // invoice has its own override -- same shape of bug as the item
       // code/part number fix above (a raw spread silently drops a value
       // that needs to be resolved from elsewhere first).
-      customer: { ...invoice.customer, address: invoice.customerAddress ?? invoice.customer.address },
+      customer: { ...invoice.customer, address: invoice.customerAddress ?? formatCustomerAddress(invoice.customer) },
       items: invoice.items.map((i) => ({
         ...i,
         itemCode: formatItemCode(i),
@@ -521,7 +522,7 @@ export default function CustomerInvoiceDetailPage() {
         name: invoice.customer.name,
         phone: invoice.customer.phone,
         // Same delivery-address resolution as the invoice PDF above.
-        address: invoice.customerAddress ?? invoice.customer.address,
+        address: invoice.customerAddress ?? formatCustomerAddress(invoice.customer),
         emergencyContactName: invoice.customer.emergencyContactName,
         emergencyContactPhone: invoice.customer.emergencyContactPhone,
       },
@@ -882,8 +883,8 @@ export default function CustomerInvoiceDetailPage() {
                   <p className="font-medium">{invoice.customer.name}</p>
                   {invoice.customer.email && <p className="text-gray-500">{invoice.customer.email}</p>}
                   {invoice.customer.phone && <p className="text-gray-500">{invoice.customer.phone}</p>}
-                  {(invoice.customerAddress ?? invoice.customer.address) && (
-                    <p className="text-gray-500">{invoice.customerAddress ?? invoice.customer.address}</p>
+                  {(invoice.customerAddress ?? formatCustomerAddress(invoice.customer)) && (
+                    <p className="text-gray-500">{invoice.customerAddress ?? formatCustomerAddress(invoice.customer)}</p>
                   )}
                   {(invoice.customer.emergencyContactName || invoice.customer.emergencyContactPhone) && (
                     <div className="pt-2 border-t border-gray-100">
@@ -1208,7 +1209,7 @@ export default function CustomerInvoiceDetailPage() {
           // Keep the in-progress "Edit Invoice" form's address field (if
           // open) in sync too, so it doesn't silently overwrite this change
           // with a stale value on save.
-          if (editing) setValue("customerAddress", c.address ?? "");
+          if (editing) setValue("customerAddress", formatCustomerAddress(c) ?? "");
         }}
       />
     </>

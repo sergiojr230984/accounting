@@ -3,6 +3,7 @@ import { prisma } from "@/lib/prisma";
 import { checkTokenValidity } from "@/lib/deliveries";
 import { CheckCircle2, XCircle } from "lucide-react";
 import DeliveryUploadForm from "./DeliveryUploadForm";
+import { formatCustomerAddress } from "@/lib/address";
 
 // Public page, no login (spec §1). The select below is the actual security
 // boundary for §6's "must not expose price, balance, or any other customer
@@ -25,7 +26,7 @@ export default async function DeliveryUploadPage({ params }: { params: Promise<{
         select: {
           invoiceNumber: true,
           customerAddress: true,
-          customer: { select: { name: true, address: true } },
+          customer: { select: { name: true, address: true, apartment: true } },
           items: { select: { id: true, description: true, itemDescription: true, quantity: true } },
         },
       },
@@ -34,7 +35,7 @@ export default async function DeliveryUploadPage({ params }: { params: Promise<{
   if (!delivery) notFound();
 
   const firstName = delivery.customerInvoice.customer.name.trim().split(/\s+/)[0] || delivery.customerInvoice.customer.name;
-  const address = delivery.customerInvoice.customerAddress ?? delivery.customerInvoice.customer.address ?? "";
+  const address = delivery.customerInvoice.customerAddress ?? formatCustomerAddress(delivery.customerInvoice.customer) ?? "";
 
   const validity = checkTokenValidity(delivery);
 

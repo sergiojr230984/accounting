@@ -9,6 +9,7 @@ import { ArrowLeft, Loader2 } from "lucide-react";
 import Link from "next/link";
 import InvoiceItemsEditor from "@/components/InvoiceItemsEditor";
 import InvoiceDocumentPreview from "@/components/InvoiceDocumentPreview";
+import { formatCustomerAddress } from "@/lib/address";
 
 const schema = z.object({
   customerId: z.string().min(1, "Select a customer"),
@@ -28,7 +29,7 @@ const schema = z.object({
 });
 type FormData = z.infer<typeof schema>;
 
-interface Customer { id: string; name: string; email: string | null; phone: string | null; address: string | null }
+interface Customer { id: string; name: string; email: string | null; phone: string | null; address: string | null; apartment?: string | null }
 interface FeeOption { id: string; label: string; rate: number }
 
 const todayISO = () => new Date().toISOString().split("T")[0];
@@ -204,7 +205,7 @@ export default function NewEstimatePage() {
           partyName={selectedCustomer?.name ?? ""}
           partyEmail={selectedCustomer?.email}
           partyPhone={selectedCustomer?.phone}
-          partyAddress={selectedCustomer?.address}
+          partyAddress={formatCustomerAddress(selectedCustomer)}
           priceLabel="Unit Price"
           items={(watchedItems ?? []).map((item) => ({
             description: item.description,

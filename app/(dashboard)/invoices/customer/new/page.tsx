@@ -21,6 +21,7 @@ import InvoiceDocumentPreview from "@/components/InvoiceDocumentPreview";
 import ProductAutocomplete, { type ProductOption } from "@/components/ProductAutocomplete";
 import { formatCurrency } from "@/lib/money";
 import { generateInvoicePDF } from "@/lib/invoice-pdf";
+import { formatCustomerAddress } from "@/lib/address";
 
 interface Customer {
   id: string;
@@ -28,6 +29,7 @@ interface Customer {
   email: string | null;
   phone?: string | null;
   address?: string | null;
+  apartment?: string | null;
   emergencyContactName?: string | null;
   emergencyContactPhone?: string | null;
 }
@@ -365,7 +367,7 @@ export default function NewCustomerInvoicePage() {
         name: customer?.name ?? "",
         email: customer?.email ?? null,
         phone: customer?.phone ?? null,
-        address: customer?.address ?? null,
+        address: formatCustomerAddress(customer),
         emergencyContactName: customer?.emergencyContactName ?? null,
         emergencyContactPhone: customer?.emergencyContactPhone ?? null,
       },
@@ -809,7 +811,7 @@ export default function NewCustomerInvoicePage() {
             partyName={selectedCustomer?.name ?? ""}
             partyEmail={selectedCustomer?.email}
             partyPhone={selectedCustomer?.phone}
-            partyAddress={selectedCustomer?.address}
+            partyAddress={formatCustomerAddress(selectedCustomer)}
             priceLabel="Unit Price"
             items={items
               .filter((i) => i.description.trim() !== "")

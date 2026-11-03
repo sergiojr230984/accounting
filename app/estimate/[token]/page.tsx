@@ -3,6 +3,7 @@ import { formatCurrency } from "@/lib/money";
 import { formatDateOnly } from "@/lib/date";
 import { notFound } from "next/navigation";
 import { BookOpen } from "lucide-react";
+import { formatCustomerAddress } from "@/lib/address";
 
 export default async function PublicEstimatePage({
   params,
@@ -64,7 +65,7 @@ export default async function PublicEstimatePage({
             <p className="font-medium text-gray-900">{estimate.customer.name}</p>
             {estimate.customer.email && <p className="text-sm text-gray-500">{estimate.customer.email}</p>}
             {estimate.customer.phone && <p className="text-sm text-gray-500">{estimate.customer.phone}</p>}
-            {estimate.customer.address && <p className="text-sm text-gray-500 whitespace-pre-line">{estimate.customer.address}</p>}
+            {formatCustomerAddress(estimate.customer) && <p className="text-sm text-gray-500 whitespace-pre-line">{formatCustomerAddress(estimate.customer)}</p>}
           </div>
 
           {/* Items */}

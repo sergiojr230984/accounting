@@ -4,6 +4,8 @@ import { formatDateOnly } from "./date";
 import {
   drawCompanyHeader,
   BG_GRAY,
+  DELIVERY_CONFIRMATION_TEXT,
+  DELIVERY_CONFIRMATION_TITLE,
   ORANGE,
   RULE_GRAY,
   TEXT_DARK,
@@ -221,6 +223,33 @@ export function generatePackingListPDF(data: PackingListPDFData): jsPDF {
     doc.setTextColor(...TEXT_DARK);
     doc.text(noteLines, margin + 12, y + 28);
     y += boxH + 20;
+  }
+
+  // ─── DELIVERY CONFIRMATION ───────────────────────────────
+  // Same clause as the customer invoice (shared constants from
+  // lib/invoice-pdf.ts, so the two can't drift apart), kept directly above
+  // the Received-by signature block since signing is what accepts it.
+  {
+    const textW = pageWidth - margin * 2;
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(9);
+    const bodyLines = doc.splitTextToSize(DELIVERY_CONFIRMATION_TEXT, textW) as string[];
+    const blockH = 16 + bodyLines.length * 11 + 14;
+    if (y + blockH > pageHeight - 110) {
+      doc.addPage();
+      y = margin + 20;
+    }
+    // Pin it to sit right on top of the bottom-anchored signature block.
+    y = Math.max(y, pageHeight - 110 - blockH);
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(10);
+    doc.setTextColor(...TEXT_DARK);
+    doc.text(DELIVERY_CONFIRMATION_TITLE, margin, y);
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(9);
+    doc.setTextColor(...TEXT_MID);
+    doc.text(bodyLines, margin, y + 16);
+    y += blockH;
   }
 
   // ─── RECEIVED BY ────────────────────────────────────

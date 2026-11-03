@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { requireReadAccess } from "@/lib/api";
+import { formatCustomerAddress } from "@/lib/address";
 
 /**
  * Office delivery board (spec §3 "office board"). Deliberately never
@@ -19,7 +20,7 @@ export async function GET(request: Request) {
     where: status ? { status: status as never } : undefined,
     orderBy: [{ scheduledDate: "asc" }, { createdAt: "desc" }],
     include: {
-      customerInvoice: { select: { invoiceNumber: true, customerAddress: true, customer: { select: { name: true, address: true } } } },
+      customerInvoice: { select: { invoiceNumber: true, customerAddress: true, customer: { select: { name: true, address: true, apartment: true } } } },
       assignedCrewEmployee: { select: { name: true } },
       photos: { select: { id: true }, take: 1, orderBy: { createdAt: "asc" } },
       _count: { select: { photos: true } },
@@ -35,7 +36,7 @@ export async function GET(request: Request) {
     tokenKind: d.tokenKind,
     invoiceNumber: d.customerInvoice.invoiceNumber,
     customerName: d.customerInvoice.customer.name,
-    deliveryAddress: d.customerInvoice.customerAddress ?? d.customerInvoice.customer.address,
+    deliveryAddress: d.customerInvoice.customerAddress ?? formatCustomerAddress(d.customerInvoice.customer),
     assignedCrewName: d.assignedCrewEmployee?.name ?? null,
     assignedSubcontractorName: d.assignedSubcontractorName,
     subcontractorPayable: d.subcontractorPayable,

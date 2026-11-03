@@ -12,6 +12,7 @@ import { formatDateOnly } from "@/lib/date";
 import InvoiceItemsEditor from "@/components/InvoiceItemsEditor";
 import InvoiceDocumentPreview from "@/components/InvoiceDocumentPreview";
 import { formatCurrency } from "@/lib/money";
+import { formatCustomerAddress } from "@/lib/address";
 
 type EstimateStatus = "DRAFT" | "SENT" | "ACCEPTED" | "DECLINED" | "EXPIRED";
 
@@ -49,7 +50,7 @@ interface EstimateDetail {
   viewToken: string | null;
   sentAt: string | null;
   convertedInvoiceId: string | null;
-  customer: { id: string; name: string; email: string | null; phone: string | null; address: string | null };
+  customer: { id: string; name: string; email: string | null; phone: string | null; address: string | null; apartment?: string | null };
   items: { id: string; description: string; itemDescription: string | null; quantity: string; unitPrice: string; taxRate: string; lineTotal: string }[];
 }
 
@@ -234,7 +235,7 @@ export default function EstimateDetailPage() {
       appliedFees: estimate.appliedFees,
       paidAmount: "0",
       notes: estimate.notes,
-      customer: estimate.customer,
+      customer: { ...estimate.customer, address: formatCustomerAddress(estimate.customer) },
       items: estimate.items,
       company,
       kind: "estimate",
@@ -422,7 +423,7 @@ export default function EstimateDetailPage() {
             partyName={estimate.customer.name}
             partyEmail={estimate.customer.email}
             partyPhone={estimate.customer.phone}
-            partyAddress={estimate.customer.address}
+            partyAddress={formatCustomerAddress(estimate.customer)}
             priceLabel="Unit Price"
             items={(watchedItems ?? []).map((item) => ({
               description: item.description,

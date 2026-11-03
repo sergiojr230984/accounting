@@ -106,6 +106,9 @@ model Customer {
   email                 String?
   phone                 String?
   address               String?
+  // Apt / suite / unit, kept separate from the street line. Print/show it
+  // via formatCustomerAddress() in lib/address.ts, never on its own.
+  apartment             String?
   emergencyContactName  String?
   emergencyContactPhone String?
   createdAt             DateTime          @default(now())
