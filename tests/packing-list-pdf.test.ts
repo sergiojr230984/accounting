@@ -75,3 +75,15 @@ describe("packing list PDF", () => {
     }
   });
 });
+
+describe("packing list PDF — delivery confirmation", () => {
+  it("prints the same delivery-confirmation clause as the customer invoice", () => {
+    const text = drawnText(base);
+    expect(text).toContain("CONFIRMACIÓN DE ENTREGA DE MERCANCÍA");
+    expect(text).toContain("La Cuevita Furniture no se responsabiliza");
+  });
+
+  it("prints it even when there are no delivery notes", () => {
+    expect(drawnText({ ...base, notes: null })).toContain("CONFIRMACIÓN DE ENTREGA DE MERCANCÍA");
+  });
+});
