@@ -153,6 +153,16 @@ export function drawCompanyHeader(
   return headerBottom;
 }
 
+// Printed on every customer invoice, between Notes / Terms and the
+// Customer Signature line. Straight quotes on purpose: jsPDF's built-in
+// helvetica only covers Latin-1, so curly quotes would print as garbage
+// (accented letters like Ó/Í/á are Latin-1 and render fine).
+export const DELIVERY_CONFIRMATION_TITLE = "CONFIRMACIÓN DE ENTREGA DE MERCANCÍA";
+export const DELIVERY_CONFIRMATION_TEXT =
+  '"Al firmar, el cliente confirma haber recibido la mercancía en buenas condiciones. ' +
+  "La Cuevita Furniture no se responsabiliza por daños ocasionados durante el transporte, " +
+  'apertura, manipulación o ensamblaje por el cliente o terceros."';
+
 export function generateInvoicePDF(invoice: InvoicePDFData): jsPDF {
   const doc = new jsPDF({ unit: "pt", format: "letter" });
   const pageWidth = doc.internal.pageSize.getWidth();
@@ -561,6 +571,35 @@ export function generateInvoicePDF(invoice: InvoicePDFData): jsPDF {
       totalsY += wrapped.length * 12 + 2;
     }
     totalsY += 12;
+  }
+
+  // ─── DELIVERY CONFIRMATION (customer invoices only) ──────────
+  // Fixed legal text the customer agrees to by signing the line below it,
+  // printed on every customer invoice regardless of the invoice's own notes.
+  // Deliberately not on estimates (nothing has been delivered yet) or
+  // purchase orders (those have no customer signature at all).
+  if (!isPO && !isEstimate) {
+    const textW = pageWidth - margin * 2;
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(9);
+    const bodyLines = doc.splitTextToSize(DELIVERY_CONFIRMATION_TEXT, textW);
+    const blockH = 16 + bodyLines.length * 11;
+    // Keep the whole block together and leave room for the signature line
+    // drawn right after it (which needs ~80pt from the page bottom).
+    if (totalsY + blockH > pageHeight - 110) {
+      doc.addPage();
+      totalsY = margin + 20;
+    }
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(10);
+    doc.setTextColor(...TEXT_DARK);
+    doc.text(DELIVERY_CONFIRMATION_TITLE, margin, totalsY);
+    totalsY += 16;
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(9);
+    doc.setTextColor(...TEXT_MID);
+    doc.text(bodyLines, margin, totalsY);
+    totalsY += bodyLines.length * 11 + 12;
   }
 
   // Signature line
