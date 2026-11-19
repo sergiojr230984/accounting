@@ -5,7 +5,7 @@ import { requireReadAccess } from "@/lib/api";
 import { prisma } from "@/lib/prisma";
 import { writeAuditLog, extractMeta, actorFromSession } from "@/lib/audit";
 import { computeLineTotals } from "@/lib/money";
-import { claimSequenceNumber, parseSequenceFromNumber, resolveNewDocumentNumber } from "@/lib/next-number";
+import { claimSequenceNumber, lockDocumentNumbering, parseSequenceFromNumber, resolveNewDocumentNumber } from "@/lib/next-number";
 import { z } from "zod";
 import Decimal from "decimal.js";
 
@@ -159,7 +159,12 @@ export async function POST(request: Request) {
       ?.supplierInvoicePrefix || "PO-2026-";
   const isOurPoNumber = parseSequenceFromNumber(invoiceNumber, supplierPrefix) !== null;
 
-  if (!isOurPoNumber) {
+  // A bill fulfilling a purchase request is strictly 1:1 with that request
+  // (enforced below and by the DB), so a colliding number there can't be a
+  // double-entry of the same supplier invoice -- it's the pre-filled number
+  // having been used already. It's resolved inside the transaction (next
+  // free PO number) instead of being rejected here, whatever its format.
+  if (!isOurPoNumber && !purchaseRequestId) {
     const existing = await prisma.supplierInvoice.findUnique({
       where: { invoiceNumber_supplierId: { invoiceNumber, supplierId } },
     });
@@ -244,11 +249,28 @@ export async function POST(request: Request) {
       }
 
       let finalNumber = invoiceNumber;
+      let claimCounter = isOurPoNumber;
       if (isOurPoNumber) {
         const resolved = await resolveNewDocumentNumber(tx, "supplierBill", invoiceNumber, supplierPrefix);
         // A PO-format number is never reported as a conflict -- it's just
         // moved to the next free one.
         if ("number" in resolved) finalNumber = resolved.number;
+      } else if (purchaseRequest) {
+        // Non-PO-format number on a purchase-request bill (see the comment
+        // above the pre-transaction duplicate check): keep it if this
+        // supplier doesn't have it yet, otherwise take the next free PO
+        // number rather than failing the save. Under the numbering lock so
+        // two concurrent saves can't both see the number as free.
+        await lockDocumentNumbering(tx, "supplierBill");
+        const taken = await tx.supplierInvoice.findUnique({
+          where: { invoiceNumber_supplierId: { invoiceNumber, supplierId } },
+          select: { id: true },
+        });
+        if (taken) {
+          const resolved = await resolveNewDocumentNumber(tx, "supplierBill", undefined, supplierPrefix);
+          if ("number" in resolved) finalNumber = resolved.number;
+          claimCounter = true;
+        }
       }
 
       const created = await tx.supplierInvoice.create({
@@ -289,7 +311,7 @@ export async function POST(request: Request) {
         // response at all, let alone unscoped by role.
         include: { supplier: { select: { id: true, name: true } }, items: true },
       });
-      if (isOurPoNumber) {
+      if (claimCounter) {
         await claimSequenceNumber(tx, "supplierInvoiceNextSeq", finalNumber, supplierPrefix);
       }
 

@@ -789,6 +789,44 @@ describe("bill creation closes out a purchase_request", () => {
     expect(fulfilled.body.rows.find((r) => r.id === purchaseRequestId)?.status).toBe("FULFILLED");
   });
 
+  // Follow-up to the above: even when the pre-filled number isn't in the
+  // configured PO format (e.g. the Settings prefix doesn't match it), a bill
+  // fulfilling a purchase request must not fail as a duplicate. The request
+  // is strictly 1:1 with its bill, so there's no double-entry to protect
+  // against -- the bill just takes the next free PO number.
+  it("closes the request even when a non-PO-format number collides for that supplier", async () => {
+    const { purchaseRequestId, quantity } = await paidInvoiceWithOnePendingRequest();
+    const settings = await admin.getJson<{ supplierInvoicePrefix?: string; supplierInvoiceNextSeq: number }>("/api/settings");
+    const prefix = settings.body.supplierInvoicePrefix || "PO-2026-";
+    const seq = Number(settings.body.supplierInvoiceNextSeq);
+    const colliding = `Po-${Date.now()}`;
+
+    const first = await admin.postJson("/api/invoices/supplier", {
+      supplierId: realSupplierId,
+      invoiceNumber: colliding,
+      invoiceDate: "2026-01-06",
+      category: "COGS",
+      items: [{ description: "Something else", quantity: "1", unitCost: "10", taxRate: "0" }],
+    });
+    expect(first.status).toBe(201);
+
+    const bill = await admin.postJson<{ invoiceNumber: string }>("/api/invoices/supplier", {
+      supplierId: realSupplierId,
+      invoiceNumber: colliding,
+      invoiceDate: "2026-01-06",
+      category: "COGS",
+      items: [{ description: "Sofa, brown leather", quantity, unitCost: "10", taxRate: "0" }],
+      purchaseRequestId,
+    });
+    expect(bill.status).toBe(201);
+    expect(bill.body.invoiceNumber).toBe(`${prefix}${String(seq).padStart(4, "0")}`);
+
+    const fulfilled = await admin.getJson<{ rows: { id: string; status: string }[] }>(
+      `/api/reports?type=items-ordered&status=FULFILLED`
+    );
+    expect(fulfilled.body.rows.find((r) => r.id === purchaseRequestId)?.status).toBe("FULFILLED");
+  });
+
   it("rejects a bill with more than one line item when linked to a purchase request", async () => {
     const { purchaseRequestId, quantity } = await paidInvoiceWithOnePendingRequest();
 
