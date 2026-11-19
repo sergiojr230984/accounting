@@ -5,6 +5,7 @@ import { requireReadAccess } from "@/lib/api";
 import { prisma } from "@/lib/prisma";
 import { writeAuditLog, extractMeta, actorFromSession } from "@/lib/audit";
 import { computeLineTotals } from "@/lib/money";
+import { claimSequenceNumber, parseSequenceFromNumber, resolveNewDocumentNumber } from "@/lib/next-number";
 import { z } from "zod";
 import Decimal from "decimal.js";
 
@@ -143,14 +144,31 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Selected supplier no longer exists." }, { status: 404 });
   }
 
-  const existing = await prisma.supplierInvoice.findUnique({
-    where: { invoiceNumber_supplierId: { invoiceNumber, supplierId } },
-  });
-  if (existing) {
-    return NextResponse.json(
-      { error: "Invoice number already exists for this supplier" },
-      { status: 409 }
-    );
+  // Two kinds of bill number:
+  //  - Our own PO number (`${prefix}<digits>`, what the New Bill page
+  //    pre-fills from the counter). It's company-wide and auto-advances:
+  //    if the suggested number has been used in the meantime (someone else
+  //    saved first, a number was typed by hand ahead of the counter, the
+  //    counter was set back in Settings), the bill just gets the next free
+  //    number instead of failing with a duplicate error -- same rule as
+  //    customer invoices (lib/next-number.ts's resolveNewDocumentNumber).
+  //  - The supplier's own number. Only unique per supplier, never
+  //    rewritten, and doesn't consume a PO number.
+  const supplierPrefix =
+    (await prisma.companyProfile.findUnique({ where: { id: "default" }, select: { supplierInvoicePrefix: true } }))
+      ?.supplierInvoicePrefix || "PO-2026-";
+  const isOurPoNumber = parseSequenceFromNumber(invoiceNumber, supplierPrefix) !== null;
+
+  if (!isOurPoNumber) {
+    const existing = await prisma.supplierInvoice.findUnique({
+      where: { invoiceNumber_supplierId: { invoiceNumber, supplierId } },
+    });
+    if (existing) {
+      return NextResponse.json(
+        { error: "Invoice number already exists for this supplier" },
+        { status: 409 }
+      );
+    }
   }
 
   const { lines: lineTotals, subtotal, taxAmount } = computeLineTotals(
@@ -160,14 +178,12 @@ export async function POST(request: Request) {
 
   const totalAmount = subtotal.plus(taxAmount);
 
-  // Creation and the PO-number counter bump (and, when this bill closes out
+  // Creation and the PO-number counter claim (and, when this bill closes out
   // a purchase request, the cost write-back + status flip) happen in one
-  // transaction -- previously the counter bump was fire-and-forget with a
-  // silently-swallowed error, which could leave the counter under-advanced
-  // with no visible failure. This bill's own invoiceNumber is usually the
-  // *supplier's* number, not ours, so (unlike customer invoices/estimates)
-  // the counter here isn't derived from parsing it -- it's a simple +1 per
-  // bill created, same as before, just no longer allowed to fail silently.
+  // transaction. The counter is advanced past the PO number actually used
+  // (GREATEST, never backwards) rather than a blind +1 per bill -- the +1
+  // let the counter fall behind numbers already in use, which is what made
+  // the pre-filled number collide ("Invoice number already exists").
   let result: {
     error: "pr_not_found" | "pr_already_fulfilled" | "pr_supplier_mismatch" | null;
     invoice?: Prisma.SupplierInvoiceGetPayload<{ include: { supplier: { select: { id: true; name: true } }; items: true } }>;
@@ -201,7 +217,14 @@ export async function POST(request: Request) {
         // attempt gets a clean, specific 409 instead of a raw constraint
         // error.
         if (pr.status !== "PENDING") return { error: "pr_already_fulfilled" as const };
-        if (pr.supplierId !== supplierId) return { error: "pr_supplier_mismatch" as const };
+        // The bill's supplier is allowed to differ from the one on the
+        // invoice line: the item is sometimes actually sourced elsewhere,
+        // and purchasing needs to record who really supplied it. The
+        // request is re-pointed at the bill's supplier below (with the
+        // FULFILLED update) so the purchasing queue/reports show the real
+        // supplier. The customer invoice line itself is left untouched --
+        // it is locked once a payment exists (the request only exists
+        // because one does), and it's what the customer was sold.
         purchaseRequest = {
           id: pr.id,
           customerInvoiceItemId: pr.customerInvoiceItemId,
@@ -220,10 +243,18 @@ export async function POST(request: Request) {
         }
       }
 
+      let finalNumber = invoiceNumber;
+      if (isOurPoNumber) {
+        const resolved = await resolveNewDocumentNumber(tx, "supplierBill", invoiceNumber, supplierPrefix);
+        // A PO-format number is never reported as a conflict -- it's just
+        // moved to the next free one.
+        if ("number" in resolved) finalNumber = resolved.number;
+      }
+
       const created = await tx.supplierInvoice.create({
         data: {
           supplierId,
-          invoiceNumber,
+          invoiceNumber: finalNumber,
           invoiceDate: new Date(invoiceDate),
           dueDate: dueDate ? new Date(dueDate) : null,
           category,
@@ -258,10 +289,9 @@ export async function POST(request: Request) {
         // response at all, let alone unscoped by role.
         include: { supplier: { select: { id: true, name: true } }, items: true },
       });
-      await tx.companyProfile.update({
-        where: { id: "default" },
-        data: { supplierInvoiceNextSeq: { increment: 1 } },
-      });
+      if (isOurPoNumber) {
+        await claimSequenceNumber(tx, "supplierInvoiceNextSeq", finalNumber, supplierPrefix);
+      }
 
       if (purchaseRequest) {
         // The bill is considered closed the moment it's saved with a cost
@@ -276,7 +306,7 @@ export async function POST(request: Request) {
         });
         await tx.purchaseRequest.update({
           where: { id: purchaseRequest.id },
-          data: { status: "FULFILLED", cost: actualCost, fulfilledAt: new Date() },
+          data: { status: "FULFILLED", cost: actualCost, fulfilledAt: new Date(), supplierId },
         });
       }
 
@@ -298,13 +328,6 @@ export async function POST(request: Request) {
   if (result.error === "pr_already_fulfilled") {
     return NextResponse.json({ error: "This purchase request already has a bill." }, { status: 409 });
   }
-  if (result.error === "pr_supplier_mismatch") {
-    return NextResponse.json(
-      { error: "Selected supplier doesn't match this purchase request's supplier." },
-      { status: 400 }
-    );
-  }
-
   const invoice = result.invoice!;
 
   await writeAuditLog({

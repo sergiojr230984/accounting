@@ -71,13 +71,19 @@ type NumberingTx = Pick<PrismaClient, "$executeRaw" | "$queryRaw">;
  * their own they let two different customers' documents share a number --
  * which is exactly what happened in production (two invoices #1393 saved
  * by two users at the same time for two different customers). The helpers
- * below are the company-wide guard. Supplier bills are deliberately NOT
- * here: a bill's number is the supplier's own number, so two suppliers
- * legitimately reuse the same one.
+ * below are the company-wide guard.
+ *
+ * Supplier bills are here ONLY for numbers in our own PO format
+ * (`${supplierInvoicePrefix}<digits>`) -- those come off one company-wide
+ * counter, so they get the same auto-advance treatment. A bill saved under
+ * the supplier's own number is NOT routed through these helpers (see
+ * app/api/invoices/supplier/route.ts): two suppliers legitimately reuse the
+ * same number, so that case stays unique per supplier only.
  */
 const NUMBERED_DOCS = {
   customerInvoice: { table: "CustomerInvoice", column: "invoiceNumber", field: "customerInvoiceNextSeq" },
   estimate: { table: "Estimate", column: "estimateNumber", field: "estimateNextSeq" },
+  supplierBill: { table: "SupplierInvoice", column: "invoiceNumber", field: "supplierInvoiceNextSeq" },
 } as const satisfies Record<string, { table: string; column: string; field: SequenceField }>;
 
 export type NumberedDoc = keyof typeof NUMBERED_DOCS;

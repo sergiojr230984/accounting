@@ -1297,3 +1297,114 @@ describe("invoice numbers are unique company-wide, not per customer", () => {
     expect(converted.body.invoiceNumber).not.toBe(inv.body.invoiceNumber);
   });
 });
+
+// Real incident (2026-11): creating a bill from the Purchasing queue showed
+// the auto-suggested PO number (CompanyProfile.supplierInvoiceNextSeq) and
+// the save failed with "Invoice number already exists for this supplier".
+// The counter was a blind +1 per bill, so anything that left it behind a
+// number already in use -- a hand-typed PO number ahead of the counter,
+// two people creating bills at once, Settings saved with a stale "next
+// number" -- made the suggestion collide. Our own PO numbers must now
+// auto-advance to the next free one, exactly like customer invoices do.
+describe("supplier bill (PO) numbering -- auto-advances, never a duplicate-number error", () => {
+  let supplierId: string;
+  let prefix: string;
+
+  const pad = (n: number) => String(n).padStart(4, "0");
+  async function counter() {
+    const s = await admin.getJson<{ supplierInvoicePrefix?: string; supplierInvoiceNextSeq: number }>("/api/settings");
+    return { prefix: s.body.supplierInvoicePrefix || "PO-2026-", seq: Number(s.body.supplierInvoiceNextSeq) };
+  }
+  function bill(invoiceNumber: string, sid = supplierId) {
+    return admin.postJson<{ id: string; invoiceNumber: string; error?: string }>("/api/invoices/supplier", {
+      supplierId: sid,
+      invoiceNumber,
+      invoiceDate: "2026-11-19",
+      category: "COGS",
+      items: [{ description: "Sofa", quantity: "1", unitCost: "230", taxRate: "0" }],
+    });
+  }
+
+  beforeAll(async () => {
+    const sup = await admin.postJson<{ id: string }>("/api/suppliers", { name: `PO Numbering Supplier ${Date.now()}` });
+    supplierId = sup.body.id;
+    prefix = (await counter()).prefix;
+  });
+
+  it("a hand-typed PO number ahead of the counter pushes the counter past it", async () => {
+    const { seq } = await counter();
+    const typed = `${prefix}${pad(seq + 5)}`;
+    const res = await bill(typed);
+    expect(res.status).toBe(201);
+    expect(res.body.invoiceNumber).toBe(typed);
+    expect((await counter()).seq).toBe(seq + 6);
+  });
+
+  it("a suggested PO number that's already taken is replaced by the next free one instead of failing", async () => {
+    const { seq } = await counter();
+    const taken = `${prefix}${pad(seq)}`;
+    expect((await bill(taken)).status).toBe(201);
+    // Simulate the counter falling behind (e.g. Settings saved with a stale
+    // "next number") so the next suggestion is a number already in use.
+    const reset = await admin.postJson("/api/settings", { supplierInvoiceNextSeq: seq }, "PATCH");
+    expect(reset.status).toBe(200);
+    const suggested = `${prefix}${pad((await counter()).seq)}`;
+    expect(suggested).toBe(taken);
+
+    const res = await bill(suggested);
+    expect(res.status).toBe(201);
+    expect(res.body.invoiceNumber).toBe(`${prefix}${pad(seq + 1)}`);
+    expect((await counter()).seq).toBe(seq + 2);
+  });
+
+  it("our PO numbers are unique company-wide -- a taken one is skipped even for a different supplier", async () => {
+    const other = await admin.postJson<{ id: string }>("/api/suppliers", { name: `PO Numbering Other ${Date.now()}` });
+    const { seq } = await counter();
+    const first = await bill(`${prefix}${pad(seq)}`);
+    const second = await bill(`${prefix}${pad(seq)}`, other.body.id);
+    expect(first.status).toBe(201);
+    expect(second.status).toBe(201);
+    expect(second.body.invoiceNumber).not.toBe(first.body.invoiceNumber);
+  });
+
+  it("concurrent creates with the same suggested PO number all succeed with distinct numbers", async () => {
+    const { seq } = await counter();
+    const suggested = `${prefix}${pad(seq)}`;
+    const results = await Promise.all(Array.from({ length: 5 }, () => bill(suggested)));
+    expect(results.map((r) => r.status)).toEqual([201, 201, 201, 201, 201]);
+    const numbers = results.map((r) => r.body.invoiceNumber);
+    expect(new Set(numbers).size).toBe(5);
+    expect((await counter()).seq).toBe(seq + 5);
+  });
+
+  it("a supplier's own (non-PO-format) number still can't be entered twice for the same supplier", async () => {
+    const own = `SUPPLIER-OWN-${Date.now()}`;
+    expect((await bill(own)).status).toBe(201);
+    const dup = await bill(own);
+    expect(dup.status).toBe(409);
+    expect(dup.body.error).toBe("Invoice number already exists for this supplier");
+  });
+
+  it("a bill with the supplier's own number doesn't burn a PO number", async () => {
+    const { seq } = await counter();
+    expect((await bill(`SUPPLIER-OWN-${Date.now()}-b`)).status).toBe(201);
+    expect((await counter()).seq).toBe(seq);
+  });
+
+  it("renaming a bill to a PO number ahead of the counter pushes the counter past it", async () => {
+    const created = await bill(`SUPPLIER-OWN-${Date.now()}-c`);
+    const { seq } = await counter();
+    const renamed = await admin.postJson(`/api/invoices/supplier/${created.body.id}`, { invoiceNumber: `${prefix}${pad(seq + 3)}` }, "PATCH");
+    expect(renamed.status).toBe(200);
+    expect((await counter()).seq).toBe(seq + 4);
+  });
+
+  it("renaming a bill onto a number the same supplier already has is a clean 409, not a 500", async () => {
+    const own = `SUPPLIER-OWN-${Date.now()}-d`;
+    expect((await bill(own)).status).toBe(201);
+    const other = await bill(`SUPPLIER-OWN-${Date.now()}-e`);
+    const renamed = await admin.postJson<{ error: string }>(`/api/invoices/supplier/${other.body.id}`, { invoiceNumber: own }, "PATCH");
+    expect(renamed.status).toBe(409);
+    expect(renamed.body.error).toBe("Invoice number already exists for this supplier");
+  });
+});

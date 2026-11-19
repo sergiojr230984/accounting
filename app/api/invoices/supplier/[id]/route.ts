@@ -1,9 +1,11 @@
 import { NextResponse } from "next/server";
+import { Prisma } from "@prisma/client";
 import { auth } from "@/lib/auth";
 import { requireRole } from "@/lib/api";
 import { prisma } from "@/lib/prisma";
 import { writeAuditLog, extractMeta, actorFromSession, diffChanges } from "@/lib/audit";
 import { computeLineTotals } from "@/lib/money";
+import { claimSequenceNumber } from "@/lib/next-number";
 import { z } from "zod";
 import Decimal from "decimal.js";
 
@@ -283,15 +285,39 @@ export async function PATCH(
     }
   }
 
-  const updated = await prisma.supplierInvoice.update({
-    where: { id },
-    data: updateData,
-    // See the matching comment on the GET handler above.
-    include: {
-      supplier: { select: { id: true, name: true, email: true, phone: true, address: true, zelle: true } },
-      items: true,
-    },
-  });
+  // Renaming a bill to one of our own PO numbers (e.g. one typed ahead of
+  // the counter) must push the counter past it, in the same transaction, so
+  // the New Bill page never pre-fills a number that's already in use. A
+  // supplier's own number doesn't match the prefix and is a no-op here.
+  const numberChanged = !!data.invoiceNumber && data.invoiceNumber !== existing.invoiceNumber;
+  let updated;
+  try {
+    updated = await prisma.$transaction(async (tx) => {
+      const row = await tx.supplierInvoice.update({
+        where: { id },
+        data: updateData,
+        // See the matching comment on the GET handler above.
+        include: {
+          supplier: { select: { id: true, name: true, email: true, phone: true, address: true, zelle: true } },
+          items: true,
+        },
+      });
+      if (numberChanged) {
+        const prefix =
+          (await tx.companyProfile.findUnique({ where: { id: "default" }, select: { supplierInvoicePrefix: true } }))
+            ?.supplierInvoicePrefix || "PO-2026-";
+        await claimSequenceNumber(tx, "supplierInvoiceNextSeq", row.invoiceNumber, prefix);
+      }
+      return row;
+    });
+  } catch (err) {
+    // Renamed onto a number this supplier already has -- a clean 409
+    // rather than a raw unique-constraint 500.
+    if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002") {
+      return NextResponse.json({ error: "Invoice number already exists for this supplier" }, { status: 409 });
+    }
+    throw err;
+  }
 
   await writeAuditLog({
     ...actorFromSession(session),
@@ -325,7 +351,11 @@ export async function DELETE(
 
   const existing = await prisma.supplierInvoice.findUnique({
     where: { id },
-    include: { purchaseRequest: { select: { id: true, customerInvoiceItemId: true } } },
+    include: {
+      purchaseRequest: {
+        select: { id: true, customerInvoiceItemId: true, customerInvoiceItem: { select: { supplierId: true } } },
+      },
+    },
   });
   if (!existing) return NextResponse.json({ error: "Not found" }, { status: 404 });
 
@@ -370,7 +400,18 @@ export async function DELETE(
       }),
       prisma.purchaseRequest.update({
         where: { id: purchaseRequestId },
-        data: { status: "PENDING", cost: null, fulfilledAt: null },
+        // Also restores the invoice line's own supplier: the bill may have
+        // re-pointed the request at a different supplier
+        // (app/api/invoices/supplier/route.ts), and "undo" means back to
+        // exactly the pre-bill state.
+        data: {
+          status: "PENDING",
+          cost: null,
+          fulfilledAt: null,
+          ...(existing.purchaseRequest.customerInvoiceItem.supplierId
+            ? { supplierId: existing.purchaseRequest.customerInvoiceItem.supplierId }
+            : {}),
+        },
       }),
       // UploadedFile.supplierInvoiceId has no ON DELETE action (NO ACTION,
       // i.e. effectively RESTRICT) -- an attached file must be cleared
