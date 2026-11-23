@@ -251,7 +251,7 @@ The table below reflects what each API route actually enforces today (verified i
 - [Railway](https://railway.app/) (Nixpacks builder) — see `railway.json` and `DEPLOYMENT.md`
 - GitHub — source control and PR-based workflow
 
-**No separate third-party auth provider** (Auth0/Clerk/etc.) — auth is self-hosted via NextAuth/Credentials. **No dedicated object storage** for invoice file attachments (local disk only) or backup system in this branch (see [Backup & Recovery](#backup--recovery) and Known Limitations).
+**No separate third-party auth provider** (Auth0/Clerk/etc.) — auth is self-hosted via NextAuth/Credentials. **No dedicated object storage** for invoice file attachments (local disk only) in this branch. Database backups go nightly to Google Drive via GitHub Actions (see [Backup & Recovery](#backup--recovery)).
 
 ---
 
@@ -301,6 +301,9 @@ prisma/
   schema.prisma               Source-of-truth data model (16 models)
   seed.ts                     Demo data seeder (`npm run db:seed`)
 scripts/setup-db-role.sql     One-time least-privilege Postgres role setup for production
+scripts/setup-backup-role.sql One-time read-only Postgres role for the nightly backup
+scripts/backup-to-drive.sh    Nightly encrypted DB backup to Google Drive (run by .github/workflows/backup.yml)
+scripts/check-schema-drift.ts CI check: init-db.ts SQL matches schema.prisma
 tests/                       Vitest integration suite + global DB setup
 sentry.*.config.ts            Sentry client/server/edge configuration
 middleware.ts                 Cookie-presence route guard + CSRF Origin/Referer check
@@ -475,7 +478,7 @@ There is no WhatsApp, Meta, Clover, or financing-provider integration anywhere i
 
 ## Backup & Recovery
 
-> **Status (2026-11-23): NOT PROTECTED.** No backup exists in the application, and whether Railway is backing up the production database has **not been verified**. Treat the business's books as unrecoverable until the "Setup checklist" below is complete and a restore has been tested. Update this status line once that's done.
+> **Status (2026-11-23): NOT PROTECTED YET.** The nightly encrypted Google Drive backup is built (`.github/workflows/backup.yml`) but **does not run until its one-time setup below is done** and the change is merged to `main`. Whether Railway is also backing up the database has **not been verified**. Treat the books as unrecoverable until the "Setup checklist" is complete and a restore has been tested. Update this status line once that's done.
 
 ### What has to be backed up
 
@@ -497,10 +500,54 @@ There is no WhatsApp, Meta, Clover, or financing-provider integration anywhere i
 ### Setup checklist
 
 1. [ ] **Enable Railway's managed backups** on the Postgres service. In the Railway dashboard, open the Postgres service and find its backup settings (Railway offers scheduled backups of the database volume; plan requirements may apply). Set a daily schedule and the retention above.
-2. [ ] **Keep a second copy outside Railway.** A backup stored only inside Railway doesn't survive a Railway account, billing or region problem. Plan: a scheduled job runs a `pg_dump`, encrypts it, and uploads it to separate storage. *Not built yet. Pending two owner decisions: (a) the storage destination, (b) who holds the decryption key.*
-3. [ ] **Protect the attachment files.** Confirm a Railway volume is mounted at `UPLOAD_DIR`, and include that folder in the off-site backup job.
+2. [ ] **Turn on the nightly Google Drive backup.** This keeps a copy outside Railway, so it survives a Railway account, billing or region problem. Follow "Off-site backup to Google Drive" below. It's built and tested, and needs about 20 minutes of one-time setup.
+3. [ ] **Protect the attachment files.** Confirm a Railway volume is mounted at `UPLOAD_DIR`. *The Google Drive job backs up the database only.* The files live on Railway's disk, which GitHub Actions can't reach, so backing them up is a separate, still-open task.
 4. [ ] **Save a copy of every Railway environment variable** in a password manager.
 5. [ ] **Do a test restore** (procedure below) and record it in the log at the bottom of this section.
+
+### Off-site backup to Google Drive (nightly)
+
+**What it does.** Every night at 08:17 UTC (about 3:17 AM US Eastern), GitHub Actions (`.github/workflows/backup.yml` → `scripts/backup-to-drive.sh`):
+
+1. Dumps the production database using a **read-only** database role.
+2. Checks the dump contains all the tables.
+3. **Test-restores the dump** into a throwaway database, and logs the invoice/bill/payment counts and the invoiced total.
+4. Encrypts the file (AES-256), then decrypts it again to prove the passphrase opens it.
+5. Uploads it to the **`LaCuevita-Backups`** folder in Google Drive. Every night goes into `daily/`, Sundays also into `weekly/`, and the 1st of each month also into `monthly/`.
+6. Only after a successful upload, deletes copies older than **8 days** (daily), **29 days** (weekly) and **366 days** (monthly). Google Drive keeps deleted files in Trash for 30 more days.
+
+If any step fails, nothing is uploaded or deleted, the run shows a red ✗ in GitHub → **Actions**, and GitHub emails you. **A red run means last night's backup did not happen.**
+
+Dumps are compressed. Each run's log shows the file size (step 1).
+
+**Who holds the key (assumption, confirm or change):** the encryption passphrase lives in the **owner's password manager** and in one GitHub secret. Without the passphrase, **nobody, including you, can open any backup**. Recommended: also give a sealed or printed copy to one trusted person, such as your accountant.
+
+**Security design:**
+- The Google connection uses the `drive.file` permission. It can only see the backup folder it created itself, not the rest of your Drive.
+- The database role can only read, never change or delete.
+- Files in Drive are encrypted, so anyone with access to the Drive folder still can't read the books without the passphrase.
+
+#### One-time setup
+
+1. **Create the read-only database role.** In Railway → Postgres → **Data** → Query, run `scripts/setup-backup-role.sql`, replacing the password placeholder with a long random password first.
+2. **Get its public connection string.** In Railway → Postgres → **Connect**, copy the **public network** connection URL (the TCP-proxy host, e.g. `…proxy.rlwy.net:PORT`; *not* `postgres.railway.internal`, which GitHub can't reach). Replace its user and password with `accounting_backup` and the password from step 1:
+   `postgresql://accounting_backup:PASSWORD@HOST:PORT/railway`
+3. **Create the encryption passphrase.** At least 20 characters, ideally random: `openssl rand -base64 32`. Save it in your password manager **first**.
+4. **Connect Google Drive.** On your own computer (it needs a web browser), install rclone (https://rclone.org/install/) and run:
+   ```bash
+   rclone authorize "drive" "eyJzY29wZSI6ImRyaXZlLmZpbGUifQ"
+   ```
+   That code means "only files rclone creates". Sign in with the Google account that should own the backups. rclone then prints a token: the JSON text between the `--->` and `<---End paste` lines, starting with `{"access_token":`. Copy that JSON. *(If you use a Google Workspace account and the sign-in is blocked, your Workspace admin has to allow the "rclone" app.)*
+5. **Add three secrets in GitHub.** Go to the repo → **Settings → Secrets and variables → Actions → New repository secret**:
+   | Secret name | Value |
+   |---|---|
+   | `BACKUP_DATABASE_URL` | the connection string from step 2 |
+   | `BACKUP_PASSPHRASE` | the passphrase from step 3 |
+   | `GDRIVE_RCLONE_TOKEN` | the token JSON from step 4 |
+6. **Run it once by hand.** Go to GitHub → **Actions → "Database backup (Google Drive)" → Run workflow**. (This button appears once the workflow is on `main`.) It should turn green, and a **`LaCuevita-Backups/daily/`** folder with one `.dump.gpg` file should appear in your Google Drive. Open the run's log: step 3 shows the counts it restored. Check they look right.
+7. **Do the test restore** below, using the file from Drive, and fill in the restore-test log.
+
+**Upkeep:** GitHub pauses scheduled workflows in repositories with no activity for 60 days. If the Actions tab shows the backup as disabled, click **Enable workflow**. If the Google token is revoked (for example, you remove rclone's access in your Google account's security settings), repeat step 4 and update `GDRIVE_RCLONE_TOKEN`.
 
 ### Manual backup (always run before any risky change)
 
@@ -520,6 +567,11 @@ Store the file encrypted and **outside** this repository. Never commit a dump. I
 
 **Always restore into a new, empty database first. Never directly over production.** Check the data there, then switch over.
 
+0. **If the backup came from Google Drive**, download the `.dump.gpg` file, then decrypt it. You'll be asked for the passphrase:
+   ```bash
+   gpg --decrypt --output lacuevita-YYYY-MM-DDTHHMMZ.dump lacuevita-YYYY-MM-DDTHHMMZ.dump.gpg
+   ```
+   (gpg is pre-installed on Linux. On macOS use `brew install gnupg`; on Windows use Gpg4win.) Delete the decrypted `.dump` when you're done.
 1. In Railway, create a new Postgres service (or locally, `createdb lacuevita_restore`).
 2. Restore into it:
    ```bash
@@ -604,7 +656,7 @@ Concrete, code-verified gaps and inconsistencies — not speculation:
 6. **The dashboard KPI API (`/api/dashboard`) has no role restriction**, unlike `/api/performance` and `/api/reports/frequency`, which explicitly restrict to ADMIN/MANAGER or ADMIN. It's simply not shown to non-ADMIN roles in the sidebar.
 7. **No Balance Sheet or Cash Flow report exists**, despite being conceptually adjacent to the implemented P&L report.
 8. **Two dependencies are installed but unused anywhere in the app's source:** `papaparse` and `@tanstack/react-query`.
-9. **No data-export or backup feature exists in this branch.** (An earlier iteration of this system had scheduled/manual backup endpoints and a full-data-export route; neither is present here.) Railway-level backup status is unverified, and attachment files on disk aren't covered by database backups at all. See [Backup & Recovery](#backup--recovery) for the setup checklist and restore procedure.
+9. **No in-app data-export or backup feature exists.** (An earlier iteration had backup endpoints and a full-data-export route; neither is present here.) A nightly encrypted database backup to Google Drive now runs from GitHub Actions *once its one-time setup is done*. Railway-level backup status is unverified, and attachment files on disk aren't backed up by anything yet. See [Backup & Recovery](#backup--recovery) for the setup checklist and restore procedure.
 10. **`package.json`'s version (`1.5.2`) is ahead of the highest version heading in `CHANGELOG.md` (`[1.1.0]`).** The "[Unreleased] — Production remediation pass" section describes the work since 1.1.0 in detail but has not yet been given its own version heading.
 
 ---

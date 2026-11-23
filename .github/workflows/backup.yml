@@ -1,0 +1,78 @@
+name: Database backup (Google Drive)
+
+# Nightly off-site backup of the production database to Google Drive,
+# encrypted. Logic + safety checks live in scripts/backup-to-drive.sh;
+# setup, required secrets, and how to restore are in README.md ->
+# "Backup & Recovery".
+#
+# A failed run sends an email to whoever last edited this file's schedule.
+# Red runs here mean "last night's backup did NOT happen". Don't ignore them.
+#
+# Scheduled workflows only run from the default branch (main), and GitHub
+# pauses them after 60 days with no repository activity. Check the Actions
+# tab occasionally.
+
+"on":
+  schedule:
+    - cron: "17 8 * * *" # 08:17 UTC daily (~3:17 AM US Eastern)
+  workflow_dispatch: # "Run workflow" button for an on-demand backup
+
+concurrency:
+  group: db-backup
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  backup:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+
+    services:
+      # Empty throwaway database: every backup is test-restored into this
+      # before upload, so a run only goes green if the file actually restores.
+      verify:
+        image: postgres:18
+        env:
+          POSTGRES_PASSWORD: verify
+          POSTGRES_DB: verify
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Postgres 18 client and rclone
+        # pg_dump must be the server's major version or newer. 18 can dump
+        # any older server, so this keeps working across Railway upgrades.
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq postgresql-common rclone
+          sudo /usr/share/postgresql-common/pgdg/apt.postgresql.org.sh -y
+          sudo apt-get install -y -qq postgresql-client-18
+
+      - name: Back up, verify, encrypt, upload
+        env:
+          BACKUP_DATABASE_URL: ${{ secrets.BACKUP_DATABASE_URL }}
+          BACKUP_PASSPHRASE: ${{ secrets.BACKUP_PASSPHRASE }}
+          BACKUP_VERIFY_DATABASE_URL: postgresql://postgres:verify@localhost:5432/verify
+          BACKUP_REMOTE: "gdrive:LaCuevita-Backups"
+          PG_BIN: /usr/lib/postgresql/18/bin
+          # rclone remote "gdrive", configured entirely from env. Scope
+          # drive.file = rclone can only see/touch files it created itself
+          # (the LaCuevita-Backups folder), not the rest of the Drive.
+          RCLONE_CONFIG_GDRIVE_TYPE: drive
+          RCLONE_CONFIG_GDRIVE_SCOPE: drive.file
+          RCLONE_CONFIG_GDRIVE_TOKEN: ${{ secrets.GDRIVE_RCLONE_TOKEN }}
+        run: |
+          if [ -z "$RCLONE_CONFIG_GDRIVE_TOKEN" ]; then
+            echo "✗ GitHub secret GDRIVE_RCLONE_TOKEN is not set. See README -> Backup & Recovery." >&2
+            exit 1
+          fi
+          ./scripts/backup-to-drive.sh
