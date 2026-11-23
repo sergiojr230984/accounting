@@ -13,7 +13,11 @@ import type { SequenceField } from "./next-number";
 // promise, so none can proceed until schema creation has actually finished.
 let initPromise: Promise<void> | null = null;
 
-const SCHEMA_STATEMENTS: string[] = [
+// Exported for scripts/check-schema-drift.ts, which CI uses to prove this list
+// (what production actually runs) still matches prisma/schema.prisma (what
+// the tests run against). Keep every statement idempotent: it re-runs on
+// every boot, and the drift check fails if any statement errors on a re-run.
+export const SCHEMA_STATEMENTS: string[] = [
   `DO $$ BEGIN CREATE TYPE "Role" AS ENUM ('ADMIN', 'MANAGER'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;`,
   `DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_enum WHERE enumlabel = 'SALES' AND enumtypid = (SELECT oid FROM pg_type WHERE typname = 'Role')) THEN ALTER TYPE "Role" ADD VALUE 'SALES'; END IF; END $$;`,
   `DO $$ BEGIN CREATE TYPE "PaymentStatus" AS ENUM ('UNPAID', 'PARTIALLY_PAID', 'PAID'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;`,
@@ -350,6 +354,10 @@ const SCHEMA_STATEMENTS: string[] = [
      ALTER TABLE "CustomerInvoice" ADD CONSTRAINT "CustomerInvoice_invoiceNumber_key" UNIQUE ("invoiceNumber");
    EXCEPTION
      WHEN duplicate_object THEN NULL;
+     -- Postgres reports an existing UNIQUE constraint's backing index as
+     -- duplicate_table (42P07), not duplicate_object -- without this, both
+     -- blocks errored on every boot once the constraint existed.
+     WHEN duplicate_table THEN NULL;
      WHEN unique_violation THEN RAISE WARNING 'CustomerInvoice_invoiceNumber_key: could not add global-uniqueness constraint -- the same invoiceNumber is already used by more than one customer. Resolve the duplicate(s) manually, then this will apply on the next boot.';
    END $$;`,
   `DO $$ BEGIN
@@ -357,6 +365,10 @@ const SCHEMA_STATEMENTS: string[] = [
      ALTER TABLE "Estimate" ADD CONSTRAINT "Estimate_estimateNumber_key" UNIQUE ("estimateNumber");
    EXCEPTION
      WHEN duplicate_object THEN NULL;
+     -- Postgres reports an existing UNIQUE constraint's backing index as
+     -- duplicate_table (42P07), not duplicate_object -- without this, both
+     -- blocks errored on every boot once the constraint existed.
+     WHEN duplicate_table THEN NULL;
      WHEN unique_violation THEN RAISE WARNING 'Estimate_estimateNumber_key: could not add global-uniqueness constraint -- the same estimateNumber is already used by more than one customer. Resolve the duplicate(s) manually, then this will apply on the next boot.';
    END $$;`,
 

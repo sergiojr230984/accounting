@@ -97,7 +97,7 @@ model User {
   active    Boolean   @default(true)
   lastLogin DateTime?
   createdAt DateTime  @default(now())
-  updatedAt DateTime  @updatedAt
+  updatedAt DateTime  @default(now()) @updatedAt
 }
 
 model Customer {
@@ -112,7 +112,7 @@ model Customer {
   emergencyContactName  String?
   emergencyContactPhone String?
   createdAt             DateTime          @default(now())
-  updatedAt             DateTime          @updatedAt
+  updatedAt             DateTime          @default(now()) @updatedAt
   invoices              CustomerInvoice[]
   estimates             Estimate[]
 }
@@ -146,7 +146,7 @@ model Supplier {
   // mistake here is a data-entry problem, not a constraint violation).
   isHouse             Boolean               @default(false)
   createdAt           DateTime              @default(now())
-  updatedAt           DateTime              @updatedAt
+  updatedAt           DateTime              @default(now()) @updatedAt
   invoices            SupplierInvoice[]
   purchaseRequests    PurchaseRequest[]
   invoiceLineItems    CustomerInvoiceItem[]
@@ -196,7 +196,7 @@ model CustomerInvoice {
   employee         Employee?             @relation(fields: [employeeId], references: [id])
   commissionRate   Decimal               @default(0) @db.Decimal(5, 4)
   createdAt        DateTime              @default(now())
-  updatedAt        DateTime              @updatedAt
+  updatedAt        DateTime              @default(now()) @updatedAt
   items            CustomerInvoiceItem[]
   payments         Payment[]
   files            UploadedFile[]
@@ -230,7 +230,7 @@ model CustomerInvoiceItem {
   // sales-facing invoice entry UI -- sales never sees cost.
   actualCost      Decimal?         @db.Decimal(15, 2)
   createdAt       DateTime         @default(now())
-  updatedAt       DateTime         @updatedAt
+  updatedAt       DateTime         @default(now()) @updatedAt
   purchaseRequest PurchaseRequest?
 }
 
@@ -254,7 +254,7 @@ model Estimate {
   sentAt             DateTime?
   convertedInvoiceId String?        @unique
   createdAt          DateTime       @default(now())
-  updatedAt          DateTime       @updatedAt
+  updatedAt          DateTime       @default(now()) @updatedAt
   items              EstimateItem[]
 }
 
@@ -269,7 +269,7 @@ model EstimateItem {
   taxRate         Decimal  @default(0) @db.Decimal(5, 4)
   lineTotal       Decimal  @db.Decimal(15, 2)
   createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+  updatedAt       DateTime @default(now()) @updatedAt
 }
 
 model SupplierInvoice {
@@ -295,7 +295,7 @@ model SupplierInvoice {
   purchaseRequestId  String?               @unique
   purchaseRequest    PurchaseRequest?      @relation(fields: [purchaseRequestId], references: [id])
   createdAt          DateTime              @default(now())
-  updatedAt          DateTime              @updatedAt
+  updatedAt          DateTime              @default(now()) @updatedAt
   items              SupplierInvoiceItem[]
   payments           Payment[]
   files              UploadedFile[]
@@ -318,7 +318,7 @@ model SupplierInvoiceItem {
   // bill.
   partNumber      String?
   createdAt       DateTime        @default(now())
-  updatedAt       DateTime        @updatedAt
+  updatedAt       DateTime        @default(now()) @updatedAt
 }
 
 // One purchase_request per paid customer-invoice line (excluding HOUSE-coded
@@ -372,7 +372,7 @@ model Payment {
   supplierInvoiceId String?
   supplierInvoice   SupplierInvoice? @relation(fields: [supplierInvoiceId], references: [id])
   createdAt         DateTime         @default(now())
-  updatedAt         DateTime         @updatedAt
+  updatedAt         DateTime         @default(now()) @updatedAt
 }
 
 model CompanyProfile {
@@ -391,7 +391,7 @@ model CompanyProfile {
   supplierInvoiceNextSeq Int      @default(1001)
   estimateNextSeq        Int      @default(1001)
   createdAt              DateTime @default(now())
-  updatedAt              DateTime @updatedAt
+  updatedAt              DateTime @default(now()) @updatedAt
 }
 
 model TaxRate {
@@ -400,7 +400,7 @@ model TaxRate {
   rate      Decimal  @db.Decimal(5, 4)
   active    Boolean  @default(true)
   createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  updatedAt DateTime @default(now()) @updatedAt
 }
 
 model Product {
@@ -419,7 +419,7 @@ model Product {
   // (free-typed description) rather than a line-item foreign key.
   isDeliveryService Boolean  @default(false)
   createdAt         DateTime @default(now())
-  updatedAt         DateTime @updatedAt
+  updatedAt         DateTime @default(now()) @updatedAt
 }
 
 model Employee {
@@ -430,7 +430,7 @@ model Employee {
   commissionRate     Decimal           @default(0) @db.Decimal(5, 4)
   active             Boolean           @default(true)
   createdAt          DateTime          @default(now())
-  updatedAt          DateTime          @updatedAt
+  updatedAt          DateTime          @default(now()) @updatedAt
   invoices           CustomerInvoice[]
   assignedDeliveries Delivery[]
 }
@@ -516,7 +516,7 @@ model Delivery {
   exceptionVoiceNotePath String?
 
   createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  updatedAt DateTime @default(now()) @updatedAt
 
   photos        DeliveryPhoto[]
   statusHistory DeliveryStatusHistory[]

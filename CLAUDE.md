@@ -99,6 +99,17 @@ shape of bug (a swallowed non-JSON error response) before assuming it's a
 business-logic problem with whatever they were editing — the two look
 identical from the outside.
 
+## Schema changes: `schema.prisma` and `lib/init-db.ts` must move together
+
+Production never runs Prisma migrations. Its schema is built by
+`lib/init-db.ts`'s `SCHEMA_STATEMENTS` on every boot, while the test suite
+builds its DB from `prisma/schema.prisma` via `db push`. So any model/column/
+index change needs an equivalent **idempotent** statement in
+`SCHEMA_STATEMENTS`. Run `npm run db:check-drift` (also a CI step). It
+fails if that list errors on a fresh DB or on a re-run, or if the schema it
+builds differs from `schema.prisma`. Don't "fix" a red drift check by
+deleting the check. Fix the SQL.
+
 ## API keys (`lib/api-scopes.ts`, `lib/api-key.ts`, `lib/api.ts`'s `requireReadAccess`/`requireReadAccessRole`)
 
 External apps/dashboards authenticate with a bearer key instead of a session
