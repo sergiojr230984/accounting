@@ -251,7 +251,7 @@ The table below reflects what each API route actually enforces today (verified i
 - [Railway](https://railway.app/) (Nixpacks builder) — see `railway.json` and `DEPLOYMENT.md`
 - GitHub — source control and PR-based workflow
 
-**No separate third-party auth provider** (Auth0/Clerk/etc.) — auth is self-hosted via NextAuth/Credentials. **No dedicated object storage** for invoice file attachments (local disk only) or backup system in this branch (see Known Limitations for what was removed relative to earlier work).
+**No separate third-party auth provider** (Auth0/Clerk/etc.) — auth is self-hosted via NextAuth/Credentials. **No dedicated object storage** for invoice file attachments (local disk only) or backup system in this branch (see [Backup & Recovery](#backup--recovery) and Known Limitations).
 
 ---
 
@@ -473,6 +473,81 @@ There is no WhatsApp, Meta, Clover, or financing-provider integration anywhere i
 
 ---
 
+## Backup & Recovery
+
+> **Status (2026-11-23): NOT PROTECTED.** No backup exists in the application, and whether Railway is backing up the production database has **not been verified**. Treat the business's books as unrecoverable until the "Setup checklist" below is complete and a restore has been tested. Update this status line once that's done.
+
+### What has to be backed up
+
+| Data | Where it lives | Covered by a database backup? |
+|---|---|---|
+| All records: invoices, bills, estimates, payments, customers, suppliers, products, employees, deliveries, users, audit log, API keys, company settings, numbering counters | Railway Postgres (`DATABASE_URL`) | Yes |
+| Invoice attachments (`UploadedFile`) and delivery photos (`DeliveryPhoto`) | **Files on the app server's disk** at `UPLOAD_DIR` (default `./public/uploads`). The database stores only their paths. | **No.** These need their own backup. |
+| Configuration and secrets (`AUTH_SECRET`, API keys for Resend/Anthropic/Sentry/Google, etc.) | Railway → service → Variables | **No.** Keep a copy in a password manager. |
+| Application code | GitHub (`main`) | Already versioned. No action needed. |
+
+**Unverified risk: attachment files.** Nothing in this repo configures a persistent Railway **volume** for `UPLOAD_DIR`. If none was added in the Railway dashboard, a Railway service's local disk is replaced on every redeploy. That means attachments and delivery photos may *already* be lost after each deploy, while the database still references them. Check this in Railway: open the service, see whether a volume is attached, and confirm its mount path matches `UPLOAD_DIR`.
+
+### Recovery targets (proposed, owner to confirm)
+
+- **Maximum data loss (RPO):** 24 hours. A daily backup is enough for this volume of transactions.
+- **Maximum downtime to restore (RTO):** 4 hours.
+- **Retention:** 7 daily + 4 weekly + 12 monthly. Monthly copies cover month-end and year-end close and the tax season.
+
+### Setup checklist
+
+1. [ ] **Enable Railway's managed backups** on the Postgres service. In the Railway dashboard, open the Postgres service and find its backup settings (Railway offers scheduled backups of the database volume; plan requirements may apply). Set a daily schedule and the retention above.
+2. [ ] **Keep a second copy outside Railway.** A backup stored only inside Railway doesn't survive a Railway account, billing or region problem. Plan: a scheduled job runs a `pg_dump`, encrypts it, and uploads it to separate storage. *Not built yet. Pending two owner decisions: (a) the storage destination, (b) who holds the decryption key.*
+3. [ ] **Protect the attachment files.** Confirm a Railway volume is mounted at `UPLOAD_DIR`, and include that folder in the off-site backup job.
+4. [ ] **Save a copy of every Railway environment variable** in a password manager.
+5. [ ] **Do a test restore** (procedure below) and record it in the log at the bottom of this section.
+
+### Manual backup (always run before any risky change)
+
+Take one before schema changes, bulk edits or data clean-ups, and before merging anything that touches `lib/init-db.ts`. Use the **owner** database connection string (`DATABASE_MIGRATION_URL`; see `DEPLOYMENT.md` §3), not the restricted app role. Your local `pg_dump` must be the same major version as the server or newer.
+
+```bash
+# Database: compressed, restorable dump
+pg_dump --format=custom --no-owner --file="lacuevita-$(date +%F-%H%M).dump" "$DATABASE_MIGRATION_URL"
+
+# Sanity check: lists contents without restoring; should show every table
+pg_restore --list "lacuevita-YYYY-MM-DD-HHMM.dump" | grep "TABLE DATA"
+```
+
+Store the file encrypted and **outside** this repository. Never commit a dump. It contains customers' personal data and bank details.
+
+### Restore procedure
+
+**Always restore into a new, empty database first. Never directly over production.** Check the data there, then switch over.
+
+1. In Railway, create a new Postgres service (or locally, `createdb lacuevita_restore`).
+2. Restore into it:
+   ```bash
+   pg_restore --no-owner --dbname="$RESTORE_DATABASE_URL" "lacuevita-YYYY-MM-DD-HHMM.dump"
+   ```
+3. Check the restored data:
+   ```sql
+   SELECT COUNT(*) FROM "CustomerInvoice";
+   SELECT COUNT(*) FROM "SupplierInvoice";
+   SELECT COUNT(*) FROM "Payment";
+   SELECT MAX("invoiceDate") FROM "CustomerInvoice";  -- most recent invoice should be from just before the backup time
+   SELECT SUM("totalAmount"), SUM("paidAmount") FROM "CustomerInvoice";  -- compare with the Reports page / last known figures
+   ```
+4. If production uses the restricted app role, re-create it and its grants on the new database (`scripts/setup-db-role.sql` / `DEPLOYMENT.md` §3).
+5. Point the app's `DATABASE_URL` at the restored database and redeploy. `lib/init-db.ts` runs on boot and safely re-applies any missing schema. Sign in and spot-check a few invoices, including their PDFs and attachments.
+6. Restore the attachment files into `UPLOAD_DIR` from their own backup.
+7. Keep the old database untouched until the restored one is confirmed correct.
+
+### Restore-test log
+
+Fill this in on every test restore. A backup that has never been restored isn't proven to work. Re-test at least every quarter.
+
+| Date | Backup used (source + timestamp) | Restored to | Row counts / totals matched? | Time taken | Done by |
+|---|---|---|---|---|---|
+| _none yet_ | | | | | |
+
+---
+
 ## Local Development
 
 ```bash
@@ -529,7 +604,7 @@ Concrete, code-verified gaps and inconsistencies — not speculation:
 6. **The dashboard KPI API (`/api/dashboard`) has no role restriction**, unlike `/api/performance` and `/api/reports/frequency`, which explicitly restrict to ADMIN/MANAGER or ADMIN. It's simply not shown to non-ADMIN roles in the sidebar.
 7. **No Balance Sheet or Cash Flow report exists**, despite being conceptually adjacent to the implemented P&L report.
 8. **Two dependencies are installed but unused anywhere in the app's source:** `papaparse` and `@tanstack/react-query`.
-9. **No data-export or backup feature exists in this branch.** (An earlier iteration of this system had scheduled/manual backup endpoints and a full-data-export route; neither is present here.)
+9. **No data-export or backup feature exists in this branch.** (An earlier iteration of this system had scheduled/manual backup endpoints and a full-data-export route; neither is present here.) Railway-level backup status is unverified, and attachment files on disk aren't covered by database backups at all. See [Backup & Recovery](#backup--recovery) for the setup checklist and restore procedure.
 10. **`package.json`'s version (`1.5.2`) is ahead of the highest version heading in `CHANGELOG.md` (`[1.1.0]`).** The "[Unreleased] — Production remediation pass" section describes the work since 1.1.0 in detail but has not yet been given its own version heading.
 
 ---
