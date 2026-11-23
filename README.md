@@ -251,7 +251,7 @@ The table below reflects what each API route actually enforces today (verified i
 - [Railway](https://railway.app/) (Nixpacks builder) — see `railway.json` and `DEPLOYMENT.md`
 - GitHub — source control and PR-based workflow
 
-**No separate third-party auth provider** (Auth0/Clerk/etc.) — auth is self-hosted via NextAuth/Credentials. **No dedicated object storage** for invoice file attachments (local disk only) or backup system in this branch (see Known Limitations for what was removed relative to earlier work).
+**No separate third-party auth provider** (Auth0/Clerk/etc.) — auth is self-hosted via NextAuth/Credentials. **No dedicated object storage** for invoice file attachments (local disk only) in this branch. Database backups go nightly to Google Drive via GitHub Actions (see [Backup & Recovery](#backup--recovery)).
 
 ---
 
@@ -301,6 +301,9 @@ prisma/
   schema.prisma               Source-of-truth data model (16 models)
   seed.ts                     Demo data seeder (`npm run db:seed`)
 scripts/setup-db-role.sql     One-time least-privilege Postgres role setup for production
+scripts/setup-backup-role.sql One-time read-only Postgres role for the nightly backup
+scripts/backup-to-drive.sh    Nightly encrypted DB backup to Google Drive (run by .github/workflows/backup.yml)
+scripts/check-schema-drift.ts CI check: init-db.ts SQL matches schema.prisma
 tests/                       Vitest integration suite + global DB setup
 sentry.*.config.ts            Sentry client/server/edge configuration
 middleware.ts                 Cookie-presence route guard + CSRF Origin/Referer check
@@ -473,6 +476,130 @@ There is no WhatsApp, Meta, Clover, or financing-provider integration anywhere i
 
 ---
 
+## Backup & Recovery
+
+> **Status (2026-11-23): NOT PROTECTED YET.** The nightly encrypted Google Drive backup is built (`.github/workflows/backup.yml`) but **does not run until its one-time setup below is done** and the change is merged to `main`. Whether Railway is also backing up the database has **not been verified**. Treat the books as unrecoverable until the "Setup checklist" is complete and a restore has been tested. Update this status line once that's done.
+
+### What has to be backed up
+
+| Data | Where it lives | Covered by a database backup? |
+|---|---|---|
+| All records: invoices, bills, estimates, payments, customers, suppliers, products, employees, deliveries, users, audit log, API keys, company settings, numbering counters | Railway Postgres (`DATABASE_URL`) | Yes |
+| Invoice attachments (`UploadedFile`) and delivery photos (`DeliveryPhoto`) | **Files on the app server's disk** at `UPLOAD_DIR` (default `./public/uploads`). The database stores only their paths. | **No.** These need their own backup. |
+| Configuration and secrets (`AUTH_SECRET`, API keys for Resend/Anthropic/Sentry/Google, etc.) | Railway → service → Variables | **No.** Keep a copy in a password manager. |
+| Application code | GitHub (`main`) | Already versioned. No action needed. |
+
+**Unverified risk: attachment files.** Nothing in this repo configures a persistent Railway **volume** for `UPLOAD_DIR`. If none was added in the Railway dashboard, a Railway service's local disk is replaced on every redeploy. That means attachments and delivery photos may *already* be lost after each deploy, while the database still references them. Check this in Railway: open the service, see whether a volume is attached, and confirm its mount path matches `UPLOAD_DIR`.
+
+### Recovery targets (proposed, owner to confirm)
+
+- **Maximum data loss (RPO):** 24 hours. A daily backup is enough for this volume of transactions.
+- **Maximum downtime to restore (RTO):** 4 hours.
+- **Retention:** 7 daily + 4 weekly + 12 monthly. Monthly copies cover month-end and year-end close and the tax season.
+
+### Setup checklist
+
+1. [ ] **Enable Railway's managed backups** on the Postgres service. In the Railway dashboard, open the Postgres service and find its backup settings (Railway offers scheduled backups of the database volume; plan requirements may apply). Set a daily schedule and the retention above.
+2. [ ] **Turn on the nightly Google Drive backup.** This keeps a copy outside Railway, so it survives a Railway account, billing or region problem. Follow "Off-site backup to Google Drive" below. It's built and tested, and needs about 20 minutes of one-time setup.
+3. [ ] **Protect the attachment files.** Confirm a Railway volume is mounted at `UPLOAD_DIR`. *The Google Drive job backs up the database only.* The files live on Railway's disk, which GitHub Actions can't reach, so backing them up is a separate, still-open task.
+4. [ ] **Save a copy of every Railway environment variable** in a password manager.
+5. [ ] **Do a test restore** (procedure below) and record it in the log at the bottom of this section.
+
+### Off-site backup to Google Drive (nightly)
+
+**What it does.** Every night at 08:17 UTC (about 3:17 AM US Eastern), GitHub Actions (`.github/workflows/backup.yml` → `scripts/backup-to-drive.sh`):
+
+1. Dumps the production database using a **read-only** database role.
+2. Checks the dump contains all the tables.
+3. **Test-restores the dump** into a throwaway database, and logs the invoice/bill/payment counts and the invoiced total.
+4. Encrypts the file (AES-256), then decrypts it again to prove the passphrase opens it.
+5. Uploads it to the **`LaCuevita-Backups`** folder in Google Drive. Every night goes into `daily/`, Sundays also into `weekly/`, and the 1st of each month also into `monthly/`.
+6. Only after a successful upload, deletes copies older than **8 days** (daily), **29 days** (weekly) and **366 days** (monthly). Google Drive keeps deleted files in Trash for 30 more days.
+
+If any step fails, nothing is uploaded or deleted, the run shows a red ✗ in GitHub → **Actions**, and GitHub emails you. **A red run means last night's backup did not happen.**
+
+Dumps are compressed. Each run's log shows the file size (step 1).
+
+**Who holds the key (assumption, confirm or change):** the encryption passphrase lives in the **owner's password manager** and in one GitHub secret. Without the passphrase, **nobody, including you, can open any backup**. Recommended: also give a sealed or printed copy to one trusted person, such as your accountant.
+
+**Security design:**
+- The Google connection uses the `drive.file` permission. It can only see the backup folder it created itself, not the rest of your Drive.
+- The database role can only read, never change or delete.
+- Files in Drive are encrypted, so anyone with access to the Drive folder still can't read the books without the passphrase.
+
+#### One-time setup
+
+1. **Create the read-only database role.** In Railway → Postgres → **Data** → Query, run `scripts/setup-backup-role.sql`, replacing the password placeholder with a long random password first.
+2. **Get its public connection string.** In Railway → Postgres → **Connect**, copy the **public network** connection URL (the TCP-proxy host, e.g. `…proxy.rlwy.net:PORT`; *not* `postgres.railway.internal`, which GitHub can't reach). Replace its user and password with `accounting_backup` and the password from step 1:
+   `postgresql://accounting_backup:PASSWORD@HOST:PORT/railway`
+3. **Create the encryption passphrase.** At least 20 characters, ideally random: `openssl rand -base64 32`. Save it in your password manager **first**.
+4. **Connect Google Drive.** On your own computer (it needs a web browser), install rclone (https://rclone.org/install/) and run:
+   ```bash
+   rclone authorize "drive" "eyJzY29wZSI6ImRyaXZlLmZpbGUifQ"
+   ```
+   That code means "only files rclone creates". Sign in with the Google account that should own the backups. rclone then prints a token: the JSON text between the `--->` and `<---End paste` lines, starting with `{"access_token":`. Copy that JSON. *(If you use a Google Workspace account and the sign-in is blocked, your Workspace admin has to allow the "rclone" app.)*
+5. **Add three secrets in GitHub.** Go to the repo → **Settings → Secrets and variables → Actions → New repository secret**:
+   | Secret name | Value |
+   |---|---|
+   | `BACKUP_DATABASE_URL` | the connection string from step 2 |
+   | `BACKUP_PASSPHRASE` | the passphrase from step 3 |
+   | `GDRIVE_RCLONE_TOKEN` | the token JSON from step 4 |
+6. **Run it once by hand.** Go to GitHub → **Actions → "Database backup (Google Drive)" → Run workflow**. (This button appears once the workflow is on `main`.) It should turn green, and a **`LaCuevita-Backups/daily/`** folder with one `.dump.gpg` file should appear in your Google Drive. Open the run's log: step 3 shows the counts it restored. Check they look right.
+7. **Do the test restore** below, using the file from Drive, and fill in the restore-test log.
+
+**Upkeep:** GitHub pauses scheduled workflows in repositories with no activity for 60 days. If the Actions tab shows the backup as disabled, click **Enable workflow**. If the Google token is revoked (for example, you remove rclone's access in your Google account's security settings), repeat step 4 and update `GDRIVE_RCLONE_TOKEN`.
+
+### Manual backup (always run before any risky change)
+
+Take one before schema changes, bulk edits or data clean-ups, and before merging anything that touches `lib/init-db.ts`. Use the **owner** database connection string (`DATABASE_MIGRATION_URL`; see `DEPLOYMENT.md` §3), not the restricted app role. Your local `pg_dump` must be the same major version as the server or newer.
+
+```bash
+# Database: compressed, restorable dump
+pg_dump --format=custom --no-owner --file="lacuevita-$(date +%F-%H%M).dump" "$DATABASE_MIGRATION_URL"
+
+# Sanity check: lists contents without restoring; should show every table
+pg_restore --list "lacuevita-YYYY-MM-DD-HHMM.dump" | grep "TABLE DATA"
+```
+
+Store the file encrypted and **outside** this repository. Never commit a dump. It contains customers' personal data and bank details.
+
+### Restore procedure
+
+**Always restore into a new, empty database first. Never directly over production.** Check the data there, then switch over.
+
+0. **If the backup came from Google Drive**, download the `.dump.gpg` file, then decrypt it. You'll be asked for the passphrase:
+   ```bash
+   gpg --decrypt --output lacuevita-YYYY-MM-DDTHHMMZ.dump lacuevita-YYYY-MM-DDTHHMMZ.dump.gpg
+   ```
+   (gpg is pre-installed on Linux. On macOS use `brew install gnupg`; on Windows use Gpg4win.) Delete the decrypted `.dump` when you're done.
+1. In Railway, create a new Postgres service (or locally, `createdb lacuevita_restore`).
+2. Restore into it:
+   ```bash
+   pg_restore --no-owner --dbname="$RESTORE_DATABASE_URL" "lacuevita-YYYY-MM-DD-HHMM.dump"
+   ```
+3. Check the restored data:
+   ```sql
+   SELECT COUNT(*) FROM "CustomerInvoice";
+   SELECT COUNT(*) FROM "SupplierInvoice";
+   SELECT COUNT(*) FROM "Payment";
+   SELECT MAX("invoiceDate") FROM "CustomerInvoice";  -- most recent invoice should be from just before the backup time
+   SELECT SUM("totalAmount"), SUM("paidAmount") FROM "CustomerInvoice";  -- compare with the Reports page / last known figures
+   ```
+4. If production uses the restricted app role, re-create it and its grants on the new database (`scripts/setup-db-role.sql` / `DEPLOYMENT.md` §3).
+5. Point the app's `DATABASE_URL` at the restored database and redeploy. `lib/init-db.ts` runs on boot and safely re-applies any missing schema. Sign in and spot-check a few invoices, including their PDFs and attachments.
+6. Restore the attachment files into `UPLOAD_DIR` from their own backup.
+7. Keep the old database untouched until the restored one is confirmed correct.
+
+### Restore-test log
+
+Fill this in on every test restore. A backup that has never been restored isn't proven to work. Re-test at least every quarter.
+
+| Date | Backup used (source + timestamp) | Restored to | Row counts / totals matched? | Time taken | Done by |
+|---|---|---|---|---|---|
+| _none yet_ | | | | | |
+
+---
+
 ## Local Development
 
 ```bash
@@ -511,7 +638,7 @@ Other useful scripts (`package.json`):
 - **Concurrency-sensitive money operations use real row locks**, not optimistic reads. Recording a payment and converting an estimate to an invoice both run inside a Prisma `$transaction` with a raw `SELECT ... FOR UPDATE`, closing races where two concurrent requests could both read a stale value and one write clobber the other's contribution.
 - **Authorization is layered, not single-point.** `middleware.ts` only checks for the *presence* of a session cookie (fast, Edge-safe — it deliberately avoids invoking NextAuth's own config, which needs Prisma/bcrypt and crashes under Edge Middleware) to redirect anonymous users to `/login`, plus an independent CSRF Origin/Referer check on mutating API calls. The actual authorization happens per-request inside each route via `requireAuth()`/`requireRole()` (`lib/api.ts`) or `auth()` + manual role checks.
 - **Two independent identity-resolution paths exist side by side**, and this is deliberate, not incidental: `lib/auth.ts`'s `auth()` wrapper (re-checks `active` status against the DB on every call, closing a NextAuth v5-beta gap where a deactivated user's session would otherwise silently keep validating) and `lib/viewer.ts`'s `resolveViewer()` (decodes the JWT cookie directly, independent of NextAuth's own session pipeline). `lib/api.ts`'s `requireAuth()` additionally falls back to a direct JWT-cookie decode if `auth()` comes back sessionless — all three exist because, per in-code comments, NextAuth v5-beta's App Router session handling has repeatedly returned a technically-truthy-but-effectively-empty session in this deployment.
-- **Schema changes ship without migration history.** Production runs `lib/init-db.ts`'s hand-maintained, idempotent raw SQL on server boot rather than `prisma migrate deploy` — the `SCHEMA_STATEMENTS` list **is** the change log, and a table/column added to `prisma/schema.prisma` without a matching entry there will 500 in production even though `prisma generate` succeeds locally. `CHANGELOG.md` documents this having actually happened twice (`Estimate`/`EstimateItem`, then `AuditLog`) before being caught and fixed.
+- **Schema changes ship without migration history.** Production runs `lib/init-db.ts`'s hand-maintained, idempotent raw SQL on server boot rather than `prisma migrate deploy` — the `SCHEMA_STATEMENTS` list **is** the change log, and a table/column added to `prisma/schema.prisma` without a matching entry there will 500 in production even though `prisma generate` succeeds locally. `CHANGELOG.md` documents this having actually happened twice (`Estimate`/`EstimateItem`, then `AuditLog`) before being caught and fixed. CI now guards this: `npm run db:check-drift` (`scripts/check-schema-drift.ts`) runs `SCHEMA_STATEMENTS` twice against a scratch database and fails on any statement error or any difference from `schema.prisma`. This is a stopgap, not versioned migrations. There is still no migration history, rollback, or support for destructive changes (renames, type changes, drops).
 - **Rate limiting is single-instance, by design for now.** `lib/rate-limit.ts` is an in-memory sliding window; `DEPLOYMENT.md` documents the exact one-file swap to Upstash Redis if the app is ever scaled to multiple Railway replicas.
 - **This codebase has been through a documented security/correctness hardening pass** (`CHANGELOG.md`'s "[Unreleased] — Production remediation pass"): stored-XSS fix in uploads, closed fail-open auth paths, removed two unauthenticated admin endpoints, removed a secret-length leak from `/api/me`, login rate limiting + timing-attack fix, CSP/HSTS headers, immediate session revocation on deactivation, 12-hour session lifetime, and the row-lock/rounding fixes described above.
 
@@ -529,7 +656,7 @@ Concrete, code-verified gaps and inconsistencies — not speculation:
 6. **The dashboard KPI API (`/api/dashboard`) has no role restriction**, unlike `/api/performance` and `/api/reports/frequency`, which explicitly restrict to ADMIN/MANAGER or ADMIN. It's simply not shown to non-ADMIN roles in the sidebar.
 7. **No Balance Sheet or Cash Flow report exists**, despite being conceptually adjacent to the implemented P&L report.
 8. **Two dependencies are installed but unused anywhere in the app's source:** `papaparse` and `@tanstack/react-query`.
-9. **No data-export or backup feature exists in this branch.** (An earlier iteration of this system had scheduled/manual backup endpoints and a full-data-export route; neither is present here.)
+9. **No in-app data-export or backup feature exists.** (An earlier iteration had backup endpoints and a full-data-export route; neither is present here.) A nightly encrypted database backup to Google Drive now runs from GitHub Actions *once its one-time setup is done*. Railway-level backup status is unverified, and attachment files on disk aren't backed up by anything yet. See [Backup & Recovery](#backup--recovery) for the setup checklist and restore procedure.
 10. **`package.json`'s version (`1.5.2`) is ahead of the highest version heading in `CHANGELOG.md` (`[1.1.0]`).** The "[Unreleased] — Production remediation pass" section describes the work since 1.1.0 in detail but has not yet been given its own version heading.
 
 ---

@@ -51,5 +51,12 @@ jobs:
       - name: Type check
         run: npx tsc --noEmit
 
+      # Tests build their DB with `prisma db push`, so they never run
+      # lib/init-db.ts -- the SQL production actually uses. This step fails
+      # if that SQL errors (fresh or re-run) or builds anything different
+      # from prisma/schema.prisma.
+      - name: Check production schema SQL matches schema.prisma
+        run: npm run db:check-drift
+
       - name: Run test suite
         run: npm test

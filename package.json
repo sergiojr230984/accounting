@@ -12,6 +12,7 @@
     "db:push": "prisma db push",
     "db:migrate": "prisma migrate dev",
     "db:seed": "tsx prisma/seed.ts",
+    "db:check-drift": "tsx scripts/check-schema-drift.ts",
     "db:studio": "prisma studio",
     "test": "vitest run",
     "test:watch": "vitest",
