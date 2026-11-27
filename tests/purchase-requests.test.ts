@@ -666,6 +666,57 @@ describe("deleting a bill that fulfilled a purchase request", () => {
     const afterBill = await admin.getJson(`/api/invoices/supplier/${bill.body.id}`);
     expect(afterBill.status).toBe(404);
   });
+
+  // Real support scenario: a customer returns an item, so the already-PAID
+  // bill that sourced it needs to go away too. paidAmount/paymentStatus are
+  // left editable even on a purchase-request-locked bill (only items are
+  // frozen -- see the PATCH route's own comment), specifically so this
+  // "un-pay, then force-delete" path exists; there was previously no test
+  // actually exercising it end-to-end (only ever-UNPAID bills above).
+  it("a PAID bill can be deleted by first reverting it to UNPAID, then force-deleting", async () => {
+    const { billId, invoiceId } = await billFulfillingAPurchaseRequest();
+
+    await admin.postJson(`/api/invoices/supplier/${billId}`, { paidAmount: "300" }, "PATCH");
+    const paid = await admin.getJson<{ paymentStatus: string }>(`/api/invoices/supplier/${billId}`);
+    expect(paid.body.paymentStatus).toBe("PAID");
+
+    const blocked = await admin.postJson<{ error?: string; forceable?: boolean }>(
+      `/api/invoices/supplier/${billId}`,
+      {},
+      "DELETE"
+    );
+    expect(blocked.status).toBe(409);
+    expect(blocked.body.error).toContain("recorded payment");
+    expect(blocked.body.forceable).toBeUndefined();
+
+    const reverted = await admin.postJson<{ paymentStatus: string }>(
+      `/api/invoices/supplier/${billId}`,
+      { paidAmount: "0", paymentStatus: "UNPAID" },
+      "PATCH"
+    );
+    expect(reverted.body.paymentStatus).toBe("UNPAID");
+
+    const stillBlocked = await admin.postJson<{ error?: string; forceable?: boolean }>(
+      `/api/invoices/supplier/${billId}`,
+      {},
+      "DELETE"
+    );
+    expect(stillBlocked.status).toBe(409);
+    expect(stillBlocked.body.forceable).toBe(true);
+
+    const { status } = await admin.postJson(`/api/invoices/supplier/${billId}?force=true`, {}, "DELETE");
+    expect(status).toBe(200);
+
+    const afterBill = await admin.getJson(`/api/invoices/supplier/${billId}`);
+    expect(afterBill.status).toBe(404);
+
+    const invoice = await admin.getJson<{
+      items: { description: string; actualCost: string | null; purchaseRequest: { status: string } | null }[];
+    }>(`/api/invoices/customer/${invoiceId}`);
+    const line = invoice.body.items.find((i) => i.description === "Sofa, brown leather");
+    expect(line?.actualCost).toBeNull();
+    expect(line?.purchaseRequest?.status).toBe("PENDING");
+  });
 });
 
 describe("bill creation closes out a purchase_request", () => {
