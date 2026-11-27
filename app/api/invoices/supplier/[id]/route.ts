@@ -94,11 +94,46 @@ export async function PATCH(
   // own cost snapshot, would silently stop matching this bill). Everything
   // else about the bill (notes, due date, our own payment status/amount
   // toward the supplier) is unrelated to that and still freely editable.
+  //
+  // Checking merely `items !== undefined` (as this used to) blocked EVERY
+  // save of a purchase-request-linked bill, not just one that actually
+  // changed a line: the edit page's Save button submits the whole
+  // react-hook-form state in one PATCH, items included, even when only
+  // Payment Status/Amount Paid were touched. That made it impossible to
+  // ever revert such a bill's payment status back to UNPAID -- the one
+  // prerequisite for its own DELETE route's force-delete path -- since
+  // every attempt hit this guard first. Diffing against what's actually
+  // stored (same approach as the money-lock guard just below) distinguishes
+  // a genuine cost edit from the form simply resubmitting unchanged rows.
   if (existing.purchaseRequestId && parsed.data.items !== undefined) {
-    return NextResponse.json(
-      { error: "This bill fulfills a purchase request -- its cost is locked. Its other fields can still be edited." },
-      { status: 409 }
-    );
+    const existingById = new Map(existing.items.map((it) => [it.id, it]));
+    const seenIds = new Set<string>();
+    let changed = parsed.data.items.length !== existing.items.length;
+    for (const item of parsed.data.items) {
+      const match = item.id ? existingById.get(item.id) : undefined;
+      if (!match) {
+        changed = true; // a genuinely new (or unmatched-id) line
+        continue;
+      }
+      seenIds.add(match.id);
+      if (
+        match.description.trim() !== item.description.trim() ||
+        (match.itemDescription ?? "").trim() !== (item.itemDescription ?? "").trim() ||
+        !new Decimal(match.quantity.toString()).equals(new Decimal(item.quantity || "0")) ||
+        !new Decimal(match.unitCost.toString()).equals(new Decimal(item.unitCost || "0")) ||
+        !new Decimal(match.taxRate.toString()).equals(new Decimal(item.taxRate || "0"))
+      ) {
+        changed = true;
+      }
+    }
+    if (existing.items.some((it) => !seenIds.has(it.id))) changed = true; // a line removed
+
+    if (changed) {
+      return NextResponse.json(
+        { error: "This bill fulfills a purchase request -- its cost is locked. Its other fields can still be edited." },
+        { status: 409 }
+      );
+    }
   }
 
   const beforeSnapshot = {

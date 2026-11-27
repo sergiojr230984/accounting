@@ -717,6 +717,52 @@ describe("deleting a bill that fulfilled a purchase request", () => {
     expect(line?.actualCost).toBeNull();
     expect(line?.purchaseRequest?.status).toBe("PENDING");
   });
+
+  // Reproduces a real support report: the edit page's Save button submits
+  // the WHOLE form as one PATCH, items included, even when only Payment
+  // Status/Amount Paid were touched -- react-hook-form always has the items
+  // field array populated from what was loaded. The purchase-request lock
+  // guard (PATCH route, "its cost is locked") blocked on `items !==
+  // undefined` alone, unlike the money-lock guard 20 lines below it in the
+  // same file, which diffs incoming items against existing ones and only
+  // blocks on an actual change. That made the test above (which omits
+  // `items` from the PATCH body entirely) pass while the real UI -- which
+  // never omits it -- got "This bill fulfills a purchase request -- its
+  // cost is locked" on every save, including one that only changed Payment
+  // Status, with no way to ever reach UNPAID and unlock the delete above.
+  it("resubmitting the bill's own unchanged items alongside a payment-status edit is not treated as a cost change", async () => {
+    const { billId } = await billFulfillingAPurchaseRequest();
+
+    await admin.postJson(`/api/invoices/supplier/${billId}`, { paidAmount: "300" }, "PATCH");
+
+    const before = await admin.getJson<{
+      invoiceNumber: string;
+      category: string;
+      items: { id: string; description: string; itemDescription: string | null; quantity: string; unitCost: string; taxRate: string }[];
+    }>(`/api/invoices/supplier/${billId}`);
+
+    const res = await admin.postJson<{ error?: string; paymentStatus?: string }>(
+      `/api/invoices/supplier/${billId}`,
+      {
+        invoiceNumber: before.body.invoiceNumber,
+        category: before.body.category,
+        paymentStatus: "UNPAID",
+        paidAmount: "0",
+        items: before.body.items.map((it) => ({
+          id: it.id,
+          description: it.description,
+          itemDescription: it.itemDescription ?? undefined,
+          quantity: it.quantity,
+          unitCost: it.unitCost,
+          taxRate: it.taxRate,
+        })),
+      },
+      "PATCH"
+    );
+
+    expect(res.status).toBe(200);
+    expect(res.body.paymentStatus).toBe("UNPAID");
+  });
 });
 
 describe("bill creation closes out a purchase_request", () => {
